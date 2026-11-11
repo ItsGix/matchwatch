@@ -2,3 +2,6 @@
 # Your own labels (matchwatch game name <port> <name>) are checked first.
 Call of Duty|3074,30000-45000
 Valve (Counter-Strike, Dota 2, TF2)|27015-27200
+# A third field of "voice" marks voice chat. Voice servers are rated like matches but are never
+# blocked or turned away by stay mode, automatic blocking or the lobby alert.
+Discord voice|50000-65535|voice

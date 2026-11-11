@@ -52,7 +52,7 @@ NF >= 39 {
 	if (known($40) && known($41)) { D_lat[dk] += $40; D_lon[dk] += $41; D_ln[dk]++ }
 	pl = place_of($40, $41, $7); io = (pl == "") ? "" : (pl > 0 ? 1 : 0); D_cc[dk] = $7
 	if (pl > 0 && $37 == 1) PH[pl, ++PN[pl]] = $36
-	if (io == 0 && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
+	if (io == 0 && is_game_port($6) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
 	if (io == 1 && $37 == 1) IN_hist[++nin] = $36
 	if ($37 == 1) { hh = strftime("%H", $1) + 0; HR_n[hh]++; HR_s[hh] += $36 }
 	g = game_of($6); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
@@ -92,7 +92,15 @@ function game_of(port,   i, k, a, lo) {
 	}
 	return "Game on port " port
 }
-function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2] } close(file) }
+function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3] } close(file) }
+# is this port labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
+function is_game_port(port,   i, k, a, lo, r) {
+	for (i = 1; i <= ngame; i++) {
+		k = split(GM[i, 2], a, ",")
+		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], r, "-"); if (port + 0 >= r[1] + 0 && port + 0 <= r[2] + 0) return (GM[i, 3] != "voice") } else if (a[lo] + 0 == port + 0) return (GM[i, 3] != "voice") }
+	}
+	return 0
+}
 # which measured region is this match's server in? nearest, within 150 km
 function region_of(lat, lon,   i, best, bd, d) {
 	if (!known(lat) || !known(lon)) return ""

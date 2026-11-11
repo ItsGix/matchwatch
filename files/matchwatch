@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.11.0"
+VERSION="0.12.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -469,7 +469,7 @@ stay_off() {
 	export_json
 }
 stay_vars() { # awk variable naming the file of places being kept to (nothing when stay mode is off)
-	[ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay"
+	[ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay -v GAMES=$LIB/games.list -v GAMESL=$DATA/games.local"
 }
 stay_names() { awk -F'\t' 'NF >= 4 { s = s (n++ ? " + " : "") $1 } END { printf "%s", s }' "$DATA/stay" 2>/dev/null; }
 outside_stay() { # lat lon cc : true when a server is outside every place in the pool
@@ -1010,7 +1010,7 @@ cmd_run() {
 	echo "Starting up..." > "$RUN/status.txt"
 	mkfifo "$RUN/pipe" || die "cannot create $RUN/pipe"
 	tcpdump --help 2>&1 | grep -q immediate-mode && imm="--immediate-mode"
-	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" \
+	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" \
 		-v MINDN="$MIN_DOWN_PPS" -v MINUP="$MIN_UP_PPS" -v WARNSCORE="$WARN_SCORE" \
 		-v PCSCORE="$PC_SCORE" -v AUTOBLOCK="$AUTOBLOCK" -v ABSCORE="$AUTOBLOCK_SCORE" -v ABMATCHES="$AUTOBLOCK_MATCHES" \
 		-f "$LIB/analyze.awk" < "$RUN/pipe" >> "$RUN/engine.log" 2>&1 &

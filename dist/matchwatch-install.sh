@@ -51,7 +51,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.11.0"
+VERSION="0.12.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -518,7 +518,7 @@ stay_off() {
 	export_json
 }
 stay_vars() { # awk variable naming the file of places being kept to (nothing when stay mode is off)
-	[ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay"
+	[ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay -v GAMES=$LIB/games.list -v GAMESL=$DATA/games.local"
 }
 stay_names() { awk -F'\t' 'NF >= 4 { s = s (n++ ? " + " : "") $1 } END { printf "%s", s }' "$DATA/stay" 2>/dev/null; }
 outside_stay() { # lat lon cc : true when a server is outside every place in the pool
@@ -1059,7 +1059,7 @@ cmd_run() {
 	echo "Starting up..." > "$RUN/status.txt"
 	mkfifo "$RUN/pipe" || die "cannot create $RUN/pipe"
 	tcpdump --help 2>&1 | grep -q immediate-mode && imm="--immediate-mode"
-	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" \
+	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" \
 		-v MINDN="$MIN_DOWN_PPS" -v MINUP="$MIN_UP_PPS" -v WARNSCORE="$WARN_SCORE" \
 		-v PCSCORE="$PC_SCORE" -v AUTOBLOCK="$AUTOBLOCK" -v ABSCORE="$AUTOBLOCK_SCORE" -v ABMATCHES="$AUTOBLOCK_MATCHES" \
 		-f "$LIB/analyze.awk" < "$RUN/pipe" >> "$RUN/engine.log" 2>&1 &
@@ -1241,6 +1241,7 @@ BEGIN {
 	}
 	close(HIST)
 	cursec = 0; NFLOW = 0; SIDN = 0; FTMAX = 5400
+	load_games(GAMESL); load_games(GAMES)
 	DD = (DETAILDIR != "") ? DETAILDIR : DATA "/matches"
 }
 
@@ -1336,10 +1337,27 @@ function early_check(f,    ip, avg, p) {
 	}
 }
 
-# first packets to a server that looks like a game server: tell the player where they are headed
+# Game labels: name|ports|kind. Only servers on a port labelled as a game (not voice, not unlabelled)
+# are ever alerted on, turned away or blocked automatically. Voice chat must never be cut off.
+function load_games(file,    l, g, k, a, i, r) {
+	if (file == "") return
+	while ((getline l < file) > 0) {
+		if (l ~ /^#/ || l == "") continue
+		split(l, g, "|"); k = split(g[2], a, ",")
+		for (i = 1; i <= k; i++) { NGP++; if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 } GP_voice[NGP] = (g[3] == "voice") }
+	}
+	close(file)
+}
+function isgame(port,    i) { for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i]) return !GP_voice[i]; return 0 }
+
+# first packets to a server that looks like a game server: tell the player where they are headed.
+# Two tests, both needed. The port must be labelled as a game, so voice chat is left alone. And the
+# port or address block must have carried an earlier match, because game port ranges are wide and
+# plenty of other traffic (calls, peer-to-peer) uses ports inside them.
 function lobby_check(f,    ip) {
 	F_lobby[f] = 1
 	ip = F_rip[f]
+	if (!isgame(F_rport[f])) return
 	if (!((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
@@ -1818,7 +1836,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		system("rm -rf " RUN "/probe." F_sid[f])
 		system(SELF " _after '" note "' " overall " &")
 	}
-	if (AUTOBLOCK && reliable && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
+	if (AUTOBLOCK && reliable && isgame(F_rport[f]) && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
 		avg = REP_sum[ip] / REP_n[ip]
 		if (avg < ABSCORE) {
 			print "AUTOBLOCK " ip " avg=" int(avg)
@@ -1944,7 +1962,7 @@ NF >= 39 {
 	if (known($40) && known($41)) { D_lat[dk] += $40; D_lon[dk] += $41; D_ln[dk]++ }
 	pl = place_of($40, $41, $7); io = (pl == "") ? "" : (pl > 0 ? 1 : 0); D_cc[dk] = $7
 	if (pl > 0 && $37 == 1) PH[pl, ++PN[pl]] = $36
-	if (io == 0 && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
+	if (io == 0 && is_game_port($6) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
 	if (io == 1 && $37 == 1) IN_hist[++nin] = $36
 	if ($37 == 1) { hh = strftime("%H", $1) + 0; HR_n[hh]++; HR_s[hh] += $36 }
 	g = game_of($6); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
@@ -1984,7 +2002,15 @@ function game_of(port,   i, k, a, lo) {
 	}
 	return "Game on port " port
 }
-function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2] } close(file) }
+function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3] } close(file) }
+# is this port labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
+function is_game_port(port,   i, k, a, lo, r) {
+	for (i = 1; i <= ngame; i++) {
+		k = split(GM[i, 2], a, ",")
+		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], r, "-"); if (port + 0 >= r[1] + 0 && port + 0 <= r[2] + 0) return (GM[i, 3] != "voice") } else if (a[lo] + 0 == port + 0) return (GM[i, 3] != "voice") }
+	}
+	return 0
+}
 # which measured region is this match's server in? nearest, within 150 km
 function region_of(lat, lon,   i, best, bd, d) {
 	if (!known(lat) || !known(lon)) return ""
@@ -2335,6 +2361,9 @@ cat > "$R/usr/lib/matchwatch/games.list" <<'MW_FILE_END_7'
 # Your own labels (matchwatch game name <port> <name>) are checked first.
 Call of Duty|3074,30000-45000
 Valve (Counter-Strike, Dota 2, TF2)|27015-27200
+# A third field of "voice" marks voice chat. Voice servers are rated like matches but are never
+# blocked or turned away by stay mode, automatic blocking or the lobby alert.
+Discord voice|50000-65535|voice
 MW_FILE_END_7
 chmod 644 "$R/usr/lib/matchwatch/games.list"
 cat > "$R/etc/init.d/matchwatch" <<'MW_FILE_END_8'

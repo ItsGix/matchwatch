@@ -53,6 +53,7 @@ BEGIN {
 	}
 	close(HIST)
 	cursec = 0; NFLOW = 0; SIDN = 0; FTMAX = 5400
+	load_games(GAMESL); load_games(GAMES)
 	DD = (DETAILDIR != "") ? DETAILDIR : DATA "/matches"
 }
 
@@ -148,10 +149,27 @@ function early_check(f,    ip, avg, p) {
 	}
 }
 
-# first packets to a server that looks like a game server: tell the player where they are headed
+# Game labels: name|ports|kind. Only servers on a port labelled as a game (not voice, not unlabelled)
+# are ever alerted on, turned away or blocked automatically. Voice chat must never be cut off.
+function load_games(file,    l, g, k, a, i, r) {
+	if (file == "") return
+	while ((getline l < file) > 0) {
+		if (l ~ /^#/ || l == "") continue
+		split(l, g, "|"); k = split(g[2], a, ",")
+		for (i = 1; i <= k; i++) { NGP++; if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 } GP_voice[NGP] = (g[3] == "voice") }
+	}
+	close(file)
+}
+function isgame(port,    i) { for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i]) return !GP_voice[i]; return 0 }
+
+# first packets to a server that looks like a game server: tell the player where they are headed.
+# Two tests, both needed. The port must be labelled as a game, so voice chat is left alone. And the
+# port or address block must have carried an earlier match, because game port ranges are wide and
+# plenty of other traffic (calls, peer-to-peer) uses ports inside them.
 function lobby_check(f,    ip) {
 	F_lobby[f] = 1
 	ip = F_rip[f]
+	if (!isgame(F_rport[f])) return
 	if (!((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
@@ -630,7 +648,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		system("rm -rf " RUN "/probe." F_sid[f])
 		system(SELF " _after '" note "' " overall " &")
 	}
-	if (AUTOBLOCK && reliable && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
+	if (AUTOBLOCK && reliable && isgame(F_rport[f]) && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
 		avg = REP_sum[ip] / REP_n[ip]
 		if (avg < ABSCORE) {
 			print "AUTOBLOCK " ip " avg=" int(avg)

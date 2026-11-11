@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.11.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.12.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -21,6 +21,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Keeps a history with a full report and chart for each match, and ratings per server and datacentre.
 - Has an "I felt that" button: press it when something feels off and it shows what the network was doing.
 - Can block bad servers or datacentres, or keep you to a pool of places you choose.
+- Never blocks voice chat: only servers on a port labelled as a game are ever turned away.
 - Can alert your phone through ntfy, including the moment a match starts, for when you have stepped away during a queue.
 - Can test your line before you queue, and check that QoSmate is prioritising your game.
 - Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
@@ -142,10 +143,24 @@ The Tools page in the dashboard has:
 - **Test my line.** Twenty seconds of pings from the router to your provider's first hop and two public servers, with no game needed. It gives a plain verdict on ping, jitter and loss, so you can tell before you queue whether your own connection is steady. Trouble seen on every target is blamed on your line; trouble with one target is not.
 - **Send a test alert.** Sends one message to your phone to prove the alerts address works.
 - **Route to a server.** Traces the route to any server in your history, to compare with the route in a match report.
-- **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it.
+- **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it, and staying on places, the lobby alert and automatic blocking start to cover it.
 - **Your history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
 - **QoSmate priority.** Only shown when QoSmate is installed. See [QoSmate check and fix](#qosmate-check-and-fix).
+
+## Games and voice chat
+
+Each match is labelled with its game, worked out from the server's port. Call of Duty, Valve's games and Discord voice are recognised. Anything else shows as "Game on port N" until you name it, on the Tools page or with `matchwatch game name <port> <name>`. With more than one game on file, the Matches page gets a filter.
+
+**Voice chat is never blocked.** A long voice call is a steady two-way stream, so MatchWatch records and rates it like a match. But it only ever turns away, blocks automatically or raises a lobby alert for servers on a port labelled as a game. Voice chat (Discord's voice servers are recognised by their port range) and anything unlabelled are measured and listed, and otherwise left alone. So staying on a pool of places cannot cut off your call because its server happens to be somewhere else.
+
+Three things to know:
+
+- A new game that MatchWatch does not recognise is not covered by staying on places until you name it.
+- If a game you play uses a server port of 50000 or above, it will show as "Discord voice". Name it and it is treated as a game again; your own names are checked first.
+- A block you add by hand applies to whatever address you give it.
+
+Watching traffic has no effect on it. If you use the QoSmate fix, voice chat from your gaming device is prioritised along with the game, because those rules cover all of that device's UDP.
 
 ## What it measures
 
@@ -172,7 +187,7 @@ Press the button on the Live page (or the M key with the page focused) when some
 
 ## Lobby and match-start alerts
 
-**Lobby alert.** When the game first contacts a server it recognises as a game server (same port or address block as an earlier match), MatchWatch looks up where it is, measures the ping and checks its history. The Live page shows the result, with a button to block the server before the match starts. With phone alerts set up, you are notified when the server is noticeably further than your best datacentre or has rated badly. It needs at least one recorded match before it can recognise game servers.
+**Lobby alert.** When the game first contacts a server it recognises as a game server (a port labelled as a game, and the same port or address block as an earlier match), MatchWatch looks up where it is, measures the ping and checks its history. The Live page shows the result, with a button to block the server before the match starts. With phone alerts set up, you are notified when the server is noticeably further than your best datacentre or has rated badly. It needs at least one recorded match before it can recognise game servers.
 
 **Match-start alert.** Away from your desk during a long queue? Turn on "Alert when a match starts" in Settings and your phone is told the moment the game itself begins, with where the server is and the ping:
 
@@ -208,7 +223,7 @@ How it works: every address block you have played on outside the pool is blocked
 What to expect:
 
 - The game decides which regions to offer you. Places it already gives you work well. Far ones may take several failed connections, or never come up.
-- It applies to servers MatchWatch recognises as game servers. Play one match of a new game first.
+- It applies to servers MatchWatch recognises as game servers. Play one match of a new game first, and if the game shows as "Game on port N", name it on the Tools page: unnamed games are left alone.
 - Server locations come from a public lookup and are occasionally wrong.
 - A place is dropped from the pool, and you are told, if its last three counted matches average under the warning rating. When the pool is empty stay mode ends.
 
@@ -239,7 +254,7 @@ Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.
 
 ## Limits
 
-- Other steady two-way UDP streams, such as voice chat, are recorded as matches too. "Only look at this traffic" under Advanced narrows capture, for example `port 3074 or portrange 30000-45000` for Call of Duty.
+- Other steady two-way UDP streams, such as voice chat, are recorded as matches too (though never blocked). "Only look at this traffic" under Advanced narrows capture, for example `port 3074 or portrange 30000-45000` for Call of Duty.
 - IPv4 only.
 - When neither the server nor any hop near it answers ping, uneven delivery can't be split between server and route. The report says so.
 - Scores were first calibrated from simulated traffic. Expect the thresholds to need tuning against real matches.
