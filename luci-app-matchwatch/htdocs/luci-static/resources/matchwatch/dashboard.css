@@ -97,6 +97,9 @@ select { font: inherit; padding: 6px 10px; color: var(--ink); background: var(--
 .stayform input:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
 .stayform button { margin: 0; }
 .stayform select { max-width: 100%; }
+.banner .stayform { flex: 1; min-width: 260px; }
+td .stayform { max-width: 420px; }
+td .stayform input { min-width: 140px; }
 .lede.ok, .lede.mid, .lede.low { font-weight: 600; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; }
 .actions button { margin: 0; }

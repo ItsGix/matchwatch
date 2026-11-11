@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.12.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.13.0.
 
 ## Layout
 
@@ -31,7 +31,9 @@ Slow tools: an rpcd call must answer within seconds, so the line test and route 
 - Scoring starts when steady traffic begins (`session_start` resets the accumulators). Games often handshake, wait about 30 s, then start the stream.
 - PC send rate follows frame rate, so only pauses over 100 ms are scored for the PC.
 - tcpdump on the WAN port sees packets after the qdisc, so cake's `wash` shows DSCP 0. The QoSmate check relies on queue counters first.
-- Voice chat must never be cut off. Stay mode, the lobby alert and auto-block act only on ports labelled as a game in `games.list` or `games.local` (`isgame` in the engine, `is_game_port` in reports). A third field of `voice` in `games.list` marks voice chat. Unlabelled and voice ports are measured but never blocked. `games.local` is read first, so naming a port makes it a game.
+- Voice chat must never be cut off. Stay mode, the lobby alert and auto-block act only on servers labelled as a game in `games.list` or `games.local` (`kindof`/`isgame` in the engine, `which_label`/`is_game_port` in reports). Voice streams (`kind` = `voice`) are not tracked at all: no session, no probes, no alerts. Unlabelled ports are tracked and rated but never blocked. `games.local` is read first, so naming a port or range makes it a game. The engine re-reads both files every 20 ticks.
+- Labels are `name|ports|kind|hosts`, first match wins. `hosts` are words looked for in the server's isp, org and AS name; a label with hosts only matches once the lookup is in `geo.cache` (the engine asks with `matchwatch _geo <ip>`), and until then the stream falls through to later labels. This exists because ports overlap badly: Roblox and Discord voice share 50000-65535, Valorant sits inside Rocket League's range, Apex inside Call of Duty's. Reports only have org and the AS number, so give host-checked labels the AS number too (`roblox,as22697`). Put narrow and host-checked lines above wide ones. Never add a wide range without a host check: it turns every unknown stream in that range into a "game" that stay mode may block.
+- Publishers' port lists mostly do not say whether a port is the server's or the player's, and many are missing. `games.list` marks lines without a publisher source as unconfirmed. Do not add a game from memory; find a source.
 - The lobby alert needs both tests: a game-labelled port, and a port or /24 that carried an earlier match (`KPORT`, `K24`). A patch once dropped the second test; game port ranges are wide (30000-45000), and calls and peer-to-peer traffic use ports inside them, so with stay mode on that would have blocked non-game servers.
 - A patch script once emptied `files/matchwatch` by opening it for writing before reading. Check file sizes after scripted edits.
 - Unix line endings everywhere. On Windows, Python writes CRLF by default and Git for Windows checks files out with CRLF; either breaks every script on the router. `.gitattributes` forces LF and `build.py` writes LF. To count carriage returns in Git Bash use `tr -cd '\r' < file | wc -c`: `grep -c $'\r'` there matches every line, which once made clean files look broken.
@@ -67,7 +69,8 @@ The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbou
 3. Match mode for the house: hold back other devices' heavy traffic during a match.
 4. Hop-by-hop blame when a route is bad.
 5. A voice chat check (Discord, in-game voice) rated like matches. Discord voice is labelled and protected from blocking since 0.12.0; a verdict worded for calls rather than matches is still to do.
-6. Packaging and a write-up for the OpenWrt forum. The repository is public with no licence yet: choose one before packaging.
+6. Shareable configs: export and import files people can pass around. Game packs first (labels with ports and hosts, the thing one person cannot research alone), then server and datacentre ratings, region ping hosts for hosts other than Vultr, and stay pool presets. Opt-in files only, never an automatic upload; strip anything that identifies the sharer (LAN and ISP addresses, device names, match times) before export.
+7. Packaging and a write-up for the OpenWrt forum. The repository is public with no licence yet: choose one before packaging.
 
 ## Lines not to cross
 

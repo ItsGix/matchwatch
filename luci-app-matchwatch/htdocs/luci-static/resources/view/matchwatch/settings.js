@@ -75,6 +75,11 @@ return view.extend({
 		o.default = '0';
 		o.rmempty = false;
 
+		o = s.taboption('alerts', form.Flag, 'notify_newgame', _('Alert when a new game is seen'),
+			_('Tells your phone the first time a match is played on a server port nobody has named. Until you name the game, staying on places, the lobby alert and automatic blocking leave it alone.'));
+		o.default = '1';
+		o.rmempty = false;
+
 		o = s.taboption('alerts', form.Flag, 'notify_every_match', _('Alert after every match'),
 			_('Off: only after bad matches and when you land on a server with a bad history.'));
 		o.default = '0';

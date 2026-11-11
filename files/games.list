@@ -1,7 +1,67 @@
-# Game labels by the server's port. name|ports (single ports or ranges, comma separated)
-# Your own labels (matchwatch game name <port> <name>) are checked first.
-Call of Duty|3074,30000-45000
-Valve (Counter-Strike, Dota 2, TF2)|27015-27200
-# A third field of "voice" marks voice chat. Voice servers are rated like matches but are never
-# blocked or turned away by stay mode, automatic blocking or the lobby alert.
+# Labels for game servers and voice chat:   name|ports|kind|hosts
+#
+#   ports  the SERVER's UDP port: single ports or ranges, separated by commas
+#   kind   empty = a game. "voice" = voice chat, which is never recorded and never blocked.
+#   hosts  optional. Words looked for in the name of the company hosting the server (its isp, org
+#          and AS name, any case). The label only matches when one is found. Use it where a port
+#          range is shared with something else. It needs "Look up where servers are" switched on.
+#
+# The first line that matches wins, so narrow and host-checked lines come before wide ones.
+# Your own names (the Tools page, or: matchwatch game name <port or lo-hi> <name>) are kept in
+# /etc/matchwatch/games.local and are checked before this file.
+#
+# Only a labelled game is ever turned away, blocked automatically or announced by the lobby alert.
+# Anything not listed is still recorded and rated, as "Game on port N", until it is given a name.
+#
+# Where the ports come from: publishers' own port lists where they publish one, otherwise the
+# figures used by router makers and esports network guides. Many publishers do not publish server
+# ports at all, several games share ranges, and games hosted player-to-player have no server port,
+# so this cannot be complete. Lines marked "unconfirmed" have no publisher source.
+
+# ---- voice chat on its own ports (checked first so a game range cannot swallow them)
+Valorant voice|27016-27024,54000-54012|voice|riot,as6507
+TeamSpeak|9987|voice
+Mumble|64738|voice
+Voice and party chat|3478-3481,5060,5062,6250|voice
+
+# ---- games recognised by who hosts the server, because the port range is shared or very wide
+Roblox|49152-65535||roblox,as22697
+Valorant|7000-8000,8180-8181||riot,as6507
+League of Legends|5000-5500||riot,as6507
+Overwatch 2|12000-64000||blizzard,as57976
+iRacing|15000-52500||iracing
+War Thunder|20000-30000||gaijin
+Call of Duty|3074,30000-45000||vultr,constant company,choopa,as20473
+
+# ---- games on a narrow range of their own
+Minecraft|19132-19133
+Rust|28015
+DayZ|2302
+Palworld|8211
+ARK|7777-7778
+Among Us|22023
+Genshin Impact|22101-22102
+# unconfirmed
+Escape from Tarkov|17000-17100
+# unconfirmed
+Rainbow Six Siege|6015,10000-10099
+# unconfirmed
+Battlefield|14000-14016,22990-23006,25200-25300
+# unconfirmed
+World of Tanks|32800-32900
+Street Fighter 6|30840-30859,30870-30879
+
+# ---- games on a wider range, or one shared with others
+# Valve's own games and every game using Steam's relay network arrive on the same ports.
+Steam games (Counter-Strike 2, Dota 2, Deadlock, TF2, Destiny 2)|27000-27200
+# unconfirmed: Epic does not publish Fortnite's server ports
+Fortnite|9000-9100
+# these three share a range and cannot be told apart by port
+EA Sports FC, Smite or Paladins|9101-9999
+Apex Legends|37000-40000
+Rocket League|7000-9000
+# Call of Duty servers on a host not listed above
+Call of Duty|30000-45000
+
+# ---- everything else on high ports is taken to be voice chat (Discord uses 50000-65535)
 Discord voice|50000-65535|voice

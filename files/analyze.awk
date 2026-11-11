@@ -46,6 +46,7 @@ BEGIN {
 	WIN += 0; MINDN += 0; MINUP += 0; AUTOBLOCK += 0; REPLAY += 0
 	QUALIFY = 8; ENDIDLE = 10; DROPIDLE = 30; TL = 120; MAXFLOWS = 200
 	HIST = DATA "/sessions.tsv"
+	if (GEOF == "") GEOF = DATA "/geo.cache"
 	while ((getline line < HIST) > 0) {
 		n = split(line, c, "\t")
 		if (n >= 6) { if (c[6] + 0 >= 1024) KPORT[c[6]] = 1; K24[pfx(c[5])] = 1 }
@@ -53,7 +54,7 @@ BEGIN {
 	}
 	close(HIST)
 	cursec = 0; NFLOW = 0; SIDN = 0; FTMAX = 5400
-	load_games(GAMESL); load_games(GAMES)
+	reload_games()
 	DD = (DETAILDIR != "") ? DETAILDIR : DATA "/matches"
 }
 
@@ -64,6 +65,8 @@ $1 == "TICK" {
 	# packets are delivered slightly behind real time, so trail by 2 s
 	advance(now - 2)
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
+	# names can change while running (the Tools page, matchwatch game name), so look again now and then
+	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) write_skipped(now) }
 	next
 }
 
@@ -90,6 +93,7 @@ $2 == "IP" && $4 == ">" {
 	advance(int(t))
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
+		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
 		if (NFLOW >= MAXFLOWS) next
 		F_seen[f] = 1; NFLOW++
 		F_lip[f] = lip; F_lport[f] = lport; F_rip[f] = rip; F_rport[f] = rport
@@ -149,18 +153,74 @@ function early_check(f,    ip, avg, p) {
 	}
 }
 
-# Game labels: name|ports|kind. Only servers on a port labelled as a game (not voice, not unlabelled)
-# are ever alerted on, turned away or blocked automatically. Voice chat must never be cut off.
+# Labels: name|ports|kind|hosts, your own (games.local) before the built-in list, first match wins.
+# A port alone often cannot tell two games apart, or a game from voice chat, so a label may also name
+# the company that hosts its servers (hosts: words looked for in the server's isp, org and AS name).
+# Such a label only matches once the host is known, and the lookup takes a second or two; until then
+# the stream falls through to whatever label comes next.
+# kindof() answers "game", "voice" or "" (nobody has named it).
+#   game   tracked, and the only kind ever alerted on, turned away or blocked automatically
+#   voice  not tracked at all: voice chat is not a match, and must never be cut off
+#   ""     tracked and rated, but left alone until it has a name
 function load_games(file,    l, g, k, a, i, r) {
 	if (file == "") return
 	while ((getline l < file) > 0) {
 		if (l ~ /^#/ || l == "") continue
 		split(l, g, "|"); k = split(g[2], a, ",")
-		for (i = 1; i <= k; i++) { NGP++; if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 } GP_voice[NGP] = (g[3] == "voice") }
+		for (i = 1; i <= k; i++) {
+			NGP++
+			if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 }
+			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4])
+		}
 	}
 	close(file)
 }
-function isgame(port,    i) { for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i]) return !GP_voice[i]; return 0 }
+function reload_games() { NGP = 0; load_games(GAMESL); load_games(GAMES) }
+# who hosts this server: "isp org as" in lower case, or "" while that is not known
+function hostinfo(ip,    l, c) {
+	if (ip in HOST) return HOST[ip]
+	if (GEOF == "") return ""
+	# not known yet: ask once, then watch the lookup cache for half a minute
+	if (!(ip in HOSTASK)) { HOSTASK[ip] = cursec; GEO_read = -1; if (!REPLAY) system(SELF " _geo " ip " >/dev/null 2>&1 &") }
+	if (cursec - HOSTASK[ip] > 30 || cursec == GEO_read) return ""
+	GEO_read = cursec
+	while ((getline l < GEOF) > 0) if (split(l, c, "\t") >= 9) HOST[c[1]] = tolower(c[7] " " c[8] " " c[9])
+	close(GEOF)
+	return (ip in HOST) ? HOST[ip] : ""
+}
+function hostmatch(words, info,    w, n, i) {
+	if (info == "") return 0
+	n = split(words, w, ",")
+	for (i = 1; i <= n; i++) if (w[i] != "" && index(info, w[i]) > 0) return 1
+	return 0
+}
+function kindof(port, ip,    i) {
+	for (i = 1; i <= NGP; i++) {
+		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
+		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
+		return GP_kind[i]
+	}
+	return ""
+}
+function isgame(port, ip) { return kindof(port, ip) == "game" }
+
+# A stream left alone as voice chat is still counted, so the Tools page can show what was skipped
+# and the owner can say "that one is a game".
+function skip_note(ip, port, t,    k) {
+	k = ip ":" port
+	if (!(k in SK_n)) { if (SKN >= 100) return; SKN++; SK_ip[k] = ip; SK_port[k] = port }
+	SK_n[k]++; SK_last[k] = t
+}
+function write_skipped(now,    k, s, n, file) {
+	s = "["
+	for (k in SK_n) {
+		if (now - SK_last[k] > 21600) { delete SK_n[k]; delete SK_last[k]; delete SK_ip[k]; delete SK_port[k]; SKN--; continue }
+		if (SK_n[k] < 300 || n >= 12) continue          # a real stream, not a few stray packets
+		s = s (n++ ? "," : "") "{\"ip\":\"" SK_ip[k] "\",\"port\":" SK_port[k] ",\"packets\":" SK_n[k] ",\"last\":" int(SK_last[k]) "}"
+	}
+	file = RUN "/www/skipped.json"
+	print s "]" > file; close(file)
+}
 
 # first packets to a server that looks like a game server: tell the player where they are headed.
 # Two tests, both needed. The port must be labelled as a game, so voice chat is left alone. And the
@@ -169,7 +229,7 @@ function isgame(port,    i) { for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i
 function lobby_check(f,    ip) {
 	F_lobby[f] = 1
 	ip = F_rip[f]
-	if (!isgame(F_rport[f])) return
+	if (!isgame(F_rport[f], ip)) return
 	if (!((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
@@ -603,6 +663,12 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	out = out "\t" num(PS["lat"]) "\t" num(PS["lon"]) "\t" num(clean(PS["country"])) "\t" (wan_avg == "-" ? "-" : r1(wan_avg)) "\t" r1(F_wpk[f] + 0) "\t" num(PS["hops"])
 	out = out "\t" (M_n[f] + 0) "\t" msum "\t" num(PS["qos_class"])
 	if (!REPLAY) { print out >> HIST; close(HIST) }
+	# the first proper match on a port nobody has named: say so once, because until it has a name
+	# staying on places, the lobby alert and automatic blocking all leave it alone
+	if (reliable && kindof(F_rport[f], ip) == "" && !(F_rport[f] in KPORT)) {
+		print "NEWGAME " F_rport[f]
+		if (!REPLAY) system(SELF " _newgame " (F_rport[f] + 0) " &")
+	}
 	KPORT[F_rport[f]] = 1; K24[pfx(ip)] = 1
 
 	# --- full detail for the dashboard's match page
@@ -648,7 +714,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		system("rm -rf " RUN "/probe." F_sid[f])
 		system(SELF " _after '" note "' " overall " &")
 	}
-	if (AUTOBLOCK && reliable && isgame(F_rport[f]) && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
+	if (AUTOBLOCK && reliable && isgame(F_rport[f], ip) && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
 		avg = REP_sum[ip] / REP_n[ip]
 		if (avg < ABSCORE) {
 			print "AUTOBLOCK " ip " avg=" int(avg)

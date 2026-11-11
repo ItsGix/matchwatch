@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.12.0"
+VERSION="0.13.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -21,6 +21,7 @@ GEO=1
 NTFY_URL=""
 NOTIFY_EVERY_MATCH=0
 NOTIFY_START=0
+NOTIFY_NEWGAME=1
 WARN_SCORE=55
 PC_SCORE=1
 AUTOBLOCK=0
@@ -49,6 +50,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get NTFY_URL main ntfy_url "$NTFY_URL"
 	config_get NOTIFY_EVERY_MATCH main notify_every_match "$NOTIFY_EVERY_MATCH"
 	config_get NOTIFY_START main notify_start "$NOTIFY_START"
+	config_get NOTIFY_NEWGAME main notify_newgame "$NOTIFY_NEWGAME"
 	config_get WARN_SCORE main warn_score "$WARN_SCORE"
 	config_get PC_SCORE main pc_score "$PC_SCORE"
 	config_get AUTOBLOCK main autoblock "$AUTOBLOCK"
@@ -557,15 +559,19 @@ cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
 			else mv -f "$DATA/stay.bak" "$DATA/stay"; [ -s "$DATA/stay" ] || rm -f "$DATA/stay"; exit 1; fi ;;
 	esac
 }
-cmd_game() { # name <port> <name>
-	[ "$1" = name ] || die "usage: matchwatch game name <server port> <name>"
-	case "$2" in ""|*[!0-9]*) die "usage: matchwatch game name <server port> <name>" ;; esac
+cmd_newgame() { # port : a match was just played on a server port nobody has named
+	local msg="New game seen on server port $1. Name it on the Tools page in MatchWatch, so that staying on places, the lobby alert and automatic blocking cover it."
+	if [ "$NOTIFY_NEWGAME" = 1 ]; then cmd_notify "$msg"; else logger -t matchwatch "$msg" 2>/dev/null; fi
+}
+cmd_game() { # name <port or lo-hi> <name>
+	[ "$1" = name ] || die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>"
+	case "$2" in ""|*[!0-9-]*|-*|*-|*-*-*) die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>" ;; esac
 	[ -n "$3" ] || die "usage: matchwatch game name <server port> <name>"
 	touch "$DATA/games.local"
 	grep -v "|$2\$" "$DATA/games.local" > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
 	printf '%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2" >> "$DATA/games.local"
 	export_json
-	echo "Matches on server port $2 are now labelled: $3"
+	echo "Matches on server port $2 are now labelled: $3. Staying on places, the lobby alert and automatic blocking now cover it."
 }
 cmd_unblock_dc() { # number
 	local list p
@@ -671,7 +677,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 	local action="$1" arg="$2" days="$3" region="$4" name="$5"
 	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
 	[ "${#name}" -le 40 ] || die "that name is too long"
-	case "$arg" in *[!0-9./]*) die "that is not an address or a number" ;; esac
+	case "$arg" in *[!0-9./-]*) die "that is not an address or a number" ;; esac
 	case "$days" in *[!0-9]*) die "days must be a number" ;; esac
 	case "$region" in *[!a-z0-9\ ,-]*) die "place names may only use letters, numbers, spaces, commas and hyphens" ;; esac
 	case "$action" in
@@ -1129,6 +1135,8 @@ case "$1" in
 	_probe_start) shift; cmd_probe_start "$@" ;;
 	_probe_stop) cmd_probe_stop "$2" ;;
 	_notify) cmd_notify "$2" ;;
+	_geo) is_ipv4 "$2" && geo_lookup "$2" >/dev/null ;;
+	_newgame) case "$2" in ""|*[!0-9]*) ;; *) cmd_newgame "$2" ;; esac ;;
 	_after) cmd_after "$2" "$3" ;;
 	_export) mkdir -p "$RUN/www"; export_json ;;
 	_stop) [ -f "$RUN/pid" ] && kill "$(cat "$RUN/pid")" 2>/dev/null ;;

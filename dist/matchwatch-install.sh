@@ -51,7 +51,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.12.0"
+VERSION="0.13.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -70,6 +70,7 @@ GEO=1
 NTFY_URL=""
 NOTIFY_EVERY_MATCH=0
 NOTIFY_START=0
+NOTIFY_NEWGAME=1
 WARN_SCORE=55
 PC_SCORE=1
 AUTOBLOCK=0
@@ -98,6 +99,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get NTFY_URL main ntfy_url "$NTFY_URL"
 	config_get NOTIFY_EVERY_MATCH main notify_every_match "$NOTIFY_EVERY_MATCH"
 	config_get NOTIFY_START main notify_start "$NOTIFY_START"
+	config_get NOTIFY_NEWGAME main notify_newgame "$NOTIFY_NEWGAME"
 	config_get WARN_SCORE main warn_score "$WARN_SCORE"
 	config_get PC_SCORE main pc_score "$PC_SCORE"
 	config_get AUTOBLOCK main autoblock "$AUTOBLOCK"
@@ -606,15 +608,19 @@ cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
 			else mv -f "$DATA/stay.bak" "$DATA/stay"; [ -s "$DATA/stay" ] || rm -f "$DATA/stay"; exit 1; fi ;;
 	esac
 }
-cmd_game() { # name <port> <name>
-	[ "$1" = name ] || die "usage: matchwatch game name <server port> <name>"
-	case "$2" in ""|*[!0-9]*) die "usage: matchwatch game name <server port> <name>" ;; esac
+cmd_newgame() { # port : a match was just played on a server port nobody has named
+	local msg="New game seen on server port $1. Name it on the Tools page in MatchWatch, so that staying on places, the lobby alert and automatic blocking cover it."
+	if [ "$NOTIFY_NEWGAME" = 1 ]; then cmd_notify "$msg"; else logger -t matchwatch "$msg" 2>/dev/null; fi
+}
+cmd_game() { # name <port or lo-hi> <name>
+	[ "$1" = name ] || die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>"
+	case "$2" in ""|*[!0-9-]*|-*|*-|*-*-*) die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>" ;; esac
 	[ -n "$3" ] || die "usage: matchwatch game name <server port> <name>"
 	touch "$DATA/games.local"
 	grep -v "|$2\$" "$DATA/games.local" > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
 	printf '%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2" >> "$DATA/games.local"
 	export_json
-	echo "Matches on server port $2 are now labelled: $3"
+	echo "Matches on server port $2 are now labelled: $3. Staying on places, the lobby alert and automatic blocking now cover it."
 }
 cmd_unblock_dc() { # number
 	local list p
@@ -720,7 +726,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 	local action="$1" arg="$2" days="$3" region="$4" name="$5"
 	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
 	[ "${#name}" -le 40 ] || die "that name is too long"
-	case "$arg" in *[!0-9./]*) die "that is not an address or a number" ;; esac
+	case "$arg" in *[!0-9./-]*) die "that is not an address or a number" ;; esac
 	case "$days" in *[!0-9]*) die "days must be a number" ;; esac
 	case "$region" in *[!a-z0-9\ ,-]*) die "place names may only use letters, numbers, spaces, commas and hyphens" ;; esac
 	case "$action" in
@@ -1178,6 +1184,8 @@ case "$1" in
 	_probe_start) shift; cmd_probe_start "$@" ;;
 	_probe_stop) cmd_probe_stop "$2" ;;
 	_notify) cmd_notify "$2" ;;
+	_geo) is_ipv4 "$2" && geo_lookup "$2" >/dev/null ;;
+	_newgame) case "$2" in ""|*[!0-9]*) ;; *) cmd_newgame "$2" ;; esac ;;
 	_after) cmd_after "$2" "$3" ;;
 	_export) mkdir -p "$RUN/www"; export_json ;;
 	_stop) [ -f "$RUN/pid" ] && kill "$(cat "$RUN/pid")" 2>/dev/null ;;
@@ -1234,6 +1242,7 @@ BEGIN {
 	WIN += 0; MINDN += 0; MINUP += 0; AUTOBLOCK += 0; REPLAY += 0
 	QUALIFY = 8; ENDIDLE = 10; DROPIDLE = 30; TL = 120; MAXFLOWS = 200
 	HIST = DATA "/sessions.tsv"
+	if (GEOF == "") GEOF = DATA "/geo.cache"
 	while ((getline line < HIST) > 0) {
 		n = split(line, c, "\t")
 		if (n >= 6) { if (c[6] + 0 >= 1024) KPORT[c[6]] = 1; K24[pfx(c[5])] = 1 }
@@ -1241,7 +1250,7 @@ BEGIN {
 	}
 	close(HIST)
 	cursec = 0; NFLOW = 0; SIDN = 0; FTMAX = 5400
-	load_games(GAMESL); load_games(GAMES)
+	reload_games()
 	DD = (DETAILDIR != "") ? DETAILDIR : DATA "/matches"
 }
 
@@ -1252,6 +1261,8 @@ $1 == "TICK" {
 	# packets are delivered slightly behind real time, so trail by 2 s
 	advance(now - 2)
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
+	# names can change while running (the Tools page, matchwatch game name), so look again now and then
+	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) write_skipped(now) }
 	next
 }
 
@@ -1278,6 +1289,7 @@ $2 == "IP" && $4 == ">" {
 	advance(int(t))
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
+		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
 		if (NFLOW >= MAXFLOWS) next
 		F_seen[f] = 1; NFLOW++
 		F_lip[f] = lip; F_lport[f] = lport; F_rip[f] = rip; F_rport[f] = rport
@@ -1337,18 +1349,74 @@ function early_check(f,    ip, avg, p) {
 	}
 }
 
-# Game labels: name|ports|kind. Only servers on a port labelled as a game (not voice, not unlabelled)
-# are ever alerted on, turned away or blocked automatically. Voice chat must never be cut off.
+# Labels: name|ports|kind|hosts, your own (games.local) before the built-in list, first match wins.
+# A port alone often cannot tell two games apart, or a game from voice chat, so a label may also name
+# the company that hosts its servers (hosts: words looked for in the server's isp, org and AS name).
+# Such a label only matches once the host is known, and the lookup takes a second or two; until then
+# the stream falls through to whatever label comes next.
+# kindof() answers "game", "voice" or "" (nobody has named it).
+#   game   tracked, and the only kind ever alerted on, turned away or blocked automatically
+#   voice  not tracked at all: voice chat is not a match, and must never be cut off
+#   ""     tracked and rated, but left alone until it has a name
 function load_games(file,    l, g, k, a, i, r) {
 	if (file == "") return
 	while ((getline l < file) > 0) {
 		if (l ~ /^#/ || l == "") continue
 		split(l, g, "|"); k = split(g[2], a, ",")
-		for (i = 1; i <= k; i++) { NGP++; if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 } GP_voice[NGP] = (g[3] == "voice") }
+		for (i = 1; i <= k; i++) {
+			NGP++
+			if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 }
+			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4])
+		}
 	}
 	close(file)
 }
-function isgame(port,    i) { for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i]) return !GP_voice[i]; return 0 }
+function reload_games() { NGP = 0; load_games(GAMESL); load_games(GAMES) }
+# who hosts this server: "isp org as" in lower case, or "" while that is not known
+function hostinfo(ip,    l, c) {
+	if (ip in HOST) return HOST[ip]
+	if (GEOF == "") return ""
+	# not known yet: ask once, then watch the lookup cache for half a minute
+	if (!(ip in HOSTASK)) { HOSTASK[ip] = cursec; GEO_read = -1; if (!REPLAY) system(SELF " _geo " ip " >/dev/null 2>&1 &") }
+	if (cursec - HOSTASK[ip] > 30 || cursec == GEO_read) return ""
+	GEO_read = cursec
+	while ((getline l < GEOF) > 0) if (split(l, c, "\t") >= 9) HOST[c[1]] = tolower(c[7] " " c[8] " " c[9])
+	close(GEOF)
+	return (ip in HOST) ? HOST[ip] : ""
+}
+function hostmatch(words, info,    w, n, i) {
+	if (info == "") return 0
+	n = split(words, w, ",")
+	for (i = 1; i <= n; i++) if (w[i] != "" && index(info, w[i]) > 0) return 1
+	return 0
+}
+function kindof(port, ip,    i) {
+	for (i = 1; i <= NGP; i++) {
+		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
+		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
+		return GP_kind[i]
+	}
+	return ""
+}
+function isgame(port, ip) { return kindof(port, ip) == "game" }
+
+# A stream left alone as voice chat is still counted, so the Tools page can show what was skipped
+# and the owner can say "that one is a game".
+function skip_note(ip, port, t,    k) {
+	k = ip ":" port
+	if (!(k in SK_n)) { if (SKN >= 100) return; SKN++; SK_ip[k] = ip; SK_port[k] = port }
+	SK_n[k]++; SK_last[k] = t
+}
+function write_skipped(now,    k, s, n, file) {
+	s = "["
+	for (k in SK_n) {
+		if (now - SK_last[k] > 21600) { delete SK_n[k]; delete SK_last[k]; delete SK_ip[k]; delete SK_port[k]; SKN--; continue }
+		if (SK_n[k] < 300 || n >= 12) continue          # a real stream, not a few stray packets
+		s = s (n++ ? "," : "") "{\"ip\":\"" SK_ip[k] "\",\"port\":" SK_port[k] ",\"packets\":" SK_n[k] ",\"last\":" int(SK_last[k]) "}"
+	}
+	file = RUN "/www/skipped.json"
+	print s "]" > file; close(file)
+}
 
 # first packets to a server that looks like a game server: tell the player where they are headed.
 # Two tests, both needed. The port must be labelled as a game, so voice chat is left alone. And the
@@ -1357,7 +1425,7 @@ function isgame(port,    i) { for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i
 function lobby_check(f,    ip) {
 	F_lobby[f] = 1
 	ip = F_rip[f]
-	if (!isgame(F_rport[f])) return
+	if (!isgame(F_rport[f], ip)) return
 	if (!((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
@@ -1791,6 +1859,12 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	out = out "\t" num(PS["lat"]) "\t" num(PS["lon"]) "\t" num(clean(PS["country"])) "\t" (wan_avg == "-" ? "-" : r1(wan_avg)) "\t" r1(F_wpk[f] + 0) "\t" num(PS["hops"])
 	out = out "\t" (M_n[f] + 0) "\t" msum "\t" num(PS["qos_class"])
 	if (!REPLAY) { print out >> HIST; close(HIST) }
+	# the first proper match on a port nobody has named: say so once, because until it has a name
+	# staying on places, the lobby alert and automatic blocking all leave it alone
+	if (reliable && kindof(F_rport[f], ip) == "" && !(F_rport[f] in KPORT)) {
+		print "NEWGAME " F_rport[f]
+		if (!REPLAY) system(SELF " _newgame " (F_rport[f] + 0) " &")
+	}
 	KPORT[F_rport[f]] = 1; K24[pfx(ip)] = 1
 
 	# --- full detail for the dashboard's match page
@@ -1836,7 +1910,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		system("rm -rf " RUN "/probe." F_sid[f])
 		system(SELF " _after '" note "' " overall " &")
 	}
-	if (AUTOBLOCK && reliable && isgame(F_rport[f]) && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
+	if (AUTOBLOCK && reliable && isgame(F_rport[f], ip) && (ip in REP_n) && REP_n[ip] >= ABMATCHES) {
 		avg = REP_sum[ip] / REP_n[ip]
 		if (avg < ABSCORE) {
 			print "AUTOBLOCK " ip " avg=" int(avg)
@@ -1962,10 +2036,10 @@ NF >= 39 {
 	if (known($40) && known($41)) { D_lat[dk] += $40; D_lon[dk] += $41; D_ln[dk]++ }
 	pl = place_of($40, $41, $7); io = (pl == "") ? "" : (pl > 0 ? 1 : 0); D_cc[dk] = $7
 	if (pl > 0 && $37 == 1) PH[pl, ++PN[pl]] = $36
-	if (io == 0 && is_game_port($6) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
+	if (io == 0 && is_game_port($6, $9 " " $10) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
 	if (io == 1 && $37 == 1) IN_hist[++nin] = $36
 	if ($37 == 1) { hh = strftime("%H", $1) + 0; HR_n[hh]++; HR_s[hh] += $36 }
-	g = game_of($6); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
+	g = game_of($6, $9 " " $10); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
 	if (nreg > 0) { rc = region_of($40, $41); if (rc != "") { RP_n[rc]++; if ($37 == 1) { RP_rn[rc]++; RP_rs[rc] += $36 } if ($22 != "-") { RP_p[rc] += $22; RP_pn[rc]++ } } }
 	if ($22 != "-") { D_ping[dk] += $22; D_pingn[dk]++ }
 	if (!((dk, ip) in D_hasip)) { D_hasip[dk, ip] = 1; D_srv[dk]++ }
@@ -1995,22 +2069,25 @@ function place_of(lat, lon, cc,   i, unk) {
 	return unk ? "" : 0
 }
 function inside(lat, lon, cc,   p) { p = place_of(lat, lon, cc); return (p == "") ? "" : (p > 0 ? 1 : 0) }
-function game_of(port,   i, k, a, lo) {
+# Labels: name|ports|kind|hosts (see games.list). which_label() gives the first label whose port range
+# holds this port and, where the label names hosts, whose words appear in this server's org or AS.
+function which_label(port, host,   i, k, a, lo, r, w, n, j, ok) {
+	host = tolower(host)
 	for (i = 1; i <= ngame; i++) {
+		if (GM[i, 4] != "") {
+			ok = 0; n = split(tolower(GM[i, 4]), w, ",")
+			for (j = 1; j <= n; j++) if (w[j] != "" && index(host, w[j]) > 0) ok = 1
+			if (!ok) continue
+		}
 		k = split(GM[i, 2], a, ",")
-		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], b3, "-"); if (port + 0 >= b3[1] + 0 && port + 0 <= b3[2] + 0) return GM[i, 1] } else if (a[lo] + 0 == port + 0) return GM[i, 1] }
-	}
-	return "Game on port " port
-}
-function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3] } close(file) }
-# is this port labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
-function is_game_port(port,   i, k, a, lo, r) {
-	for (i = 1; i <= ngame; i++) {
-		k = split(GM[i, 2], a, ",")
-		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], r, "-"); if (port + 0 >= r[1] + 0 && port + 0 <= r[2] + 0) return (GM[i, 3] != "voice") } else if (a[lo] + 0 == port + 0) return (GM[i, 3] != "voice") }
+		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], r, "-"); if (port + 0 >= r[1] + 0 && port + 0 <= r[2] + 0) return i } else if (a[lo] + 0 == port + 0) return i }
 	}
 	return 0
 }
+function game_of(port, host,   i) { i = which_label(port, host); return i ? GM[i, 1] : "Game on port " port }
+function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3]; GM[ngame, 4] = g[4] } close(file) }
+# is this server labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
+function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice") : 0 }
 # which measured region is this match's server in? nearest, within 150 km
 function region_of(lat, lon,   i, best, bd, d) {
 	if (!known(lat) || !known(lon)) return ""
@@ -2029,7 +2106,7 @@ END {
 		shown = 0
 		for (i = n; i >= 1 && shown < lim; i--) {
 			if (only != "" && R[i, 5] != only) continue
-			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(game_of(R[i, 6]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
+			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(game_of(R[i, 6], R[i, 9] " " R[i, 10]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
 			shown++
 		}
 		exit
@@ -2069,7 +2146,7 @@ END {
 			if (R[i, 35] > R[best, 35]) best = i
 			if (R[i, 35] < R[worst, 35]) worst = i
 			FC[R[i, 38]]++
-			gg = game_of(R[i, 6]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
+			gg = game_of(R[i, 6], R[i, 9] " " R[i, 10]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
 		}
 		gs = ""; for (i = 1; i <= nrg; i++) gs = gs (i > 1 ? ", " : "") rgo[i] " (" RG_n[rgo[i]] ")"
 		printf "Latest session: %d match%s, %d minutes of play, %s to %s.\nGames: %s.\n", c, (c == 1 ? "" : "es"), secs / 60, strftime("%d %b %H:%M", R[first, 1]), strftime("%H:%M", R[n, 1] + R[n, 2]), gs
@@ -2183,7 +2260,7 @@ END {
 		printf "["
 		c = 0
 		for (i = n; i >= 1 && c < 200; i--) {
-			printf "%s{\"game\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(game_of(R[i, 6])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
+			printf "%s{\"game\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(game_of(R[i, 6], R[i, 9] " " R[i, 10])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
 			printf ",\"tick\":%s,\"jit\":%s,\"late\":%s,\"lost\":%s,\"clump\":%s,\"freeze\":%s,\"rough\":%s", jn(R[i, 11]), jn(R[i, 12]), jn(R[i, 13]), jn(R[i, 14]), jn(R[i, 15]), jn(R[i, 16]), jn(R[i, 17])
 			printf ",\"uprate\":%s,\"upjit\":%s,\"hitch\":%s,\"farkind\":%s,\"ping\":%s,\"pingjit\":%s,\"pingloss\":%s", jn(R[i, 18]), jn(R[i, 19]), jn(R[i, 20]), q(R[i, 21]), jn(R[i, 22]), jn(R[i, 23]), jn(R[i, 24])
 			printf ",\"nearping\":%s,\"nearjit\":%s,\"nearloss\":%s,\"lanping\":%s", jn(R[i, 25]), jn(R[i, 26]), jn(R[i, 27]), jn(R[i, 28])
@@ -2357,12 +2434,72 @@ country|nz|New Zealand|NZ
 MW_FILE_END_6
 chmod 644 "$R/usr/lib/matchwatch/places.list"
 cat > "$R/usr/lib/matchwatch/games.list" <<'MW_FILE_END_7'
-# Game labels by the server's port. name|ports (single ports or ranges, comma separated)
-# Your own labels (matchwatch game name <port> <name>) are checked first.
-Call of Duty|3074,30000-45000
-Valve (Counter-Strike, Dota 2, TF2)|27015-27200
-# A third field of "voice" marks voice chat. Voice servers are rated like matches but are never
-# blocked or turned away by stay mode, automatic blocking or the lobby alert.
+# Labels for game servers and voice chat:   name|ports|kind|hosts
+#
+#   ports  the SERVER's UDP port: single ports or ranges, separated by commas
+#   kind   empty = a game. "voice" = voice chat, which is never recorded and never blocked.
+#   hosts  optional. Words looked for in the name of the company hosting the server (its isp, org
+#          and AS name, any case). The label only matches when one is found. Use it where a port
+#          range is shared with something else. It needs "Look up where servers are" switched on.
+#
+# The first line that matches wins, so narrow and host-checked lines come before wide ones.
+# Your own names (the Tools page, or: matchwatch game name <port or lo-hi> <name>) are kept in
+# /etc/matchwatch/games.local and are checked before this file.
+#
+# Only a labelled game is ever turned away, blocked automatically or announced by the lobby alert.
+# Anything not listed is still recorded and rated, as "Game on port N", until it is given a name.
+#
+# Where the ports come from: publishers' own port lists where they publish one, otherwise the
+# figures used by router makers and esports network guides. Many publishers do not publish server
+# ports at all, several games share ranges, and games hosted player-to-player have no server port,
+# so this cannot be complete. Lines marked "unconfirmed" have no publisher source.
+
+# ---- voice chat on its own ports (checked first so a game range cannot swallow them)
+Valorant voice|27016-27024,54000-54012|voice|riot,as6507
+TeamSpeak|9987|voice
+Mumble|64738|voice
+Voice and party chat|3478-3481,5060,5062,6250|voice
+
+# ---- games recognised by who hosts the server, because the port range is shared or very wide
+Roblox|49152-65535||roblox,as22697
+Valorant|7000-8000,8180-8181||riot,as6507
+League of Legends|5000-5500||riot,as6507
+Overwatch 2|12000-64000||blizzard,as57976
+iRacing|15000-52500||iracing
+War Thunder|20000-30000||gaijin
+Call of Duty|3074,30000-45000||vultr,constant company,choopa,as20473
+
+# ---- games on a narrow range of their own
+Minecraft|19132-19133
+Rust|28015
+DayZ|2302
+Palworld|8211
+ARK|7777-7778
+Among Us|22023
+Genshin Impact|22101-22102
+# unconfirmed
+Escape from Tarkov|17000-17100
+# unconfirmed
+Rainbow Six Siege|6015,10000-10099
+# unconfirmed
+Battlefield|14000-14016,22990-23006,25200-25300
+# unconfirmed
+World of Tanks|32800-32900
+Street Fighter 6|30840-30859,30870-30879
+
+# ---- games on a wider range, or one shared with others
+# Valve's own games and every game using Steam's relay network arrive on the same ports.
+Steam games (Counter-Strike 2, Dota 2, Deadlock, TF2, Destiny 2)|27000-27200
+# unconfirmed: Epic does not publish Fortnite's server ports
+Fortnite|9000-9100
+# these three share a range and cannot be told apart by port
+EA Sports FC, Smite or Paladins|9101-9999
+Apex Legends|37000-40000
+Rocket League|7000-9000
+# Call of Duty servers on a host not listed above
+Call of Duty|30000-45000
+
+# ---- everything else on high ports is taken to be voice chat (Discord uses 50000-65535)
 Discord voice|50000-65535|voice
 MW_FILE_END_7
 chmod 644 "$R/usr/lib/matchwatch/games.list"
@@ -2674,6 +2811,42 @@ function session() {
 }
 function isBlocked(ip) { var s = D.servers.filter(function (x) { return x.ip === ip; })[0]; return !!(s && s.blocked) || D.blocks.some(function (b) { return b.ip === ip; }); }
 
+// ---------- naming games. An unnamed game is rated but left alone by stay mode, the lobby alert and auto-block.
+function unnamedPorts() {
+	var seen = [], m;
+	D.hist.forEach(function (x) { m = /^Game on port (\d+)$/.exec(x.game || ""); if (m && seen.indexOf(m[1]) < 0) seen.push(m[1]); });
+	return seen;
+}
+// a name box and a button for one server port; label is the button's text
+function nameForm(port, label, after) {
+	var inp = h("input", { type: "text", cls: "keep", maxlength: "40", placeholder: "Name of the game", autocomplete: "off", "aria-label": "Name for the game on server port " + port });
+	var btn = h("button", { type: "button", cls: "solid", text: label });
+	var go = function () {
+		var v = inp.value.replace(/[^A-Za-z0-9 .:-]/g, "").trim();
+		if (!v) { inp.focus(); return; }
+		btn.disabled = true;
+		T.act({ action: "gamename", arg: String(port), name: v }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+			btn.disabled = false; toast(j.out || "That did not work.", !j.ok);
+			if (j.ok) { inp.value = ""; refresh(true); if (after) after(v); }
+		});
+	};
+	btn.addEventListener("click", go);
+	inp.addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+	return h("div", { cls: "stayform" }, inp, btn);
+}
+// shown on Live and Matches until every game on file has a name
+function namePrompt(redraw) {
+	if (RO) return null;
+	var ps = unnamedPorts();
+	if (!ps.length) return null;
+	var box = h("div");
+	ps.forEach(function (port) {
+		box.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "New game on server port " + port + ". "), "Give it a name. Until it has one, MatchWatch rates its matches but staying on places, the lobby alert and automatic blocking leave it alone."),
+			nameForm(port, "Save name", function () { setTimeout(redraw, 1500); })));
+	});
+	return box;
+}
+
 // ---------- Live
 var L = {};
 function pageLive() {
@@ -2685,6 +2858,8 @@ function pageLive() {
 	L.note = h("p", { cls: "note", text: "Press when something feels off, or tap the M key. A few seconds later this shows what the server, your ping and your PC were doing." });
 	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div");
 	L.felt.addEventListener("click", felt);
+	var np = namePrompt(function () { if (page === "live") pageLive(); });
+	if (np) view.appendChild(np);
 	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub);
 	view.appendChild(h("div", { cls: "strip" }, L.cv, legend()));
 	view.appendChild(L.figs);
@@ -2862,6 +3037,8 @@ function hoursStrip() {
 }
 function pageMatches() {
 	view.textContent = ""; view.appendChild(h("h1", "Matches"));
+	var np = namePrompt(function () { if (page === "matches") pageMatches(); });
+	if (np) view.appendChild(np);
 	if (!D.hist.length) { view.appendChild(h("p", { cls: "sub", text: "No matches recorded yet." })); return; }
 	var rc = recap();
 	if (rc) { view.appendChild(h("h2", "Latest session")); view.appendChild(h("p", { cls: "lede", text: rc })); }
@@ -3080,6 +3257,23 @@ function pageTools() {
 			view.appendChild(h("p", { cls: "note", text: "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it." }));
 		}
 
+		view.appendChild(h("h2", "Skipped as voice chat"));
+		var skBox = h("div");
+		view.appendChild(skBox);
+		view.appendChild(h("p", { cls: "note", text: "Voice chat is not a match, so MatchWatch does not record it, and can never block it. It tells voice chat from games by the server's port, and a few games use ports in the same range. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on." }));
+		get("skipped.json", function (sk) {
+			if (page !== "tools") return;
+			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
+			if (!sk.length) { skBox.appendChild(h("p", { cls: "empty", text: "Nothing has been skipped in the last six hours." })); return; }
+			var t = table([["Server"], ["Port", "num"], ["Last seen"], ["If this is a game, name it"]]);
+			sk.forEach(function (x) {
+				var td = h("td");
+				td.appendChild(nameForm(x.port, "This is a game", function (v) { td.textContent = "Now treated as a game: " + v; }));
+				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], td]));
+			});
+			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
+		});
+
 		view.appendChild(h("h2", "Your history"));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
@@ -3124,8 +3318,8 @@ function setState() {
 	else { e.className = ""; e.textContent = "Waiting for a match"; }
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
-// half-typed text in the places box would be wiped by a redraw
-function typing() { var i = shadow.getElementById("place"); return !!(i && i.value); }
+// half-typed text in a box would be wiped by a redraw
+function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
 	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
@@ -3245,6 +3439,9 @@ select { font: inherit; padding: 6px 10px; color: var(--ink); background: var(--
 .stayform input:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
 .stayform button { margin: 0; }
 .stayform select { max-width: 100%; }
+.banner .stayform { flex: 1; min-width: 260px; }
+td .stayform { max-width: 420px; }
+td .stayform input { min-width: 140px; }
 .lede.ok, .lede.mid, .lede.low { font-weight: 600; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; }
 .actions button { margin: 0; }
@@ -3420,6 +3617,11 @@ return view.extend({
 		o = s.taboption('alerts', form.Flag, 'notify_start', _('Alert when a match starts'),
 			_('Tells your phone the moment the game itself begins, with where the server is and the ping. Handy when you have stepped away during a long queue.'));
 		o.default = '0';
+		o.rmempty = false;
+
+		o = s.taboption('alerts', form.Flag, 'notify_newgame', _('Alert when a new game is seen'),
+			_('Tells your phone the first time a match is played on a server port nobody has named. Until you name the game, staying on places, the lobby alert and automatic blocking leave it alone.'));
+		o.default = '1';
 		o.rmempty = false;
 
 		o = s.taboption('alerts', form.Flag, 'notify_every_match', _('Alert after every match'),

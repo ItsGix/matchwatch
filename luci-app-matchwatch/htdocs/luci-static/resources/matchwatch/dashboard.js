@@ -169,6 +169,42 @@ function session() {
 }
 function isBlocked(ip) { var s = D.servers.filter(function (x) { return x.ip === ip; })[0]; return !!(s && s.blocked) || D.blocks.some(function (b) { return b.ip === ip; }); }
 
+// ---------- naming games. An unnamed game is rated but left alone by stay mode, the lobby alert and auto-block.
+function unnamedPorts() {
+	var seen = [], m;
+	D.hist.forEach(function (x) { m = /^Game on port (\d+)$/.exec(x.game || ""); if (m && seen.indexOf(m[1]) < 0) seen.push(m[1]); });
+	return seen;
+}
+// a name box and a button for one server port; label is the button's text
+function nameForm(port, label, after) {
+	var inp = h("input", { type: "text", cls: "keep", maxlength: "40", placeholder: "Name of the game", autocomplete: "off", "aria-label": "Name for the game on server port " + port });
+	var btn = h("button", { type: "button", cls: "solid", text: label });
+	var go = function () {
+		var v = inp.value.replace(/[^A-Za-z0-9 .:-]/g, "").trim();
+		if (!v) { inp.focus(); return; }
+		btn.disabled = true;
+		T.act({ action: "gamename", arg: String(port), name: v }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+			btn.disabled = false; toast(j.out || "That did not work.", !j.ok);
+			if (j.ok) { inp.value = ""; refresh(true); if (after) after(v); }
+		});
+	};
+	btn.addEventListener("click", go);
+	inp.addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+	return h("div", { cls: "stayform" }, inp, btn);
+}
+// shown on Live and Matches until every game on file has a name
+function namePrompt(redraw) {
+	if (RO) return null;
+	var ps = unnamedPorts();
+	if (!ps.length) return null;
+	var box = h("div");
+	ps.forEach(function (port) {
+		box.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "New game on server port " + port + ". "), "Give it a name. Until it has one, MatchWatch rates its matches but staying on places, the lobby alert and automatic blocking leave it alone."),
+			nameForm(port, "Save name", function () { setTimeout(redraw, 1500); })));
+	});
+	return box;
+}
+
 // ---------- Live
 var L = {};
 function pageLive() {
@@ -180,6 +216,8 @@ function pageLive() {
 	L.note = h("p", { cls: "note", text: "Press when something feels off, or tap the M key. A few seconds later this shows what the server, your ping and your PC were doing." });
 	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div");
 	L.felt.addEventListener("click", felt);
+	var np = namePrompt(function () { if (page === "live") pageLive(); });
+	if (np) view.appendChild(np);
 	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub);
 	view.appendChild(h("div", { cls: "strip" }, L.cv, legend()));
 	view.appendChild(L.figs);
@@ -357,6 +395,8 @@ function hoursStrip() {
 }
 function pageMatches() {
 	view.textContent = ""; view.appendChild(h("h1", "Matches"));
+	var np = namePrompt(function () { if (page === "matches") pageMatches(); });
+	if (np) view.appendChild(np);
 	if (!D.hist.length) { view.appendChild(h("p", { cls: "sub", text: "No matches recorded yet." })); return; }
 	var rc = recap();
 	if (rc) { view.appendChild(h("h2", "Latest session")); view.appendChild(h("p", { cls: "lede", text: rc })); }
@@ -575,6 +615,23 @@ function pageTools() {
 			view.appendChild(h("p", { cls: "note", text: "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it." }));
 		}
 
+		view.appendChild(h("h2", "Skipped as voice chat"));
+		var skBox = h("div");
+		view.appendChild(skBox);
+		view.appendChild(h("p", { cls: "note", text: "Voice chat is not a match, so MatchWatch does not record it, and can never block it. It tells voice chat from games by the server's port, and a few games use ports in the same range. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on." }));
+		get("skipped.json", function (sk) {
+			if (page !== "tools") return;
+			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
+			if (!sk.length) { skBox.appendChild(h("p", { cls: "empty", text: "Nothing has been skipped in the last six hours." })); return; }
+			var t = table([["Server"], ["Port", "num"], ["Last seen"], ["If this is a game, name it"]]);
+			sk.forEach(function (x) {
+				var td = h("td");
+				td.appendChild(nameForm(x.port, "This is a game", function (v) { td.textContent = "Now treated as a game: " + v; }));
+				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], td]));
+			});
+			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
+		});
+
 		view.appendChild(h("h2", "Your history"));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
@@ -619,8 +676,8 @@ function setState() {
 	else { e.className = ""; e.textContent = "Waiting for a match"; }
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
-// half-typed text in the places box would be wiped by a redraw
-function typing() { var i = shadow.getElementById("place"); return !!(i && i.value); }
+// half-typed text in a box would be wiped by a redraw
+function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
 	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };

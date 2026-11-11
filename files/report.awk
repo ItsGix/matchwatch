@@ -52,10 +52,10 @@ NF >= 39 {
 	if (known($40) && known($41)) { D_lat[dk] += $40; D_lon[dk] += $41; D_ln[dk]++ }
 	pl = place_of($40, $41, $7); io = (pl == "") ? "" : (pl > 0 ? 1 : 0); D_cc[dk] = $7
 	if (pl > 0 && $37 == 1) PH[pl, ++PN[pl]] = $36
-	if (io == 0 && is_game_port($6) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
+	if (io == 0 && is_game_port($6, $9 " " $10) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
 	if (io == 1 && $37 == 1) IN_hist[++nin] = $36
 	if ($37 == 1) { hh = strftime("%H", $1) + 0; HR_n[hh]++; HR_s[hh] += $36 }
-	g = game_of($6); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
+	g = game_of($6, $9 " " $10); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
 	if (nreg > 0) { rc = region_of($40, $41); if (rc != "") { RP_n[rc]++; if ($37 == 1) { RP_rn[rc]++; RP_rs[rc] += $36 } if ($22 != "-") { RP_p[rc] += $22; RP_pn[rc]++ } } }
 	if ($22 != "-") { D_ping[dk] += $22; D_pingn[dk]++ }
 	if (!((dk, ip) in D_hasip)) { D_hasip[dk, ip] = 1; D_srv[dk]++ }
@@ -85,22 +85,25 @@ function place_of(lat, lon, cc,   i, unk) {
 	return unk ? "" : 0
 }
 function inside(lat, lon, cc,   p) { p = place_of(lat, lon, cc); return (p == "") ? "" : (p > 0 ? 1 : 0) }
-function game_of(port,   i, k, a, lo) {
+# Labels: name|ports|kind|hosts (see games.list). which_label() gives the first label whose port range
+# holds this port and, where the label names hosts, whose words appear in this server's org or AS.
+function which_label(port, host,   i, k, a, lo, r, w, n, j, ok) {
+	host = tolower(host)
 	for (i = 1; i <= ngame; i++) {
+		if (GM[i, 4] != "") {
+			ok = 0; n = split(tolower(GM[i, 4]), w, ",")
+			for (j = 1; j <= n; j++) if (w[j] != "" && index(host, w[j]) > 0) ok = 1
+			if (!ok) continue
+		}
 		k = split(GM[i, 2], a, ",")
-		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], b3, "-"); if (port + 0 >= b3[1] + 0 && port + 0 <= b3[2] + 0) return GM[i, 1] } else if (a[lo] + 0 == port + 0) return GM[i, 1] }
-	}
-	return "Game on port " port
-}
-function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3] } close(file) }
-# is this port labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
-function is_game_port(port,   i, k, a, lo, r) {
-	for (i = 1; i <= ngame; i++) {
-		k = split(GM[i, 2], a, ",")
-		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], r, "-"); if (port + 0 >= r[1] + 0 && port + 0 <= r[2] + 0) return (GM[i, 3] != "voice") } else if (a[lo] + 0 == port + 0) return (GM[i, 3] != "voice") }
+		for (lo = 1; lo <= k; lo++) { if (a[lo] ~ /-/) { split(a[lo], r, "-"); if (port + 0 >= r[1] + 0 && port + 0 <= r[2] + 0) return i } else if (a[lo] + 0 == port + 0) return i }
 	}
 	return 0
 }
+function game_of(port, host,   i) { i = which_label(port, host); return i ? GM[i, 1] : "Game on port " port }
+function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3]; GM[ngame, 4] = g[4] } close(file) }
+# is this server labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
+function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice") : 0 }
 # which measured region is this match's server in? nearest, within 150 km
 function region_of(lat, lon,   i, best, bd, d) {
 	if (!known(lat) || !known(lon)) return ""
@@ -119,7 +122,7 @@ END {
 		shown = 0
 		for (i = n; i >= 1 && shown < lim; i--) {
 			if (only != "" && R[i, 5] != only) continue
-			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(game_of(R[i, 6]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
+			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(game_of(R[i, 6], R[i, 9] " " R[i, 10]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
 			shown++
 		}
 		exit
@@ -159,7 +162,7 @@ END {
 			if (R[i, 35] > R[best, 35]) best = i
 			if (R[i, 35] < R[worst, 35]) worst = i
 			FC[R[i, 38]]++
-			gg = game_of(R[i, 6]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
+			gg = game_of(R[i, 6], R[i, 9] " " R[i, 10]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
 		}
 		gs = ""; for (i = 1; i <= nrg; i++) gs = gs (i > 1 ? ", " : "") rgo[i] " (" RG_n[rgo[i]] ")"
 		printf "Latest session: %d match%s, %d minutes of play, %s to %s.\nGames: %s.\n", c, (c == 1 ? "" : "es"), secs / 60, strftime("%d %b %H:%M", R[first, 1]), strftime("%H:%M", R[n, 1] + R[n, 2]), gs
@@ -273,7 +276,7 @@ END {
 		printf "["
 		c = 0
 		for (i = n; i >= 1 && c < 200; i--) {
-			printf "%s{\"game\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(game_of(R[i, 6])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
+			printf "%s{\"game\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(game_of(R[i, 6], R[i, 9] " " R[i, 10])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
 			printf ",\"tick\":%s,\"jit\":%s,\"late\":%s,\"lost\":%s,\"clump\":%s,\"freeze\":%s,\"rough\":%s", jn(R[i, 11]), jn(R[i, 12]), jn(R[i, 13]), jn(R[i, 14]), jn(R[i, 15]), jn(R[i, 16]), jn(R[i, 17])
 			printf ",\"uprate\":%s,\"upjit\":%s,\"hitch\":%s,\"farkind\":%s,\"ping\":%s,\"pingjit\":%s,\"pingloss\":%s", jn(R[i, 18]), jn(R[i, 19]), jn(R[i, 20]), q(R[i, 21]), jn(R[i, 22]), jn(R[i, 23]), jn(R[i, 24])
 			printf ",\"nearping\":%s,\"nearjit\":%s,\"nearloss\":%s,\"lanping\":%s", jn(R[i, 25]), jn(R[i, 26]), jn(R[i, 27]), jn(R[i, 28])

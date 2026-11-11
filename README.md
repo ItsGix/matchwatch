@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.12.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.13.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -21,7 +21,8 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Keeps a history with a full report and chart for each match, and ratings per server and datacentre.
 - Has an "I felt that" button: press it when something feels off and it shows what the network was doing.
 - Can block bad servers or datacentres, or keep you to a pool of places you choose.
-- Never blocks voice chat: only servers on a port labelled as a game are ever turned away.
+- Recognises around thirty popular games, and asks you to name any it does not know.
+- Leaves voice chat alone: Discord and other calls are not recorded and can never be blocked.
 - Can alert your phone through ntfy, including the moment a match starts, for when you have stepped away during a queue.
 - Can test your line before you queue, and check that QoSmate is prioritising your game.
 - Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
@@ -144,23 +145,52 @@ The Tools page in the dashboard has:
 - **Send a test alert.** Sends one message to your phone to prove the alerts address works.
 - **Route to a server.** Traces the route to any server in your history, to compare with the route in a match report.
 - **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it, and staying on places, the lobby alert and automatic blocking start to cover it.
+- **Skipped as voice chat.** Lists streams MatchWatch took for voice chat in the last six hours, so you can name one as a game if it got that wrong.
 - **Your history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
 - **QoSmate priority.** Only shown when QoSmate is installed. See [QoSmate check and fix](#qosmate-check-and-fix).
 
 ## Games and voice chat
 
-Each match is labelled with its game, worked out from the server's port. Call of Duty, Valve's games and Discord voice are recognised. Anything else shows as "Game on port N" until you name it, on the Tools page or with `matchwatch game name <port> <name>`. With more than one game on file, the Matches page gets a filter.
+### How a game is recognised
 
-**Voice chat is never blocked.** A long voice call is a steady two-way stream, so MatchWatch records and rates it like a match. But it only ever turns away, blocks automatically or raises a lobby alert for servers on a port labelled as a game. Voice chat (Discord's voice servers are recognised by their port range) and anything unlabelled are measured and listed, and otherwise left alone. So staying on a pool of places cannot cut off your call because its server happens to be somewhere else.
+MatchWatch never looks inside packets, so it recognises a game from two things it can see: the **port** on the game's server, and, where a port is shared, **who hosts the server**. The list it checks is a plain text file that ships with MatchWatch (`/usr/lib/matchwatch/games.list`). Nothing is downloaded: the list only changes when you install a new version or name a game yourself.
 
-Three things to know:
+Recognised out of the box:
 
-- A new game that MatchWatch does not recognise is not covered by staying on places until you name it.
-- If a game you play uses a server port of 50000 or above, it will show as "Discord voice". Name it and it is treated as a game again; your own names are checked first.
-- A block you add by hand applies to whatever address you give it.
+| | |
+|---|---|
+| By port and host | Call of Duty, Valorant, League of Legends, Overwatch 2, Roblox, War Thunder, iRacing |
+| By port | Fortnite, Apex Legends, Rocket League, Counter-Strike 2, Dota 2, Deadlock, Team Fortress 2, Destiny 2, Minecraft (Bedrock), Rust, ARK, DayZ, Palworld, Among Us, Genshin Impact, Street Fighter 6 |
+| By port, from unofficial figures | Battlefield, Rainbow Six Siege, Escape from Tarkov, World of Tanks, EA Sports FC, Smite, Paladins |
 
-Watching traffic has no effect on it. If you use the QoSmate fix, voice chat from your gaming device is prioritised along with the game, because those rules cover all of that device's UDP.
+This list cannot be complete, and it is worth knowing why:
+
+- Many publishers do not publish their server ports at all. PUBG, Marvel Rivals, Helldivers 2, The Finals and Dead by Daylight are examples.
+- Several games share a range. Counter-Strike 2, Dota 2 and Destiny 2 all use Steam's network, so they show under one "Steam games" label. EA Sports FC, Smite and Paladins share another.
+- Games hosted player-to-player, such as GTA Online and most Nintendo Switch games, have no server port to recognise.
+- Final Fantasy XIV, World of Warcraft and Minecraft Java do not use UDP for play, so MatchWatch does not see them as matches.
+
+### Games it does not recognise
+
+A game not on the list is still detected, recorded and rated, as "Game on port N". The first time that happens:
+
+- a banner appears on the Live and Matches pages with a box to name it, and
+- with phone alerts set up, your phone is told ("Alert when a new game is seen" in Settings, on by default).
+
+Name it once and every match on that port, past and future, carries the name. You can also name it on the Tools page or with `matchwatch game name <port> <name>`. A range works too: `matchwatch game name 7000-7100 "My Game"`.
+
+Until a game has a name, staying on places, the lobby alert and automatic blocking leave it alone. That is deliberate: MatchWatch only turns servers away when it is sure they are a game.
+
+### Voice chat is left alone
+
+Voice chat is not a match. MatchWatch does not record it, does not show "In a match" for it, sends no alerts about it and can never block it. Recognised as voice: Discord, TeamSpeak, Mumble, Valorant's voice servers, and the ports consoles and games use for party chat.
+
+Discord's voice servers use the high ports from 50000 upwards, and Roblox uses the same ones. MatchWatch tells them apart by host: a stream on those ports is treated as a game when its server belongs to Roblox, and as voice chat otherwise. This check needs "Look up where servers are" switched on.
+
+If a game you play is wrongly taken for voice chat, the Tools page lists what was "Skipped as voice chat" in the last six hours, each with a box to name it as a game.
+
+A block you add by hand applies to whatever address you give it. If you use the QoSmate fix, voice chat from your gaming device is prioritised along with the game, because those rules cover all of that device's UDP.
 
 ## What it measures
 
@@ -194,6 +224,8 @@ Press the button on the Live page (or the M key with the page focused) when some
 > Match started: Frankfurt, DE, ping about 6 ms.
 
 It fires when the steady game traffic starts, not while you are still in the lobby or on a loading screen, so it means "get back to your seat now". It needs phone alerts set up (see [Phone alerts](#phone-alerts)), and is off by default.
+
+**New-game alert.** The first time a match is played on a game MatchWatch does not recognise, your phone is told to name it. See [Games it does not recognise](#games-it-does-not-recognise).
 
 ## Blocking
 
@@ -254,7 +286,7 @@ Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.
 
 ## Limits
 
-- Other steady two-way UDP streams, such as voice chat, are recorded as matches too (though never blocked). "Only look at this traffic" under Advanced narrows capture, for example `port 3074 or portrange 30000-45000` for Call of Duty.
+- Any other steady two-way UDP stream that is not recognised as voice chat is recorded as a match, as "Game on port N". "Only look at this traffic" under Advanced narrows capture, for example `port 3074 or portrange 30000-45000` for Call of Duty.
 - IPv4 only.
 - When neither the server nor any hop near it answers ping, uneven delivery can't be split between server and route. The report says so.
 - Scores were first calibrated from simulated traffic. Expect the thresholds to need tuning against real matches.
