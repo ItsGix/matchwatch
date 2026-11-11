@@ -1,0 +1,12 @@
+#!/bin/sh
+for a; do h=$a; done
+case "$h" in
+ 203.0.113.128) exit 1 ;;
+ 192.168.*) echo "64 bytes from $h: seq=0 ttl=64 time=0.11 ms"; exit 0 ;;
+ 198.51.100.1) echo "64 bytes from $h: seq=0 ttl=63 time=3.9 ms"; exit 0 ;;
+ lon-gb*) b=4.1 ;; man-uk*) b=6.3 ;; ams-nl*) b=9.2 ;; par-fr*) b=10.1 ;; fra-de*) b=14.8 ;; mad-es*) b=28.5 ;; mxp-it*) b=24.9 ;; sto-se*) b=31.2 ;; waw-pl*) b=29.7 ;;
+ nj-us*) b=72.4 ;; tor-ca*) b=86.0 ;; il-us*) b=91.3 ;; ga-us*) b=95.8 ;; fl-us*) b=104.2 ;; tx-us*) b=112.6 ;; wa-us*) b=139.9 ;; sjo-*) b=142.0 ;; lax-*) b=138.4 ;;
+ hon-*) exit 1 ;; *-ping.vultr.com) b=2$(( ${#h} % 9 ))0.5 ;; *) echo "64 bytes from $h: seq=0 ttl=57 time=7.$(( $$ % 9 )) ms"; exit 0 ;;
+esac
+echo "PING $h (203.0.113.101): 56 data bytes"
+for i in 0 1 2 3; do echo "64 bytes from 203.0.113.101: seq=$i ttl=57 time=$(awk -v b=$b -v i=$i 'BEGIN{printf "%.3f", b + i*0.12}') ms"; done

@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "NFT $*" >> "$MW_RUN/../nft.log"; [ "$1" = list ] && exit 1; cat >/dev/null 2>&1 </dev/null; exit 0

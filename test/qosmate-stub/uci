@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""A small stand-in for OpenWrt's uci, enough to test rule editing. State lives in $UCI_STATE (JSON)."""
+import json, os, sys
+
+path = os.environ.get("UCI_STATE", "/tmp/uci_state.json")
+try:
+    st = json.load(open(path))
+except Exception:
+    st = {"sections": [], "n": 0}
+args = [a for a in sys.argv[1:] if a != "-q"]
+cmd = args[0] if args else ""
+
+
+def find(sec):
+    for s in st["sections"]:
+        if s["id"] == sec:
+            return s
+    return None
+
+
+def save():
+    json.dump(st, open(path, "w"))
+
+
+if cmd == "add":
+    st["n"] += 1
+    sid = "cfg%02x92bd" % (st["n"] + 7)
+    st["sections"].append({"id": sid, "type": args[2], "opts": {}})
+    save(); print(sid)
+elif cmd in ("set", "add_list"):
+    key, val = args[1].split("=", 1)
+    _, sec, opt = key.split(".")
+    s = find(sec)
+    if s is None:
+        s = {"id": sec, "type": "named", "opts": {}}; st["sections"].append(s)
+    if cmd == "set":
+        s["opts"][opt] = val
+    else:
+        s["opts"].setdefault(opt, [])
+        if not isinstance(s["opts"][opt], list):
+            s["opts"][opt] = [s["opts"][opt]]
+        s["opts"][opt].append(val)
+    save()
+elif cmd == "delete":
+    parts = args[1].split(".")
+    s = find(parts[1])
+    if s is None:
+        sys.exit(1)
+    if len(parts) == 3:
+        if parts[2] not in s["opts"]:
+            sys.exit(1)
+        del s["opts"][parts[2]]
+    else:
+        st["sections"].remove(s)
+    save()
+elif cmd == "get":
+    parts = args[1].split(".")
+    s = find(parts[1])
+    if s is None or parts[2] not in s["opts"]:
+        sys.exit(1)
+    v = s["opts"][parts[2]]
+    print(" ".join(v) if isinstance(v, list) else v)
+elif cmd == "show":
+    for s in st["sections"]:
+        print("qosmate.%s=%s" % (s["id"], s["type"]))
+        for k, v in s["opts"].items():
+            print("qosmate.%s.%s=%s" % (s["id"], k, " ".join("'%s'" % x for x in v) if isinstance(v, list) else "'%s'" % v))
+elif cmd == "commit":
+    st["commits"] = st.get("commits", 0) + 1; save()

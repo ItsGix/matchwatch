@@ -1,0 +1,4 @@
+# Game labels by the server's port. name|ports (single ports or ranges, comma separated)
+# Your own labels (matchwatch game name <port> <name>) are checked first.
+Call of Duty|3074,30000-45000
+Valve (Counter-Strike, Dota 2, TF2)|27015-27200

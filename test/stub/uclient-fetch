@@ -1,0 +1,13 @@
+#!/bin/sh
+for a; do u=$a; done
+echo "FETCH $*" >> "$MW_RUN/../fetch.log"
+case "$u" in
+ *ip-api*198.51.100.*) echo '{"status":"success","country":"Netherlands","countryCode":"NL","city":"Amsterdam","lat":52.37,"lon":4.89,"isp":"Vultr","org":"Vultr Holdings LLC","as":"AS20473 The Constant Company, LLC"}' ;;
+ *geocoding-api*helsinki*) echo '{"results":[{"id":658225,"name":"Helsinki","latitude":60.16952,"longitude":24.93545,"elevation":17.0,"feature_code":"PPLC","country_code":"FI","timezone":"Europe/Helsinki","country":"Finland","admin1":"Uusimaa"}],"generationtime_ms":0.5}' ;;
+ *geocoding-api*) echo '{"generationtime_ms":0.3}' ;;
+ *ip-api*66.245.*) echo '{"status":"success","country":"Italy","countryCode":"IT","city":"Milan","lat":45.46,"lon":9.19,"isp":"Vultr","org":"Vultr Holdings LLC Milan","as":"AS20473 The Constant Company, LLC"}' ;;
+ *ip-api*95.216.*) echo '{"status":"success","country":"Finland","countryCode":"FI","city":"Helsinki","lat":60.17,"lon":24.94,"isp":"Hetzner","org":"Hetzner Online GmbH","as":"AS24940 Hetzner Online GmbH"}' ;;
+ *ip-api*208.76.*) echo '{"status":"success","country":"Spain","countryCode":"ES","city":"Madrid","lat":40.42,"lon":-3.7,"isp":"Vultr","org":"Vultr Holdings LLC Madrid","as":"AS20473 The Constant Company, LLC"}' ;;
+ *ip-api*192.0.2.*) echo '{"status":"success","country":"France","countryCode":"FR","city":"Paris","lat":48.8,"lon":2.3,"isp":"Vultr","org":"Vultr Holdings LLC Paris","as":"AS20473 The Constant Company, LLC"}' ;;
+ *ip-api*) echo '{"status":"success","country":"United Kingdom","countryCode":"GB","city":"London","lat":51.5074,"lon":-0.1278,"isp":"The Constant Company, LLC","org":"Vultr Holdings LLC","as":"AS20473 The Constant Company, LLC"}' ;;
+esac

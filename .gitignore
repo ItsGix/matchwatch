@@ -1,0 +1,6 @@
+test/site/
+test/shots/
+test/env*/
+test/stub/awk
+__pycache__/
+*.pyc

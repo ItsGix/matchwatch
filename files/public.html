@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>matchwatch</title>
+<style>
+html, body { margin: 0; }
+body { background: #eef2ea; }
+@media (prefers-color-scheme: dark) { body { background: #0f2a2b; } }
+</style>
+</head>
+<body>
+<!-- The dashboard without login: view only, plus "I felt that". Served at /matchwatch/ when the
+     setting is on. The full dashboard, with its buttons, is in LuCI under Services, MatchWatch. -->
+<div id="mw"></div>
+<script src="/luci-static/resources/matchwatch/dashboard.js"></script>
+<script>
+MatchwatchDashboard(document.getElementById("mw"), {
+	css: "/luci-static/resources/matchwatch/dashboard.css",
+	readonly: true,
+	full: true,
+	get: function (file) {
+		return fetch("data/" + file, { cache: "no-store" }).then(function (r) { if (!r.ok) throw 0; return r.json(); });
+	},
+	act: function (p) {
+		if (p.action !== "mark") return Promise.resolve({ ok: false, error: "This page is view only." });
+		return fetch("/cgi-bin/matchwatch-mark", { method: "POST", cache: "no-store" }).then(function (r) { return r.json(); });
+	}
+});
+</script>
+</body>
+</html>

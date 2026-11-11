@@ -1,0 +1,1018 @@
+#!/bin/sh
+# matchwatch - judges game servers, the route to them, your line and your PC
+# from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
+
+VERSION="0.10.0"
+CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
+LIB="${MW_LIB:-/usr/lib/matchwatch}"
+RUN="${MW_RUN:-/tmp/matchwatch}"
+SELF="${MW_SELF:-/usr/bin/matchwatch}"
+TAB="$(printf '\t')"
+
+# ---- defaults (change them in LuCI: Services, MatchWatch, Settings; or with uci)
+DEVICE_IP=""
+LAN_IF=""
+WAN_IF=""
+IGNORE_PORTS="53 67 68 123 443 1900 5353"
+ONLY_FILTER=""
+MIN_DOWN_PPS=15
+MIN_UP_PPS=8
+GEO=1
+NTFY_URL=""
+NOTIFY_EVERY_MATCH=0
+WARN_SCORE=55
+PC_SCORE=1
+AUTOBLOCK=0
+AUTOBLOCK_SCORE=45
+AUTOBLOCK_MATCHES=2
+BLOCK_DAYS=14
+LOBBY_ALERT=1
+LOBBY_MARGIN_MS=4
+STAY_STRICT=1
+STAY_KM=150
+DATA_DIR="/etc/matchwatch"
+WEB=0
+if [ -n "$CONF" ]; then
+	[ -f "$CONF" ] && . "$CONF"
+elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
+	. /lib/functions.sh
+	config_load matchwatch
+	config_get DEVICE_IP main device_ip "$DEVICE_IP"
+	config_get LAN_IF main lan_if "$LAN_IF"
+	config_get WAN_IF main wan_if "$WAN_IF"
+	config_get IGNORE_PORTS main ignore_ports "$IGNORE_PORTS"
+	config_get ONLY_FILTER main only_filter "$ONLY_FILTER"
+	config_get MIN_DOWN_PPS main min_down_pps "$MIN_DOWN_PPS"
+	config_get MIN_UP_PPS main min_up_pps "$MIN_UP_PPS"
+	config_get GEO main geo "$GEO"
+	config_get NTFY_URL main ntfy_url "$NTFY_URL"
+	config_get NOTIFY_EVERY_MATCH main notify_every_match "$NOTIFY_EVERY_MATCH"
+	config_get WARN_SCORE main warn_score "$WARN_SCORE"
+	config_get PC_SCORE main pc_score "$PC_SCORE"
+	config_get AUTOBLOCK main autoblock "$AUTOBLOCK"
+	config_get AUTOBLOCK_SCORE main autoblock_score "$AUTOBLOCK_SCORE"
+	config_get AUTOBLOCK_MATCHES main autoblock_matches "$AUTOBLOCK_MATCHES"
+	config_get BLOCK_DAYS main block_days "$BLOCK_DAYS"
+	config_get LOBBY_ALERT main lobby_alert "$LOBBY_ALERT"
+	config_get LOBBY_MARGIN_MS main lobby_margin_ms "$LOBBY_MARGIN_MS"
+	config_get STAY_STRICT main stay_strict "$STAY_STRICT"
+	config_get STAY_KM main stay_km "$STAY_KM"
+	config_get DATA_DIR main data_dir "$DATA_DIR"
+	config_get WEB main web "$WEB"
+fi
+DATA="${MW_DATA:-$DATA_DIR}"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+die() { echo "matchwatch: $*" >&2; exit 1; }
+
+is_ipv4() {
+	case "$1" in ""|*[!0-9.]*) return 1 ;; esac
+	echo "$1" | awk -F. 'NF != 4 { exit 1 } { for (i = 1; i <= 4; i++) if ($i == "" || $i > 255) exit 1 }'
+}
+is_target() {
+	case "$1" in
+		*/*) is_ipv4 "${1%/*}" || return 1
+			case "${1#*/}" in ""|*[!0-9]*) return 1 ;; esac
+			[ "${1#*/}" -ge 16 ] && [ "${1#*/}" -le 32 ] ;;
+		*) is_ipv4 "$1" ;;
+	esac
+}
+is_private() {
+	echo "$1" | awk -F. '{ exit !($1 == 10 || ($1 == 172 && $2 >= 16 && $2 <= 31) || ($1 == 192 && $2 == 168) || $1 == 127 || ($1 == 169 && $2 == 254)) }'
+}
+
+fetch() { # url [post-body]
+	if have uclient-fetch; then
+		if [ -n "$2" ]; then uclient-fetch -q -T 6 -O - --post-data="$2" "$1" 2>/dev/null
+		else uclient-fetch -q -T 6 -O - "$1" 2>/dev/null; fi
+	elif have curl; then
+		if [ -n "$2" ]; then curl -fsS -m 6 -d "$2" "$1" 2>/dev/null
+		else curl -fsS -m 6 "$1" 2>/dev/null; fi
+	elif have wget; then
+		if [ -n "$2" ]; then wget -q -T 6 -O - --post-data="$2" "$1" 2>/dev/null
+		else wget -q -T 6 -O - "$1" 2>/dev/null; fi
+	else return 1; fi
+}
+
+# ---- where is this server? prints: cc country city lat lon isp org asn (tab separated)
+jstr() { echo "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'; }
+jnum() { echo "$1" | sed -n 's/.*"'"$2"'":\(-\{0,1\}[0-9.]*\).*/\1/p'; }
+geo_lookup() {
+	local ip="$1" line json asn
+	line="$(grep "^$ip$TAB" "$DATA/geo.cache" 2>/dev/null | tail -n 1)"
+	if [ -n "$line" ]; then echo "$line" | cut -f2-; return 0; fi
+	[ "$GEO" = 1 ] || return 1
+	json="$(fetch "http://ip-api.com/json/$ip?fields=status,country,countryCode,city,lat,lon,isp,org,as")" || return 1
+	[ "$(jstr "$json" status)" = success ] || return 1
+	asn="$(jstr "$json" as)"; asn="${asn%% *}"
+	line="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$(jstr "$json" countryCode)" "$(jstr "$json" country)" \
+		"$(jstr "$json" city)" "$(jnum "$json" lat)" "$(jnum "$json" lon)" "$(jstr "$json" isp)" "$(jstr "$json" org)" "$asn")"
+	printf '%s\t%s\n' "$ip" "$line" >> "$DATA/geo.cache"
+	echo "$line"
+}
+
+# ---- active probes that run alongside a match
+ploop() { # name ip [hop] : one probe a second, a line per attempt (ms, or x for no reply)
+	# with a hop number the server is probed the way traceroute does (UDP), every 2 s
+	local d="$PD" r i=0
+	while [ -d "$d" ] && [ ! -e "$d/stop" ] && [ "$i" -lt 14400 ]; do
+		if [ -n "$3" ]; then
+			r="$(traceroute -n -q 1 -w 1 -f "$3" -m "$3" "$2" 2>/dev/null | awk -v ip="$2" '$2 == ip && $3 ~ /^[0-9.]+$/ { print $3; exit }')"
+			sleep 1
+		else
+			r="$(ping -c 1 -W 1 "$2" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p')"
+		fi
+		echo "${r:-x}" >> "$d/$1.ping"
+		echo "${r:-x}" > "$d/$1.last"
+		i=$((i + 1))
+		sleep 1
+	done
+}
+start_ping() { [ -e "$PD/stop" ] && return; ploop "$1" "$2" "$3" & echo $! > "$PD/$1.pid"; }
+
+cmd_probe_start() {
+	local sid="$1" rip="$2" lip="$3" near last hops reached
+	is_ipv4 "$rip" || return 1
+	PD="$RUN/probe.$sid"; mkdir -p "$PD"
+	echo server > "$PD/far.kind"; echo "$rip" > "$PD/far.ip"
+	start_ping far "$rip"
+	[ -n "$lip" ] && is_ipv4 "$lip" && start_ping lan "$lip"
+	( geo_lookup "$rip" > "$PD/geo.tmp" 2>/dev/null && mv "$PD/geo.tmp" "$PD/geo" ) &
+	[ -n "$4" ] && ( sleep 5; [ -d "$PD" ] && qos_probe "$rip" "$4" > "$PD/qos.tmp" 2>/dev/null && mv "$PD/qos.tmp" "$PD/qos" ) &
+	have traceroute || return 0
+	traceroute -n -w 1 -q 1 -m 24 "$rip" > "$PD/trace.tmp" 2>/dev/null
+	[ -d "$PD" ] || return 0
+	mv "$PD/trace.tmp" "$PD/trace"
+	set -- $(awk -v rip="$rip" '
+		$2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {
+			split($2, a, "."); pr = (a[1] == 10 || (a[1] == 172 && a[2] >= 16 && a[2] <= 31) || (a[1] == 192 && a[2] == 168))
+			if (!pr && near == "") near = $2
+			# hops past the first public one belong to the ISP or beyond, even if privately numbered
+			if (near != "" && $2 != rip && $2 != near) last = $2
+			if ($2 == rip && reached == "") reached = $1
+		}
+		$1 ~ /^[0-9]+$/ { n = $1 }
+		END { print (near == "" ? "-" : near), (last == "" ? "-" : last), (reached != "" ? reached : n "+"), (reached != "" ? reached : "-") }' "$PD/trace")
+	near="$1"; last="$2"; hops="$3"; reached="$4"
+	echo "$hops" > "$PD/hops"
+	if [ "$near" != "-" ]; then echo "$near" > "$PD/near.ip"; start_ping near "$near"; fi
+	# server ignores ping? probe it by UDP if traceroute reached it, else use the last hop that answers
+	if ! grep -q '^[0-9]' "$PD/far.ping" 2>/dev/null; then
+		if [ "$reached" != "-" ]; then
+			kill "$(cat "$PD/far.pid" 2>/dev/null)" 2>/dev/null
+			rm -f "$PD/far.ping"
+			echo serverudp > "$PD/far.kind"
+			start_ping far "$rip" "$reached"
+		elif [ "$last" != "-" ]; then
+			kill "$(cat "$PD/far.pid" 2>/dev/null)" 2>/dev/null
+			rm -f "$PD/far.ping"
+			echo hop > "$PD/far.kind"; echo "$last" > "$PD/far.ip"
+			start_ping far "$last"
+		fi
+	fi
+}
+
+pstats() { # file prefix
+	[ -f "$1" ] || return 0
+	awk -v p="$2" '
+	{ att++ } $1 == "x" { next } { v[++n] = $1 + 0 }
+	function pct(q,   b, c) { c = 0; for (b = 0; b <= 20000; b++) if (b in H) { c += H[b]; if (c >= q * hn) return b / 10 } return 0 }
+	END {
+		if (att == 0) exit
+		printf "%s_n=%d\n%s_loss=%.1f\n", p, n, p, 100 * (att - n) / att
+		if (n == 0) exit
+		for (i = 1; i <= n; i++) { b = int(v[i] * 10 + 0.5); if (b > 20000) b = 20000; H[b]++ }
+		hn = n; med = pct(0.5); p95 = pct(0.95)
+		split("", H)
+		for (i = 1; i <= n; i++) { d = v[i] - med; if (d < 0) d = -d; b = int(d * 10 + 0.5); if (b > 20000) b = 20000; H[b]++ }
+		printf "%s_med=%.1f\n%s_p95=%.1f\n%s_jit=%.2f\n", p, med, p, p95, p, pct(0.5)
+	}' "$1"
+}
+
+cmd_probe_stop() {
+	local sid="$1" f cc country city lat lon isp org asn
+	PD="$RUN/probe.$sid"
+	[ -d "$PD" ] || return 0
+	touch "$PD/stop"
+	for f in "$PD"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
+	{
+		pstats "$PD/far.ping" far; pstats "$PD/near.ping" near; pstats "$PD/lan.ping" lan
+		echo "far_kind=$(cat "$PD/far.kind" 2>/dev/null)"
+		echo "far_ip=$(cat "$PD/far.ip" 2>/dev/null)"
+		echo "near_ip=$(cat "$PD/near.ip" 2>/dev/null)"
+		echo "hops=$(cat "$PD/hops" 2>/dev/null)"
+		if [ -f "$PD/qos" ]; then read -r f cc country < "$PD/qos"; echo "qos_state=$f"; echo "qos_class=$cc"; fi
+		if [ -f "$PD/geo" ]; then
+			IFS="$TAB" read -r cc country city lat lon isp org asn < "$PD/geo"
+			printf 'cc=%s\ncountry=%s\ncity=%s\nlat=%s\nlon=%s\nisp=%s\norg=%s\nasn=%s\n' "$cc" "$country" "$city" "$lat" "$lon" "$isp" "$org" "$asn"
+		fi
+	} > "$PD/sum"
+}
+
+cmd_notify() {
+	logger -t matchwatch "$1" 2>/dev/null
+	[ -n "$NTFY_URL" ] && fetch "$NTFY_URL" "$1" >/dev/null
+	return 0
+}
+
+export_json() {
+	[ -d "$RUN/www" ] || return 0
+	touch "$DATA/sessions.tsv" "$DATA/blocklist"
+	awk -v MODE=hist_json -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/history.json.tmp" && mv -f "$RUN/www/history.json.tmp" "$RUN/www/history.json"
+	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
+	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
+	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" > "$RUN/www/info.json"
+	regions_export
+	# keep the sixty most recent match detail files
+	if [ -d "$DATA/matches" ]; then
+		ls -1 "$DATA/matches" 2>/dev/null | sort -r | awk 'NR > 60' | while read -r f; do rm -f "$DATA/matches/$f"; done
+	fi
+}
+
+cmd_after() { # note overall
+	local sname i
+	regions_stale && ( cmd_regions measure >/dev/null 2>&1 & )
+	[ -f "$RUN/last.txt" ] && cp "$RUN/last.txt" "$DATA/last.txt"
+	if [ -s "$DATA/stay" ]; then
+		i="$(wc -l < "$DATA/stay")"
+		while [ "$i" -ge 1 ]; do
+			set -- "$1" "$2" $(awk -v MODE=area_recent -v PLACE="$i" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv")
+			if [ "${4:-0}" -ge 3 ] && [ "$3" != - ] && [ "$3" -lt "$WARN_SCORE" ]; then
+				sname="$(sed -n "${i}p" "$DATA/stay" | cut -f1)"
+				sed -i "${i}d" "$DATA/stay"
+				cmd_notify "Dropped $sname from the places you stay on: its last three matches averaged $3/100."
+			fi
+			set -- "$1" "$2"
+			i=$((i - 1))
+		done
+		if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; else stay_off; cmd_notify "Stay mode is off: every place in the pool had gone bad."; fi
+	fi
+	export_json
+	if [ "$NOTIFY_EVERY_MATCH" = 1 ] || [ "${2:-100}" -lt "$WARN_SCORE" ]; then cmd_notify "$1"; else logger -t matchwatch "$1" 2>/dev/null; fi
+}
+
+# ---- blocking (own nftables table; fw4 is left alone)
+nft_ready() {
+	have nft || { echo "matchwatch: nft not found (blocking needs OpenWrt 22.03 or newer)" >&2; return 1; }
+	if nft list table inet matchwatch >/dev/null 2>&1; then
+		nft list set inet matchwatch blocked 2>/dev/null | grep -q interval && return 0
+		nft delete table inet matchwatch       # table from an older version: rebuild it
+	fi
+	nft -f - <<'EOF'
+table inet matchwatch {
+	set blocked {
+		type ipv4_addr
+		flags interval, timeout
+	}
+	chain forward {
+		type filter hook forward priority -5; policy accept;
+		ip daddr @blocked counter drop
+		ip saddr @blocked counter drop
+	}
+}
+EOF
+	[ "$NFT_FILLING" = 1 ] || { NFT_FILLING=1; fill_blocklist; NFT_FILLING=0; }
+	return 0
+}
+nft_add() { # ip seconds(0 = permanent)
+	nft delete element inet matchwatch blocked "{ $1 }" 2>/dev/null
+	if [ "$2" -gt 0 ]; then nft add element inet matchwatch blocked "{ $1 timeout ${2}s }" 2>/dev/null
+	else nft add element inet matchwatch blocked "{ $1 }" 2>/dev/null; fi
+}
+fill_blocklist() {
+	local now ip exp added reason
+	[ -s "$DATA/blocklist" ] || return 0
+	now="$(date +%s)"
+	awk -F'\t' -v now="$now" '$2 == 0 || $2 > now' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
+	while IFS="$TAB" read -r ip exp added reason; do
+		is_target "$ip" || continue
+		if [ "$exp" = 0 ]; then nft_add "$ip" 0; else nft_add "$ip" $((exp - now)); fi
+	done < "$DATA/blocklist"
+}
+apply_blocklist() {
+	[ -s "$DATA/blocklist" ] || return 0
+	NFT_FILLING=1; nft_ready || { NFT_FILLING=0; return 1; }
+	fill_blocklist; NFT_FILLING=0
+}
+cmd_block() { # ip [days|auto] [reason]
+	local ip="$1" days="${2:-$BLOCK_DAYS}" reason="${3:-manual}" now exp
+	is_target "$ip" || die "usage: matchwatch block <server-ip or block like 1.2.3.0/24> [days, 0 = until unblocked] [reason]"
+	is_private "$ip" && die "refusing to block a private address"
+	if [ "$days" = auto ]; then days="$BLOCK_DAYS"; reason="auto: $reason"; fi
+	case "$days" in ""|*[!0-9]*) die "days must be a number" ;; esac
+	nft_ready || exit 1
+	mkdir -p "$DATA"; touch "$DATA/blocklist"
+	now="$(date +%s)"
+	if [ "$days" -gt 0 ]; then exp=$((now + days * 86400)); else exp=0; fi
+	grep -v "^$ip$TAB" "$DATA/blocklist" > "$DATA/blocklist.tmp"; mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
+	printf '%s\t%s\t%s\t%s\n' "$ip" "$exp" "$now" "$reason" >> "$DATA/blocklist"
+	if [ "$exp" = 0 ]; then nft_add "$ip" 0; else nft_add "$ip" $((exp - now)); fi
+	export_json
+	[ "$MW_QUIET" = 1 ] && return 0
+	if [ "$days" -gt 0 ]; then echo "Blocked $ip for $days day(s)."; else echo "Blocked $ip until you unblock it."; fi
+	logger -t matchwatch "blocked $ip ($reason)" 2>/dev/null
+}
+cmd_unblock() {
+	local ip="$1"
+	touch "$DATA/blocklist"
+	if [ "$ip" = all ]; then
+		: > "$DATA/blocklist"
+		nft flush set inet matchwatch blocked 2>/dev/null
+		export_json; echo "All blocks removed."; return 0
+	fi
+	is_target "$ip" || die "usage: matchwatch unblock <server-ip or block>|all"
+	grep -v "^$ip$TAB" "$DATA/blocklist" > "$DATA/blocklist.tmp"; mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
+	nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null
+	export_json; echo "Unblocked $ip."
+}
+cmd_blocklist() {
+	touch "$DATA/blocklist"
+	[ -s "$DATA/blocklist" ] || { echo "Nothing is blocked."; return 0; }
+	awk -F'\t' -v now="$(date +%s)" -v GEOF="$DATA/geo.cache" '
+		BEGIN { while ((getline l < GEOF) > 0) { split(l, g, "\t"); G[g[1]] = g[4] ", " g[2] " - " g[8] }
+			printf "%-16s %-12s %-34s %s\n", "Server", "Expires", "Where", "Reason" }
+		{ left = ($2 == 0) ? "never" : (($2 > now) ? int(($2 - now + 86399) / 86400) " day(s)" : "expired")
+		  printf "%-16s %-12s %-34s %s\n", $1, left, substr(G[$1], 1, 34), $4 }' "$DATA/blocklist"
+}
+
+cmd_block_dc() { # number [days]
+	local n="$1" days="${2:-$BLOCK_DAYS}" name list p
+	case "$n" in ""|*[!0-9]*) die "usage: matchwatch block-dc <number from 'matchwatch datacentres'> [days]" ;; esac
+	touch "$DATA/sessions.tsv" "$DATA/blocklist"
+	list="$(awk -v MODE=dc_prefixes -v ARG="$n" -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv")"
+	[ -n "$list" ] || die "no datacentre number $n"
+	name="$(echo "$list" | head -n 1)"
+	echo "Blocking the address blocks seen so far in: $name"
+	echo "$list" | tail -n +2 | while read -r p; do cmd_block "$p" "$days" "datacentre: $name"; done
+	echo "Only blocks you have already been placed on are covered. A big datacentre has more,"
+	echo "and with it blocked the game will send you somewhere further away."
+}
+
+# ---- lobby: where is the game about to put me?
+jesc() { printf '%s' "$1" | tr -d '\n\r\t' | sed 's/["\\]/ /g'; }
+cmd_lobby() { # server-ip port device-ip
+	local ip="$1" port="$2" g cc country city lat lon isp org asn key r i s="" ping="" k v
+	local srv_n=0 srv_rating="" dc_name="" dc_ping="" best_key="" best_name="" best_ping="" verdict=good msg loc blocked=false
+	is_ipv4 "$ip" || return 1
+	mkdir -p "$RUN/www"
+	g="$(geo_lookup "$ip")"
+	IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
+$g
+EOF
+	key="$asn|$city|$cc"
+	for i in 1 2 3; do
+		r="$(ping -c 1 -W 1 "$ip" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p')"
+		[ -n "$r" ] && s="$s $r"
+	done
+	if [ -z "$s" ] && have traceroute; then
+		s="$(traceroute -n -q 1 -w 1 -m 20 "$ip" 2>/dev/null | awk -v ip="$ip" '$2 == ip && $3 ~ /^[0-9.]+$/ { print $3; exit }')"
+	fi
+	[ -n "$s" ] && ping="$(echo $s | awk '{ m = $1; for (i = 2; i <= NF; i++) if ($i < m) m = $i; printf "%.1f", m }')"
+	touch "$DATA/sessions.tsv"
+	while IFS="=" read -r k v; do
+		case "$k" in
+			srv_n) srv_n="$v" ;; srv_rating) srv_rating="$v" ;; dc_name) dc_name="$v" ;; dc_ping) dc_ping="$v" ;;
+			best_key) best_key="$v" ;; best_name) best_name="$v" ;; best_ping) best_ping="$v" ;;
+		esac
+	done <<EOF
+$(awk -v MODE=lobby -v ARG="$ip" -v KEY="$key" -f "$LIB/report.awk" "$DATA/sessions.tsv")
+EOF
+	loc="${city:+$city, }${cc:-unknown location}"
+	msg="Heading to $loc${org:+ ($org)}"
+	[ -n "$ping" ] && msg="$msg, about $ping ms"
+	msg="$msg."
+	if [ "$srv_n" -ge 1 ] 2>/dev/null && [ -n "$srv_rating" ]; then
+		msg="$msg This server rated $srv_rating/100 over $srv_n match(es)."
+		[ "$srv_rating" -lt "$WARN_SCORE" ] && { verdict=bad; msg="$msg That is poor: consider backing out."; }
+	else
+		msg="$msg First time on this server."
+	fi
+	if [ "$verdict" = good ] && [ -n "$ping" ] && [ -n "$best_ping" ] && [ "$best_key" != "$key" ]; then
+		if awk -v a="$ping" -v b="$best_ping" -v m="$LOBBY_MARGIN_MS" 'BEGIN { exit !(a > b + m) }'; then
+			verdict=far; msg="$msg ${best_name%% - *} is usually $best_ping ms."
+		fi
+	fi
+	# staying somewhere? turn this server away before the match starts if it is outside every chosen place
+	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ]; then
+		if outside_stay "$lat" "$lon" "$cc"; then
+			MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay && blocked=true
+			msg="$msg Blocked, because you are staying on $(stay_names). The game should search again."
+		fi
+	fi
+	printf '{"ts":%s,"ip":"%s","port":%s,"loc":"%s","org":"%s","ping":%s,"verdict":"%s","blocked":%s,"msg":"%s"}\n' \
+		"$(date +%s)" "$ip" "${port:-0}" "$(jesc "$loc")" "$(jesc "$org")" "${ping:-null}" "$verdict" "$blocked" "$(jesc "$msg")" > "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
+	if [ "$LOBBY_ALERT" = 2 ] || { [ "$LOBBY_ALERT" = 1 ] && { [ "$verdict" != good ] || [ "$blocked" = true ]; }; }; then cmd_notify "$msg"
+	else logger -t matchwatch "$msg" 2>/dev/null; fi
+}
+
+# ---- ping every region the game's host has a datacentre in
+regions_export() {
+	[ -d "$RUN/www" ] || return 0
+	touch "$DATA/sessions.tsv" "$DATA/regions.tsv"
+	awk -v MODE=regions_json -v REG="$DATA/regions.tsv" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/regions.json.tmp" && mv -f "$RUN/www/regions.json.tmp" "$RUN/www/regions.json"
+}
+cmd_regions() { # measure | (nothing = show the last measurement)
+	local tmp="$RUN/regions.$$" code city cc area lat lon host n=0
+	touch "$DATA/sessions.tsv"
+	if [ "$1" = measure ] || [ ! -s "$DATA/regions.tsv" ]; then
+		[ -f "$LIB/regions.list" ] || die "missing $LIB/regions.list"
+		mkdir -p "$tmp"
+		while IFS="|" read -r code city cc area lat lon host; do
+			case "$code" in ""|"#"*) continue ;; esac
+			(
+				out="$(ping -c 4 -W 1 "$host" 2>/dev/null)"
+				ip="$(echo "$out" | sed -n '1s/.*(\([0-9.]*\)).*/\1/p')"
+				echo "$out" | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | awk -v c="$code" -v city="$city" -v cc="$cc" -v area="$area" -v lat="$lat" -v lon="$lon" -v ip="$ip" -v now="$(date +%s)" '
+					{ n++; if (min == "" || $1 < min) min = $1; if ($1 > max) max = $1 }
+					END { printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", c, city, cc, area, lat, lon, (ip == "" ? "-" : ip), (n ? sprintf("%.1f", min) : "-"), (n ? sprintf("%.1f", max - min) : "-"), n, now }' > "$tmp/$code"
+			) &
+			n=$((n + 1))
+			[ $((n % 12)) -eq 0 ] && wait
+		done < "$LIB/regions.list"
+		wait
+		cat "$tmp"/* > "$DATA/regions.tsv.tmp" 2>/dev/null && mv -f "$DATA/regions.tsv.tmp" "$DATA/regions.tsv"
+		rm -f "$tmp"/*; rmdir "$tmp" 2>/dev/null
+		regions_export
+	fi
+	awk -v MODE=regions_txt -v REG="$DATA/regions.tsv" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv"
+}
+regions_stale() { # true when there is no measurement, or it is over six hours old
+	[ -s "$DATA/regions.tsv" ] || return 0
+	[ $(( $(date +%s) - $(head -n 1 "$DATA/regions.tsv" | cut -f11) )) -gt 21600 ]
+}
+
+# ---- stay on one datacentre
+stay_off() {
+	local ip
+	touch "$DATA/blocklist"
+	awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist" | while read -r ip; do nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null; done
+	awk -F'\t' '$4 != "stay"' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
+	rm -f "$DATA/stay"
+	export_json
+}
+stay_vars() { # awk variable naming the file of places being kept to (nothing when stay mode is off)
+	[ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay"
+}
+stay_names() { awk -F'\t' 'NF >= 4 { s = s (n++ ? " + " : "") $1 } END { printf "%s", s }' "$DATA/stay" 2>/dev/null; }
+outside_stay() { # lat lon cc : true when a server is outside every place in the pool
+	awk -F'\t' -v a="$1" -v b="$2" -v c="$3" '
+		NF >= 4 {
+			if ($5 != "" && $5 != "-") { if (index("," $5 ",", "," c ",") > 0) ok = 1; next }
+			x = (a + $2) / 2 * 0.0174533; x2 = x * x; cs = 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720
+			dy = (a - $2) * 111.2; dx = (b - $3) * 111.2 * cs
+			if (dx * dx + dy * dy <= $4 * $4) ok = 1
+		}
+		END { exit ok ? 1 : 0 }' "$DATA/stay"
+}
+# turn a city name into coordinates (Open-Meteo geocoding; sends only the name typed). prints: name, CC <tab> lat <tab> lon
+geocode() {
+	local q json name cc lat lon
+	q="$(printf '%s' "$1" | tr -cd 'A-Za-z0-9 -' | sed 's/ /%20/g')"
+	[ -n "$q" ] || return 1
+	json="$(fetch "https://geocoding-api.open-meteo.com/v1/search?name=$q&count=1&language=en&format=json")" || return 1
+	lat="$(jnum "$json" latitude)"; lon="$(jnum "$json" longitude)"
+	name="$(jstr "$json" name)"; cc="$(jstr "$json" country_code)"
+	[ -n "$lat" ] && [ -n "$lon" ] && [ -n "$name" ] || return 1
+	printf '%s, %s\t%s\t%s\n' "$name" "$cc" "$lat" "$lon"
+}
+resolve_place() { # one place as typed -> a pool line: name, lat, lon, km, countries
+	local want="$1" line
+	case "$want" in
+		*[!0-9]*)
+			# 1. a named area or a country   2. a city in the regions table   3. any other city, looked up online
+			line="$(awk -F'|' -v w="$want" 'BEGIN { w = tolower(w) } /^#/ { next } tolower($2) == w || tolower($3) == w { print $3 "\t-\t-\t0\t" $4; exit }' "$LIB/places.list" 2>/dev/null)"
+			[ -n "$line" ] || line="$(awk -F'|' -v w="$want" -v k="${STAY_KM:-150}" 'BEGIN { w = tolower(w) } /^#/ { next } tolower($1) == w || tolower($2) == w { print $2 ", " $3 "\t" $5 "\t" $6 "\t" k "\t-"; exit }' "$LIB/regions.list" 2>/dev/null)"
+			if [ -z "$line" ]; then
+				line="$(geocode "$want")" || { echo "matchwatch: could not find a place called '$want'. Try a city, a country, or an area from: matchwatch places" >&2; return 1; }
+				line="$line$TAB${STAY_KM:-150}$TAB-"
+			fi ;;
+		*) line="$(awk -v MODE=dc_loc -v ARG="$want" -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv")"
+			[ -n "$line" ] || { echo "matchwatch: no datacentre number $want, or its location is unknown" >&2; return 1; }
+			line="$line$TAB${STAY_KM:-150}$TAB-" ;;
+	esac
+	echo "$line"
+}
+add_places() { # comma separated list -> appended to the pool (skipping ones already in it); fails if any is unknown
+	local list="$1" one line rest
+	rest="$list"
+	while [ -n "$rest" ]; do
+		case "$rest" in *,*) one="${rest%%,*}"; rest="${rest#*,}" ;; *) one="$rest"; rest="" ;; esac
+		one="$(echo "$one" | sed 's/^ *//; s/ *$//')"
+		[ -n "$one" ] || continue
+		line="$(resolve_place "$one")" || return 1
+		grep -q "^$(echo "$line" | cut -f1)$TAB" "$DATA/stay" 2>/dev/null || echo "$line" >> "$DATA/stay"
+	done
+}
+stay_apply() { # make the blocks match the pool: clear the old ones, then block every address block played on outside it
+	local ip p n=0
+	touch "$DATA/blocklist"
+	awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist" | while read -r ip; do nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null; done
+	awk -F'\t' '$4 != "stay"' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
+	for p in $(awk -v MODE=area_others $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv"); do MW_QUIET=1 cmd_block "$p" 0 stay; n=$((n + 1)); done
+	export_json
+	echo "$n"
+}
+stay_report() {
+	echo "Staying on: $(stay_names)"
+	echo "Any server in any of these places is allowed, whoever hosts it. Blocked $1 address block(s) you have played on elsewhere; others are turned away as the game tries them."
+	echo "The game still decides which of them to offer you. A place is dropped from the pool if its last three matches average under $WARN_SCORE."
+}
+cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
+	local n
+	touch "$DATA/sessions.tsv" "$DATA/blocklist"
+	case "$1" in
+		off) if [ -s "$DATA/stay" ]; then stay_off; echo "No longer staying anywhere. The blocks it added are removed."; else echo "Stay mode was not on."; fi ;;
+		""|status)
+			if [ -s "$DATA/stay" ]; then echo "Staying on:"; awk -F'\t' '{ printf "  %d  %s  (%s)\n", NR, $1, ($5 != "" && $5 != "-" ? "anywhere in it" : "within " $4 " km") }' "$DATA/stay"
+			else echo "Stay mode is off. Turn it on with: matchwatch stay <places, separated by commas>"; fi ;;
+		add) [ -n "$2" ] || die "usage: matchwatch stay add <places, separated by commas>"
+			cp "$DATA/stay" "$DATA/stay.bak" 2>/dev/null || : > "$DATA/stay.bak"
+			if add_places "$2"; then rm -f "$DATA/stay.bak"; stay_report "$(stay_apply)"; else mv -f "$DATA/stay.bak" "$DATA/stay"; [ -s "$DATA/stay" ] || rm -f "$DATA/stay"; exit 1; fi ;;
+		remove) case "$2" in ""|*[!0-9]*) die "usage: matchwatch stay remove <number from 'matchwatch stay'>" ;; esac
+			[ -s "$DATA/stay" ] && [ "$2" -ge 1 ] && [ "$2" -le "$(wc -l < "$DATA/stay")" ] || die "no place number $2 in the pool"
+			sed -i "${2}d" "$DATA/stay"
+			if [ -s "$DATA/stay" ]; then stay_report "$(stay_apply)"; else stay_off; echo "That was the last place, so stay mode is off."; fi ;;
+		*)  # replace the pool
+			cp "$DATA/stay" "$DATA/stay.bak" 2>/dev/null || : > "$DATA/stay.bak"
+			: > "$DATA/stay"
+			if add_places "$1" && [ -s "$DATA/stay" ]; then rm -f "$DATA/stay.bak"; stay_report "$(stay_apply)"
+			else mv -f "$DATA/stay.bak" "$DATA/stay"; [ -s "$DATA/stay" ] || rm -f "$DATA/stay"; exit 1; fi ;;
+	esac
+}
+cmd_game() { # name <port> <name>
+	[ "$1" = name ] || die "usage: matchwatch game name <server port> <name>"
+	case "$2" in ""|*[!0-9]*) die "usage: matchwatch game name <server port> <name>" ;; esac
+	[ -n "$3" ] || die "usage: matchwatch game name <server port> <name>"
+	touch "$DATA/games.local"
+	grep -v "|$2\$" "$DATA/games.local" > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
+	printf '%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2" >> "$DATA/games.local"
+	export_json
+	echo "Matches on server port $2 are now labelled: $3"
+}
+cmd_unblock_dc() { # number
+	local list p
+	case "$1" in ""|*[!0-9]*) die "usage: matchwatch unblock-dc <number>" ;; esac
+	list="$(awk -v MODE=dc_prefixes -v ARG="$1" -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv")"
+	[ -n "$list" ] || die "no datacentre number $1"
+	echo "$list" | tail -n +2 | while read -r p; do cmd_unblock "$p"; done
+}
+
+# ---- what the dashboard's buttons run (through LuCI's rpcd backend, /usr/libexec/rpcd/luci.matchwatch)
+cmd_action() { # action [arg] [days] [place] : prints the result; a non-zero exit means it did not work
+	local action="$1" arg="$2" days="$3" region="$4"
+	case "$arg" in *[!0-9./]*) die "that is not an address or a number" ;; esac
+	case "$days" in *[!0-9]*) die "days must be a number" ;; esac
+	case "$region" in *[!a-z0-9\ ,-]*) die "place names may only use letters, numbers, spaces, commas and hyphens" ;; esac
+	case "$action" in
+		hello) echo "ok" ;;
+		mark) cmd_mark || die "could not record that" ;;
+		block) cmd_block "$arg" ${days:+"$days"} ;;
+		unblock) cmd_unblock "$arg" ;;
+		blockdc) cmd_block_dc "$arg" ${days:+"$days"} ;;
+		unblockdc) cmd_unblock_dc "$arg" ;;
+		stay) cmd_stay "${region:-$arg}" ;;
+		stayoff) cmd_stay off ;;
+		stayadd) cmd_stay add "$region" ;;
+		stayrm) cmd_stay remove "$arg" ;;
+		qos) cmd_qos ;;
+		qosfix) cmd_qos_fix ;;
+		qosunfix) cmd_qos_unfix ;;
+		devices) device_list ;;
+		setdevice) [ -n "$arg" ] || die "no device given"; cmd_device "$arg" ;;
+		setdeviceall) cmd_device all ;;
+		doctor) cmd_doctor ;;
+		regions) cmd_regions measure | head -n 6 ;;
+		*) die "unknown action" ;;
+	esac
+}
+
+# ---- one-time: carry settings from the shell file older versions used into /etc/config/matchwatch
+cmd_migrate() {
+	local old=/etc/matchwatch/config
+	[ -z "$CONF" ] && [ -f "$old" ] && have uci || return 0
+	[ -f /etc/config/matchwatch ] || : > /etc/config/matchwatch
+	uci -q get matchwatch.main >/dev/null || uci set matchwatch.main=matchwatch
+	(
+		# what that file's own defaults were, for anything it does not mention
+		DEVICE_IP=""; LAN_IF=""; WAN_IF=""; ONLY_FILTER=""; NTFY_URL=""; WEB=1; DATA_DIR="/etc/matchwatch"
+		. "$old"
+		put() { if [ -n "$2" ]; then uci set "matchwatch.main.$1=$2"; else uci -q delete "matchwatch.main.$1"; fi; }
+		put device_ip "$DEVICE_IP"; put lan_if "$LAN_IF"; put wan_if "$WAN_IF"
+		put ignore_ports "$IGNORE_PORTS"; put only_filter "$ONLY_FILTER"
+		put min_down_pps "$MIN_DOWN_PPS"; put min_up_pps "$MIN_UP_PPS"
+		put geo "$GEO"; put ntfy_url "$NTFY_URL"; put notify_every_match "$NOTIFY_EVERY_MATCH"
+		put warn_score "$WARN_SCORE"; put pc_score "$PC_SCORE"
+		put autoblock "$AUTOBLOCK"; put autoblock_score "$AUTOBLOCK_SCORE"; put autoblock_matches "$AUTOBLOCK_MATCHES"
+		put block_days "$BLOCK_DAYS"; put lobby_alert "$LOBBY_ALERT"; put lobby_margin_ms "$LOBBY_MARGIN_MS"
+		put stay_strict "$STAY_STRICT"; put stay_km "$STAY_KM"; put data_dir "$DATA_DIR"; put web "$WEB"
+		uci commit matchwatch
+	) || return 1
+	mv -f "$old" "$old.imported"
+	rm -f /etc/matchwatch/token
+	echo "Settings carried over from $old (kept as $old.imported). They are now in LuCI: Services, MatchWatch, Settings."
+}
+
+cmd_mark() { # record "I felt that" at this moment
+	local now last
+	mkdir -p "$RUN"
+	now="$(date +%s)"
+	last="$(tail -n 1 "$RUN/marks" 2>/dev/null)"
+	[ -n "$last" ] && [ $((now - last)) -lt 2 ] && return 0
+	[ -f "$RUN/marks" ] && [ "$(wc -l < "$RUN/marks")" -gt 2000 ] && return 1
+	echo "$now" >> "$RUN/marks"
+}
+
+# ---- is the game's traffic in QoSmate's top class?
+dscp_name() {
+	case "$1" in
+		0) echo CS0 ;; 8) echo CS1 ;; 16) echo CS2 ;; 24) echo CS3 ;; 32) echo CS4 ;; 40) echo CS5 ;; 48) echo CS6 ;; 56) echo CS7 ;;
+		46) echo EF ;; 44) echo VA ;; 34) echo AF41 ;; 36) echo AF42 ;; 38) echo AF43 ;; 26) echo AF31 ;; 18) echo AF21 ;; 10) echo AF11 ;;
+		*) echo "DSCP-$1" ;;
+	esac
+}
+qos_scheme() { # which priority scheme is live on the WAN port: hfsc | diffserv3 | diffserv4 | diffserv8 | besteffort | unknown
+	local q
+	q="$(tc qdisc show dev "$WAN_IF" 2>/dev/null)"
+	case "$q" in
+		*"qdisc hfsc"*) echo hfsc ;;
+		*diffserv3*) echo diffserv3 ;;
+		*diffserv4*) echo diffserv4 ;;
+		*diffserv8*) echo diffserv8 ;;
+		*besteffort*) echo besteffort ;;
+		*) echo unknown ;;
+	esac
+}
+is_top() { # dscp scheme : does this mark land in the top queue under this scheme?
+	case "$2" in
+		diffserv3) case "$1" in 4|44|46|48|56) return 0 ;; esac ;;
+		diffserv4) case "$1" in 32|40|44|46|48|56) return 0 ;; esac ;;
+		*) case "$1" in 40|46|48|56) return 0 ;; esac ;;
+	esac
+	return 1
+}
+qos_probe() { # server-ip server-port -> prints: state class source   (state: top|low|unknown|absent)
+	local ip="$1" port="$2" d="" tf="$RUN/qos.$$" cf="$RUN/qosc.$$" p p2 mark sch pk1 pk2 want got washed=0
+	[ -x /etc/init.d/qosmate ] && [ "$(uci -q get qosmate.global.enabled)" = 1 ] || { echo "absent - -"; return 0; }
+	find_ifaces
+	[ -n "$WAN_IF" ] && have tcpdump || { echo "unknown - -"; return 0; }
+	sch="$(qos_scheme)"
+	[ "$sch" = besteffort ] && { echo "low none cake is in besteffort mode, which has no priority queue"; return 0; }
+	# watch the game's outgoing packets for a few seconds: their mark, and how many there are
+	tcpdump -i "$WAN_IF" -l -v -n -c 12 "udp and dst host $ip and dst port $port" > "$tf" 2>/dev/null &
+	p=$!
+	tcpdump -i "$WAN_IF" -l -n -q "udp and dst host $ip and dst port $port" > "$cf" 2>/dev/null &
+	p2=$!
+	pk1="$(rt_packets "$sch")"; sleep 2; pk2="$(rt_packets "$sch")"
+	sleep 1; kill "$p" "$p2" 2>/dev/null
+	d="$(tos_dscp "$tf")"; want=$(( $(wc -l < "$cf") / 3 ))
+	rm -f "$tf" "$cf"
+	# 1. is the top queue carrying about as many packets as the game sends? This is the direct test.
+	if [ -n "$pk1" ] && [ -n "$pk2" ] && [ "$want" -ge 5 ]; then
+		got=$(( (pk2 - pk1) / 2 ))
+		if [ $((got * 10)) -ge $((want * 6)) ]; then echo "top top-queue the top queue's own counters ($got packets a second in it, the game sends $want)"; return 0; fi
+		if [ $((got * 10)) -le $((want * 2)) ]; then echo "low not-in-top-queue the top queue's own counters ($got packets a second in it, the game sends $want; scheme $sch)"; return 0; fi
+	fi
+	# 2. the mark on the packets as they reach the queue. In HFSC modes QoSmate may wipe it first.
+	# Packets are captured after the queue has handled them, so a queue that washes marks shows CS0 here.
+	[ "$sch" = hfsc ] && [ "$(uci -q get qosmate.advanced.WASHDSCPUP)" != 0 ] && washed=1
+	case "$(tc qdisc show dev "$WAN_IF" 2>/dev/null)" in *" wash"*) washed=1 ;; esac
+	if [ -n "$d" ] && { [ "$d" != 0 ] || [ "$washed" = 0 ]; }; then
+		if is_top "$d" "$sch"; then echo "top $(dscp_name "$d") packets leaving $WAN_IF (scheme $sch)"
+		else echo "low $(dscp_name "$d") packets leaving $WAN_IF (scheme $sch)"; fi
+		return 0
+	fi
+	# 3. the class QoSmate stored for the connection (a best guess at its bookkeeping, so reported as such)
+	if [ -r /proc/net/nf_conntrack ]; then
+		mark="$(grep "dst=$ip " /proc/net/nf_conntrack 2>/dev/null | grep "dport=$port " | sed -n 's/.* mark=\([0-9]*\).*/\1/p' | head -n 1)"
+		if [ -n "$mark" ] && [ "$mark" -ge 128 ] 2>/dev/null; then
+			d=$((mark & 63))
+			if is_top "$d" "$sch"; then echo "top $(dscp_name "$d") connection table, less certain (raw mark $mark, scheme $sch)"
+			else echo "low $(dscp_name "$d") connection table, less certain (raw mark $mark, scheme $sch)"; fi
+			return 0
+		fi
+	fi
+	if [ "$d" = 0 ]; then echo "unknown CS0 washed"; else echo "unknown - -"; fi
+}
+rt_packets() { # scheme -> packets sent so far through the top queue on the WAN port
+	have tc || return 0
+	case "$1" in
+		hfsc) tc -s class show dev "$WAN_IF" 2>/dev/null | awk '/^class hfsc 1:11 / { f = 1; next } /^class / { f = 0 } f && $1 == "Sent" { print $4; exit }' ;;
+		diffserv3|diffserv4) tc -s qdisc show dev "$WAN_IF" 2>/dev/null | awk '/^qdisc cake/ { c++ } c == 1 && $1 == "pkts" { print $NF; exit }' ;;
+	esac
+}
+tos_dscp() { # file of "tcpdump -v" output -> most common DSCP value
+	awk 'function hex(h,   i, c, v) { v = 0; h = tolower(h); for (i = 1; i <= length(h); i++) { c = index("0123456789abcdef", substr(h, i, 1)) - 1; if (c < 0) break; v = v * 16 + c } return v }
+		match($0, /tos 0x[0-9a-fA-F]+/) { t = hex(substr($0, RSTART + 6, RLENGTH - 6)); n[int(t / 4)]++ }
+		END { best = ""; for (k in n) if (best == "" || n[k] > n[best]) best = k; print best }' "$1"
+}
+# ---- which device to watch
+device_list() { # prints: ip|name|mac|fixed(yes/no), one device per line, from the router's DHCP leases
+	local lf="${MW_LEASES:-$(uci -q get dhcp.@dnsmasq[0].leasefile 2>/dev/null)}" fixed
+	[ -n "$lf" ] || lf=/tmp/dhcp.leases
+	fixed="$(uci -q show dhcp 2>/dev/null | sed -n "s/.*\.ip='\([0-9.]*\)'.*/\1/p" | tr '\n' ' ')"
+	[ -r "$lf" ] || return 0
+	awk -v fx=" $fixed" '$3 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { n = ($4 == "*" || $4 == "") ? "(no name)" : $4; gsub(/[|"\\]/, " ", n); print $3 "|" n "|" $2 "|" (index(fx, " " $3 " ") ? "yes" : "no") }' "$lf" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n
+}
+cmd_device() { # (nothing) = list | <ip> | all
+	local want="$1"
+	case "$want" in
+		"") echo "Watching: ${DEVICE_IP:-every device on the LAN}"; echo
+			device_list | awk -F'|' -v cur="$DEVICE_IP" 'BEGIN { printf "%-16s %-26s %-18s %s\n", "Address", "Name", "MAC", "" } { printf "%-16s %-26s %-18s %s%s\n", $1, substr($2, 1, 26), $3, ($4 == "yes" ? "fixed address" : "address may change"), ($1 == cur ? "  <- watching" : "") }'
+			echo; echo "Choose one with: matchwatch device <address>     or watch everything: matchwatch device all"; return 0 ;;
+		all) want="" ;;
+		*) is_ipv4 "$want" || die "usage: matchwatch device [<address> | all]" ;;
+	esac
+	if [ -n "$CONF" ]; then
+		touch "$CONF"
+		if grep -q '^DEVICE_IP=' "$CONF"; then sed -i "s|^DEVICE_IP=.*|DEVICE_IP=\"$want\"|" "$CONF"; else echo "DEVICE_IP=\"$want\"" >> "$CONF"; fi
+	else
+		[ -f /etc/config/matchwatch ] || : > /etc/config/matchwatch
+		uci -q get matchwatch.main >/dev/null || uci set matchwatch.main=matchwatch
+		if [ -n "$want" ]; then uci set "matchwatch.main.device_ip=$want"; else uci -q delete matchwatch.main.device_ip; fi
+		uci commit matchwatch || die "could not save the setting"
+	fi
+	DEVICE_IP="$want"
+	[ -d "$RUN/www" ] && export_json
+	[ -x /etc/init.d/matchwatch ] && ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 &
+	echo "Now watching: ${want:-every device on the LAN}. The service is restarting."
+	if [ -n "$want" ] && ! device_list | grep -q "^$want|.*|yes\$"; then echo "That device's address is handed out by the router and may change. Give it a fixed one in LuCI > Network > DHCP and DNS > Static Leases, or matchwatch will lose track of it."; fi
+	if [ -n "$(qos_rule_section matchwatch_out 2>/dev/null)" ]; then echo "Your QoSmate rules still point at the previous device. Run 'matchwatch qos fix' (or the Tools page button) to move them."; fi
+}
+
+# ---- put the gaming device's UDP in QoSmate's top class (only ever run by hand)
+qos_rule_section() { # rule name -> its uci section (qosmate.cfgXXXX), if it exists
+	uci -q show qosmate 2>/dev/null | sed -n "s/^\(qosmate\.[^.]*\)\.name='$1'\$/\1/p" | head -n 1
+}
+qos_device() { # the device whose traffic should be prioritised: the configured one, else the one in a match right now
+	local d="$DEVICE_IP"
+	[ -n "$d" ] || d="$(sed -n 's/.*"sessions":\[{"ip":"[0-9.]*","port":[0-9]*,"device":"\([0-9.]*\)".*/\1/p' "$RUN/www/status.json" 2>/dev/null)"
+	echo "$d"
+}
+qos_set_rule() { # name direction(src|dest) device
+	local sec other
+	[ "$2" = src ] && other=dest || other=src
+	sec="$(qos_rule_section "$1")"
+	if [ -z "$sec" ]; then
+		sec="qosmate.$(uci add qosmate rule)" || return 1
+		uci set "$sec.name=$1"
+	fi
+	uci set "$sec.proto=udp"
+	uci -q delete "$sec.src_ip"; uci -q delete "$sec.dest_ip"; uci -q delete "$sec.src_port"; uci -q delete "$sec.dest_port"
+	uci add_list "$sec.${2}_ip=$3"
+	uci add_list "$sec.${other}_port=!=80"
+	uci add_list "$sec.${other}_port=!=443"
+	uci set "$sec.class=ef"
+	uci set "$sec.counter=1"
+	uci set "$sec.enabled=1"
+}
+cmd_qos_fix() {
+	local dev old1 old2
+	[ -x /etc/init.d/qosmate ] || die "QoSmate is not installed on this router."
+	dev="$(qos_device)"
+	is_ipv4 "$dev" || die "no gaming device known. Choose one in LuCI (Services, MatchWatch, Settings) or with 'matchwatch device <address>', or run this during a match."
+	# rules made from the commands an older version printed are reused, not duplicated
+	old1="$(qos_rule_section Game_Outbound)"; old2="$(qos_rule_section Game_Inbound)"
+	[ -n "$old1" ] && uci set "$old1.name=matchwatch_out"
+	[ -n "$old2" ] && uci set "$old2.name=matchwatch_in"
+	qos_set_rule matchwatch_out src "$dev" && qos_set_rule matchwatch_in dest "$dev" || die "could not write the QoSmate rules"
+	uci commit qosmate
+	/etc/init.d/qosmate restart >/dev/null 2>&1
+	echo "Done. All UDP to and from $dev, except web ports 80 and 443, is now marked EF: top priority in every QoSmate mode."
+	echo "The rules are called matchwatch_out and matchwatch_in (LuCI > QoSmate > Rules). QoSmate was restarted."
+	echo "Check it during a match with: matchwatch qos"
+}
+cmd_qos_unfix() {
+	local s n=0
+	[ -x /etc/init.d/qosmate ] || die "QoSmate is not installed on this router."
+	for s in matchwatch_out matchwatch_in; do
+		s="$(qos_rule_section "$s")"
+		[ -n "$s" ] && uci delete "$s" && n=$((n + 1))
+	done
+	if [ "$n" -gt 0 ]; then uci commit qosmate; /etc/init.d/qosmate restart >/dev/null 2>&1; echo "Removed $n rule(s) and restarted QoSmate. Your own QoSmate rules were not touched."
+	else echo "There were no matchwatch rules in QoSmate to remove."; fi
+}
+cmd_qos() {
+	local st ip port dev state class src qd
+	case "$1" in fix) cmd_qos_fix; return ;; unfix) cmd_qos_unfix; return ;; esac
+	if [ ! -x /etc/init.d/qosmate ]; then echo "QoSmate is not installed on this router."; return 0; fi
+	qd="$(uci -q get qosmate.settings.ROOT_QDISC)"
+	find_ifaces
+	echo "QoSmate: $( [ "$(uci -q get qosmate.global.enabled)" = 1 ] && echo enabled || echo DISABLED ), queue type ${qd:-unknown} ($(qos_scheme) live on $WAN_IF), $(uci -q get qosmate.settings.DOWNRATE) kbit down / $(uci -q get qosmate.settings.UPRATE) kbit up"
+	st="$(cat "$RUN/www/status.json" 2>/dev/null)"
+	ip="$(echo "$st" | sed -n 's/.*"sessions":\[{"ip":"\([0-9.]*\)".*/\1/p')"
+	port="$(echo "$st" | sed -n 's/.*"sessions":\[{"ip":"[0-9.]*","port":\([0-9]*\).*/\1/p')"
+	dev="$(echo "$st" | sed -n 's/.*"sessions":\[{"ip":"[0-9.]*","port":[0-9]*,"device":"\([0-9.]*\)".*/\1/p')"
+	if [ -z "$ip" ]; then echo "No match in progress. Start a match, then run this again while you are in it."; return 0; fi
+	echo "Checking game traffic to $ip:$port from ${dev:-your device} ..."
+	set -- $(qos_probe "$ip" "$port"); state="$1"; class="$2"; shift 2; src="$*"
+	case "$state" in
+		top) if [ "$class" = top-queue ]; then echo "OK: game traffic is going through the top priority queue. Source: $src."
+			else echo "OK: game traffic is in the top priority class ($class). Source: $src."; fi ;;
+		low) echo "NOT prioritised: game traffic is not reaching the top queue. Source: $src."
+			case "$src" in *diffserv3*) echo "Your cake queue runs in diffserv3 mode, where EF, VA, CS6 and CS7 reach the top (Voice) queue." ;; esac
+			echo "To fix it, run: matchwatch qos fix   (or press Prioritise my game traffic on the dashboard's Tools page in LuCI)."
+			echo "That adds two QoSmate rules marking all UDP to and from your gaming device, except web ports, as EF,"
+			echo "which is top priority in every QoSmate mode, and restarts QoSmate. matchwatch qos unfix removes them."
+			echo "Nothing has been changed yet." ;;
+		unknown) if [ "$src" = washed ]; then echo "Can't tell: QoSmate clears marks on packets leaving the router (WASHDSCPUP), and neither its queue counters nor the connection table settled it."
+			else echo "Can't tell: no mark could be read for this connection."; fi
+			echo "Check LuCI > QoSmate > Connections for the row to $ip and see which class it shows." ;;
+		*) echo "QoSmate is installed but disabled, so nothing is being prioritised." ;;
+	esac
+}
+
+# ---- service
+find_ifaces() {
+	if [ -z "$LAN_IF" ] || [ -z "$WAN_IF" ]; then
+		if [ -f /lib/functions/network.sh ]; then
+			. /lib/functions/network.sh
+			[ -z "$LAN_IF" ] && network_get_device LAN_IF lan
+			if [ -z "$WAN_IF" ]; then local w; network_find_wan w && network_get_device WAN_IF "$w"; fi
+		fi
+	fi
+	[ -n "$LAN_IF" ] || LAN_IF="br-lan"
+}
+build_filter() {
+	local p
+	FILTER="ip and udp and not ether multicast"
+	[ -n "$DEVICE_IP" ] && FILTER="$FILTER and host $DEVICE_IP"
+	for p in $IGNORE_PORTS; do FILTER="$FILTER and not port $p"; done
+	[ -n "$ONLY_FILTER" ] && FILTER="$FILTER and ( $ONLY_FILTER )"
+}
+web_setup() { # the dashboard without login (WEB=1): view only, plus the "I felt that" button
+	[ -d /www ] || return 0
+	rm -f /www/cgi-bin/matchwatch-api
+	if [ "$WEB" = 1 ] && [ -f "$LIB/public.html" ] && [ -f /www/luci-static/resources/matchwatch/dashboard.js ]; then
+		mkdir -p /www/matchwatch
+		cp -f "$LIB/public.html" /www/matchwatch/index.html
+		ln -sfn "$RUN/www" /www/matchwatch/data
+		if [ -d /www/cgi-bin ]; then
+			cat > /www/cgi-bin/matchwatch-mark <<'CGI'
+#!/bin/sh
+# matchwatch: records the moment the "I felt that" button was pressed. Nothing else.
+echo "Content-Type: application/json"
+echo "Cache-Control: no-store"
+echo
+if [ "$REQUEST_METHOD" = POST ] && /usr/bin/matchwatch mark; then echo '{"ok":true}'; else echo '{"ok":false}'; fi
+CGI
+			chmod 755 /www/cgi-bin/matchwatch-mark
+		fi
+	else
+		rm -f /www/matchwatch/index.html /www/matchwatch/data /www/cgi-bin/matchwatch-mark
+		rmdir /www/matchwatch 2>/dev/null
+	fi
+	return 0
+}
+stop_children() {
+	local d f
+	kill $TPID $HPID $APID 2>/dev/null
+	for d in "$RUN"/probe.*; do
+		[ -d "$d" ] || continue
+		touch "$d/stop"
+		for f in "$d"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
+		rm -rf "$d"
+	done
+	rm -f "$RUN/pipe" "$RUN/pid"
+}
+cmd_run() {
+	local imm=""
+	have tcpdump || die "tcpdump is not installed (opkg install tcpdump, or apk add tcpdump)"
+	[ -f "$LIB/analyze.awk" ] || die "missing $LIB/analyze.awk"
+	[ -n "$DEVICE_IP" ] && { is_ipv4 "$DEVICE_IP" || die "the device to watch ($DEVICE_IP) is not a valid IPv4 address"; }
+	mkdir -p "$RUN/www" "$DATA/matches"
+	ln -sfn "$DATA/matches" "$RUN/www/matches"
+	[ -s "$DATA/stay" ] && [ -z "$(cut -f3 "$DATA/stay")" ] && stay_off
+	rm -f "$RUN/www/lobby.json"
+	rm -rf "$RUN"/probe.* "$RUN/pipe"
+	: > "$RUN/marks"
+	touch "$DATA/sessions.tsv" "$DATA/blocklist"
+	find_ifaces; build_filter
+	apply_blocklist
+	web_setup; export_json
+	echo '{"ts":0,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
+	echo "Starting up..." > "$RUN/status.txt"
+	mkfifo "$RUN/pipe" || die "cannot create $RUN/pipe"
+	tcpdump --help 2>&1 | grep -q immediate-mode && imm="--immediate-mode"
+	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" \
+		-v MINDN="$MIN_DOWN_PPS" -v MINUP="$MIN_UP_PPS" -v WARNSCORE="$WARN_SCORE" \
+		-v PCSCORE="$PC_SCORE" -v AUTOBLOCK="$AUTOBLOCK" -v ABSCORE="$AUTOBLOCK_SCORE" -v ABMATCHES="$AUTOBLOCK_MATCHES" \
+		-f "$LIB/analyze.awk" < "$RUN/pipe" >> "$RUN/engine.log" 2>&1 &
+	APID=$!
+	# shellcheck disable=SC2086
+	tcpdump -i "$LAN_IF" -tt -n -q -l -s 96 $imm $FILTER > "$RUN/pipe" 2> "$RUN/tcpdump.err" &
+	TPID=$!
+	( while :; do echo TICK; sleep 1; done ) > "$RUN/pipe" 2>/dev/null &
+	HPID=$!
+	echo $$ > "$RUN/pid"
+	trap 'stop_children; exit 0' INT TERM
+	( sleep 20; regions_stale && cmd_regions measure >/dev/null 2>&1 ) &
+	logger -t matchwatch "watching $LAN_IF${DEVICE_IP:+ (device $DEVICE_IP)}" 2>/dev/null
+	wait $TPID
+	logger -t matchwatch "capture stopped: $(tail -n 1 "$RUN/tcpdump.err" 2>/dev/null)" 2>/dev/null
+	stop_children
+	exit 1
+}
+
+cmd_live() {
+	[ -f "$RUN/status.txt" ] || die "not running. Start it with: /etc/init.d/matchwatch start"
+	while :; do
+		clear 2>/dev/null
+		echo "matchwatch $VERSION - live (Ctrl+C to leave)"; echo
+		cat "$RUN/status.txt" 2>/dev/null
+		sleep 1
+	done
+}
+cmd_last() {
+	if [ -f "$RUN/last.txt" ]; then cat "$RUN/last.txt"
+	elif [ -f "$DATA/last.txt" ]; then cat "$DATA/last.txt"
+	else echo "No match recorded yet."; fi
+}
+cmd_doctor() {
+	local ok=1 c n
+	echo "matchwatch $VERSION"
+	for c in tcpdump awk ping mkfifo; do
+		if have "$c"; then echo "  ok       $c"; else echo "  MISSING  $c (required)"; ok=0; fi
+	done
+	for c in nft traceroute; do
+		if have "$c"; then echo "  ok       $c"; else echo "  missing  $c (optional: $( [ "$c" = nft ] && echo blocking || echo route tracing ))"; fi
+	done
+	if have uclient-fetch || have curl || have wget; then echo "  ok       web fetch (location lookups, notifications)"; else echo "  missing  uclient-fetch/curl/wget (optional)"; fi
+	find_ifaces; build_filter
+	echo "  LAN interface: $LAN_IF    WAN interface: ${WAN_IF:-not found}"
+	echo "  Watching: ${DEVICE_IP:-every device on the LAN}"
+	if [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid")" 2>/dev/null; then echo "  Service: running"; else echo "  Service: not running"; fi
+	if [ "$ok" = 1 ]; then
+		echo "  Listening for 5 seconds..."
+		# shellcheck disable=SC2086
+		n="$( (tcpdump -i "$LAN_IF" -n -q -l -s 96 $FILTER 2>/dev/null & p=$!; sleep 5; kill $p 2>/dev/null) | wc -l)"
+		echo "  Saw $n matching UDP packets. $( [ "$n" -gt 0 ] && echo "Capture works." || echo "Nothing seen: start a game, or check DEVICE_IP and LAN_IF." )"
+	fi
+}
+usage() {
+	cat <<EOF
+matchwatch $VERSION - game server and connection judge
+
+  matchwatch live              live view of the match in progress
+  matchwatch last              full report for the last match
+  matchwatch history [n|ip]    recent matches (or every match on one server)
+  matchwatch servers           every server seen, worst first
+  matchwatch datacentres       servers grouped by datacentre, worst first
+  matchwatch block-dc <n>      block the address blocks seen in datacentre number n
+  matchwatch unblock-dc <n>    undo that
+  matchwatch stay <places>     keep to a pool of places, separated by commas: cities (milan),
+                               countries (france, germany, spain), areas (see 'matchwatch places')
+  matchwatch stay add <places> | remove <n> | off     change or end the pool
+  matchwatch hours             how your matches rate at each hour of the day
+  matchwatch recap             summary of your latest session
+  matchwatch games             games seen; 'matchwatch game name <port> <name>' labels one
+  matchwatch regions [measure] ping every region the game's host has a datacentre in
+  matchwatch mark              flag this moment ("I felt that"); same as the dashboard button
+  matchwatch qos               check the game is in QoSmate's top class (run during a match)
+  matchwatch device [<ip>|all] show the devices on your network and choose which one to watch
+  matchwatch qos fix | unfix   add (or remove) QoSmate rules that put your gaming device's UDP in the top class
+  matchwatch block <ip> [days] block a server (default $BLOCK_DAYS days, 0 = until unblocked)
+  matchwatch unblock <ip>|all  remove a block
+  matchwatch blocklist         show blocked servers
+  matchwatch doctor            check that everything needed is in place
+  /etc/init.d/matchwatch start|stop|restart|enable
+
+Dashboard and settings: LuCI, under Services, MatchWatch
+EOF
+}
+
+case "$1" in
+	run) cmd_run ;;
+	live) cmd_live ;;
+	last) cmd_last ;;
+	history) touch "$DATA/sessions.tsv" 2>/dev/null; awk -v MODE=hist_txt -v ARG="$2" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
+	servers) touch "$DATA/sessions.tsv" "$DATA/blocklist" 2>/dev/null; awk -v MODE=srv_txt -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
+	datacentres|datacenters|dcs) touch "$DATA/sessions.tsv" "$DATA/blocklist" 2>/dev/null; awk -v MODE=dc_txt -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
+	block-dc) cmd_block_dc "$2" "$3" ;;
+	unblock-dc) cmd_unblock_dc "$2" ;;
+	stay) shift; case "$1" in add|remove) c="$1"; shift; cmd_stay "$c" "$*" ;; *) cmd_stay "$*" ;; esac ;;
+	hours) touch "$DATA/sessions.tsv"; awk -v MODE=hours_txt -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
+	recap) touch "$DATA/sessions.tsv"; awk -v MODE=recap_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
+	games) touch "$DATA/sessions.tsv"; awk -v MODE=games_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
+	game) cmd_game "$2" "$3" "$4" ;;
+	device) cmd_device "$2" ;;
+	regions) cmd_regions "$2" ;;
+	places) awk -F'|' '/^area/ { printf "%-18s %-18s %s\n", $2, $3, $4 }' "$LIB/places.list"; echo; echo "Also any country by name or two-letter code, and any city by name." ;;
+	_lobby) cmd_lobby "$2" "$3" "$4" ;;
+	_action) shift; cmd_action "$@" ;;
+	_migrate) cmd_migrate ;;
+	mark) cmd_mark ;;
+	qos) cmd_qos "$2" ;;
+	block) shift; cmd_block "$@" ;;
+	unblock) cmd_unblock "$2" ;;
+	blocklist) cmd_blocklist ;;
+	doctor) cmd_doctor ;;
+	version) echo "$VERSION" ;;
+	_probe_start) shift; cmd_probe_start "$@" ;;
+	_probe_stop) cmd_probe_stop "$2" ;;
+	_notify) cmd_notify "$2" ;;
+	_after) cmd_after "$2" "$3" ;;
+	_export) mkdir -p "$RUN/www"; export_json ;;
+	_stop) [ -f "$RUN/pid" ] && kill "$(cat "$RUN/pid")" 2>/dev/null ;;
+	*) usage ;;
+esac

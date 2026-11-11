@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "LOG $*" >> "$MW_RUN/../log.log"

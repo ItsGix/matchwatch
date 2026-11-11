@@ -1,0 +1,28 @@
+{
+	"admin/services/matchwatch": {
+		"title": "MatchWatch",
+		"order": 60,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-matchwatch" ]
+		}
+	},
+	"admin/services/matchwatch/dashboard": {
+		"title": "Dashboard",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "matchwatch/dashboard"
+		}
+	},
+	"admin/services/matchwatch/settings": {
+		"title": "Settings",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "matchwatch/settings"
+		}
+	}
+}

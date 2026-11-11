@@ -1,0 +1,14 @@
+#!/bin/sh
+case "$*" in
+ *-s*qdisc*) cat <<T
+qdisc cake 1: root refcnt 2 bandwidth 780Mbit diffserv3 dual-srchost nat wash no-ack-filter split-gso rtt 100ms noatm overhead 38 mpu 84
+ Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0)
+                   Bulk  Best Effort        Voice
+  thresh      48750Kbit      780Mbit      195Mbit
+  pkts                0         9000            $(( $(date +%s) * ${RTRATE:-0} ))
+  bytes               0            0            0
+qdisc ingress ffff: parent ffff:fff1 ----------------
+T
+ ;;
+ *qdisc*) echo "qdisc cake 1: root refcnt 2 bandwidth 780Mbit ${SCHEME:-diffserv3} dual-srchost nat wash" ;;
+esac

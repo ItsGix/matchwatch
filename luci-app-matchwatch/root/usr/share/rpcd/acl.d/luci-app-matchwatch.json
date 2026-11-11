@@ -1,0 +1,23 @@
+{
+	"luci-app-matchwatch": {
+		"description": "Grant access to MatchWatch",
+		"read": {
+			"ubus": {
+				"luci.matchwatch": [ "read" ],
+				"luci-rpc": [ "getHostHints" ]
+			},
+			"file": {
+				"/tmp/matchwatch/www/*": [ "read" ],
+				"/tmp/matchwatch/www/matches/*": [ "read" ],
+				"/etc/matchwatch/matches/*": [ "read" ]
+			},
+			"uci": [ "matchwatch" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.matchwatch": [ "write" ]
+			},
+			"uci": [ "matchwatch" ]
+		}
+	}
+}

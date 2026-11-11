@@ -1,0 +1,70 @@
+# Wider places to stay on, by country code. kind|code|name|country codes (comma separated)
+# kind "area" = a named group of countries; kind "country" = one country.
+area|uk-ireland|UK and Ireland|GB,IE
+area|western-europe|Western Europe|GB,IE,FR,BE,NL,LU,DE,CH,AT
+area|southern-europe|Southern Europe|ES,PT,IT,GR,MT,CY
+area|northern-europe|Northern Europe|SE,NO,DK,FI,IS,EE,LV,LT
+area|eastern-europe|Eastern Europe|PL,CZ,SK,HU,RO,BG,HR,SI,RS,UA,MD
+area|europe|Europe|GB,IE,FR,BE,NL,LU,DE,CH,AT,ES,PT,IT,GR,MT,CY,SE,NO,DK,FI,IS,EE,LV,LT,PL,CZ,SK,HU,RO,BG,HR,SI,RS,UA,MD
+area|north-america|North America|US,CA,MX
+area|south-america|South America|BR,AR,CL,CO,PE,UY,EC
+area|middle-east|Middle East|AE,SA,BH,QA,KW,OM,IL,TR,JO
+area|asia|Asia|JP,KR,SG,IN,HK,TW,TH,MY,ID,PH,VN
+area|oceania|Oceania|AU,NZ
+area|africa|Africa|ZA,EG,NG,KE,MA
+country|gb|United Kingdom|GB
+country|uk|United Kingdom|GB
+country|ie|Ireland|IE
+country|fr|France|FR
+country|be|Belgium|BE
+country|nl|Netherlands|NL
+country|lu|Luxembourg|LU
+country|de|Germany|DE
+country|ch|Switzerland|CH
+country|at|Austria|AT
+country|es|Spain|ES
+country|pt|Portugal|PT
+country|it|Italy|IT
+country|gr|Greece|GR
+country|se|Sweden|SE
+country|no|Norway|NO
+country|dk|Denmark|DK
+country|fi|Finland|FI
+country|is|Iceland|IS
+country|pl|Poland|PL
+country|cz|Czechia|CZ
+country|hu|Hungary|HU
+country|ro|Romania|RO
+country|bg|Bulgaria|BG
+country|hr|Croatia|HR
+country|rs|Serbia|RS
+country|ua|Ukraine|UA
+country|tr|Turkey|TR
+country|ru|Russia|RU
+country|us|United States|US
+country|ca|Canada|CA
+country|mx|Mexico|MX
+country|br|Brazil|BR
+country|ar|Argentina|AR
+country|cl|Chile|CL
+country|co|Colombia|CO
+country|pe|Peru|PE
+country|ae|United Arab Emirates|AE
+country|sa|Saudi Arabia|SA
+country|bh|Bahrain|BH
+country|qa|Qatar|QA
+country|il|Israel|IL
+country|za|South Africa|ZA
+country|eg|Egypt|EG
+country|in|India|IN
+country|jp|Japan|JP
+country|kr|South Korea|KR
+country|sg|Singapore|SG
+country|hk|Hong Kong|HK
+country|tw|Taiwan|TW
+country|th|Thailand|TH
+country|my|Malaysia|MY
+country|id|Indonesia|ID
+country|ph|Philippines|PH
+country|au|Australia|AU
+country|nz|New Zealand|NZ
