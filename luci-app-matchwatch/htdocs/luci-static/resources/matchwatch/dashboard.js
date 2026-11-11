@@ -20,7 +20,7 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [] };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {} };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 
 // ---------- small helpers
@@ -205,6 +205,52 @@ function namePrompt(redraw) {
 	return box;
 }
 
+// ---------- favourites: servers you want to find again, grouped by the game played on them
+function setFavs(x) { D.favs = []; D.favInfo = {}; (x || []).forEach(function (o) { if (typeof o === "string") o = { ip: o }; D.favs.push(o.ip); D.favInfo[o.ip] = o; }); }
+function isFav(ip) { return D.favs.indexOf(ip) >= 0; }
+function gameOf(ip) { var m = D.hist.filter(function (x) { return x.ip === ip; })[0], f = D.favInfo[ip]; return (m && m.game) || (f && f.game) || "Other games"; }
+// a star that adds or removes one server. wordy: a full button with its label, for pages about one server
+function star(ip, wordy) {
+	var on = isFav(ip);
+	if (RO) return on ? h("span", { cls: "star on", title: "One of your favourites", text: "★" }) : document.createElement("span");
+	var say = on ? "Remove from favourites" : "Add to favourites";
+	var b = h("button", { type: "button", cls: wordy ? "" : "star" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", title: say, "aria-label": say + ": " + ip, text: (on ? "★" : "☆") + (wordy ? (on ? " Favourite" : " Add to favourites") : "") });
+	b.addEventListener("click", function (e) {
+		e.stopPropagation(); b.disabled = true;
+		api(on ? "unfav" : "fav", ip).then(function (j) {
+			b.disabled = false;
+			if (!j.ok) { toast(j.out || j.error || "That did not work.", true); return; }
+			if (on) D.favs = D.favs.filter(function (x) { return x !== ip; }); else { D.favs.push(ip); D.favInfo[ip] = D.favInfo[ip] || { ip: ip }; }
+			toast(j.out || "Done.");
+			var y = window.scrollY;
+			if (page === "servers") { pageServers(); window.scrollTo(0, y); } else if (page === "live") { L.ip = null; updateLive(); } else if (page === "match") { route(true); }
+		});
+	});
+	return b;
+}
+function favSection() {
+	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
+	box.appendChild(h("h2", "Favourites"));
+	if (!D.favs.length) { box.appendChild(h("p", { cls: "empty", text: "No favourites yet. Press the star beside a server below to keep it here, grouped by game. A favourite is never blocked automatically." })); return box; }
+	D.favs.forEach(function (ip) { var g = gameOf(ip); if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(ip); });
+	order.sort().forEach(function (g) {
+		box.appendChild(h("h3", { cls: "favgame" }, g, h("small", groups[g].length + " server" + (groups[g].length === 1 ? "" : "s"))));
+		var t = table([["Server"], ["Where"], ["Host"], ["Matches", "num"], ["Rating", "num"], ["Ping ms", "num"], ["Last played"], ["", ""]]);
+		groups[g].map(function (ip) { return D.servers.filter(function (x) { return x.ip === ip; })[0] || D.favInfo[ip] || { ip: ip }; })
+			.sort(function (a, b) { return (b.rating == null ? -1 : b.rating) - (a.rating == null ? -1 : a.rating); })
+			.forEach(function (s) {
+				var td = h("td", { cls: "act" });
+				td.appendChild(star(s.ip));
+				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" }));
+				t.lastChild.appendChild(row([[s.ip], [place(s)], [s.org && s.org !== "-" ? s.org : ""], [s.matches == null ? "" : String(s.matches), "num"], [s.rating == null ? "" : String(s.rating), "num s " + cls(s.rating)],
+					[s.ping == null ? "" : fmt(s.ping, 1), "num"], [s.last ? when(s.last) : "Not played on yet"], td]));
+			});
+		box.appendChild(h("div", { cls: "tablewrap" }, t));
+	});
+	box.appendChild(h("p", { cls: "note", text: "Best rated first within each game. A favourite is never blocked automatically, and the lobby alert tells you when you land on one. The game still decides which server you get: a favourite cannot be requested." }));
+	return box;
+}
+
 // ---------- Live
 var L = {};
 function pageLive() {
@@ -262,8 +308,9 @@ function updateLive() {
 	 ["Missing updates", fmt(s.s_lost, 2), "%"], ["Freezes", String(s.s_frz), "over 100 ms"], ["Your PC send rate", fmt(s.uprate, 0), "per second"], ["Your PC pauses", String(s.s_hitch), "over 100 ms"]]
 		.forEach(function (f) { L.figs.appendChild(fig(f[0], f[1], f[2])); });
 	L.marks.textContent = ""; L.marks.appendChild(marksList(s.marks));
-	if (L.ip !== s.ip + isBlocked(s.ip)) {
-		L.ip = s.ip + isBlocked(s.ip); L.actions.textContent = "";
+	if (L.ip !== s.ip + isBlocked(s.ip) + isFav(s.ip)) {
+		L.ip = s.ip + isBlocked(s.ip) + isFav(s.ip); L.actions.textContent = "";
+		L.actions.appendChild(star(s.ip, true));
 		if (!isBlocked(s.ip)) L.actions.appendChild(act("Block this server", "block", s.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		if (D.info.qosmate !== false) L.actions.appendChild(act("Is my game prioritised?", "qos", null, { done: function (out) { toast(out.split("\n").slice(-1)[0]); } }));
 	}
@@ -314,6 +361,7 @@ function pageMatch(id) {
 		var a = h("div", { cls: "actions" });
 		if (isBlocked(m.ip)) a.appendChild(h("span", { cls: "tag", text: "This server is blocked" }));
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
+		a.appendChild(star(m.ip, true));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
 		view.appendChild(a);
@@ -464,6 +512,7 @@ function pageServers() {
 	view.appendChild(h("div", { cls: "stayform" }, inp, stays.length ? add : null, go));
 	view.appendChild(h("p", { cls: "note", text: "Type one place or several, separated by commas: cities, countries, or these areas: uk-ireland, western-europe, southern-europe, northern-europe, eastern-europe, europe, north-america, south-america, middle-east, asia, oceania. A city allows servers within about 150 km of it; a country or area allows any server located there. Several places make one pool, and the game picks among them, which keeps queues shorter than a single place." }));
 	}
+	view.appendChild(favSection());
 	view.appendChild(h("h2", "Datacentres, worst first"));
 	if (!D.dcs.length) view.appendChild(h("p", { cls: "empty", text: "No datacentres seen yet." }));
 	else {
@@ -504,6 +553,7 @@ function pageServers() {
 		var t2 = table([["Server"], ["Where"], ["Host"], ["Matches", "num"], ["Rating", "num"], ["Worst", "num"], ["Ping ms", "num"], ["", ""]]);
 		D.servers.forEach(function (s) {
 			var td = h("td", { cls: "act" });
+			td.appendChild(star(s.ip));
 			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" }));
 			t2.lastChild.appendChild(row([[s.ip], [place(s)], [s.org === "-" ? "" : s.org], [String(s.matches), "num"], [String(s.rating), "num s " + cls(s.rating)], [String(s.worst), "num"], [s.ping == null ? "n/a" : fmt(s.ping, 1), "num"], td]));
 		});
@@ -547,7 +597,7 @@ function downloadHistory() {
 	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
 }
 // ---------- share files: game names, places, ratings, ping hosts and thresholds as a text file to pass on
-var SHARE = [["games", "1", "Game names"], ["regions", "2", "Ping hosts for the regions table"], ["places", "3", "Places you stay on"], ["ratings", "4", "Server ratings"], ["settings", "5", "Thresholds"]];
+var SHARE = [["games", "1", "Game names"], ["favourites", "6", "Favourite servers"], ["places", "3", "Places you stay on"], ["ratings", "4", "Network ratings"], ["regions", "2", "Ping hosts for the regions table"], ["settings", "5", "Thresholds"], ["favplaces", "7", "Stay near those servers"]];
 function saveText(name, text) {
 	var a = document.createElement("a");
 	a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
@@ -562,30 +612,125 @@ function tick1(label, value, on) {
 }
 function ticked(list) { return list.filter(function (t) { return t.box.checked; }).map(function (t) { return t.box.value; }).join(""); }
 function send(p) { return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, out: "Could not reach the router." }; }); }
+var SETNAME = { min_down_pps: "A match needs this many packets a second down", min_up_pps: "And this many up", warn_score: "Warn below this rating", autoblock_score: "Automatic block below this rating",
+	autoblock_matches: "Automatic block after this many matches", lobby_margin_ms: "\"Far\" means this many ms slower", stay_km: "A city reaches this many km", block_days: "Blocks last this many days" };
+// what one line of a share file means, in words; for ratings also the facts the quick picks filter on
+function shareItem(sec, line) {
+	var f = line.split(sec === "settings" ? "=" : "|"), o = { line: line, text: line };
+	if (sec === "games") o.text = f[0] + ": server port" + (/[,-]/.test(f[1]) ? "s " : " ") + f[1] + (f[2] === "voice" ? ", voice chat" : "") + (f[3] ? ", only when hosted by " + f[3].split(",").join(" or ") : "");
+	else if (sec === "regions") o.text = f[1] + ", " + f[2] + ": " + f[6];
+	else if (sec === "places") o.text = f[0] + (f[4] && f[4] !== "-" ? " (anywhere in " + f[4].split(",").join(", ") + ")" : " (within " + f[3] + " km)");
+	else if (sec === "ratings") {
+		o.n = +f[1]; o.avg = +f[2]; o.city = f[3] && f[3] !== "-" ? f[3] : ""; o.cc = f[4] && f[4] !== "-" ? f[4] : "";
+		o.text = f[0] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[5] && f[5].trim() ? ", " + f[5].trim() : "") + ": rated " + o.avg + " over " + o.n + " match" + (o.n === 1 ? "" : "es");
+		o.on = o.n >= 2;
+	}
+	else if (sec === "favourites") {
+		// from the router this carries a tenth field: is it one of your favourites? It never goes into the file.
+		o.fav = f[9] !== "0"; o.line = f.slice(0, 9).join("|"); o.game = f[1] || "Other games";
+		o.avg = f[5] === "" ? null : +f[5]; o.n = +f[6] || 0; o.city = f[2] || ""; o.cc = f[3] && f[3] !== "-" ? f[3] : "";
+		o.text = (o.fav ? "\u2605 " : "") + o.game + ": " + f[0] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[4] && f[4].trim() ? ", " + f[4].trim() : "") + (o.avg == null ? "" : ": rated " + o.avg + " over " + o.n + " match" + (o.n === 1 ? "" : "es"));
+		o.on = o.fav;
+	}
+	else if (sec === "settings") { o.text = (SETNAME[f[0]] || f[0]) + ": " + f[1]; o.on = false; }
+	return o;
+}
+// the picker: one block per section, a tick per item, quick picks, a note, and a preview that is exactly the file
+var ONE = { games: "game name", favourites: "favourite server", regions: "ping host", places: "place", ratings: "network rating", settings: "threshold" };
+function sharePicker(text, pickBox, made) {
+	var head = [], notes = {}, items = {}, sec = "", total = 0;
+	text.split("\n").forEach(function (l) {
+		var m = /^\[([a-z]+)\]$/.exec(l);
+		if (m) { sec = m[1]; items[sec] = []; notes[sec] = []; return; }
+		if (!l.trim() || l === "matchwatch-share 1") return;
+		if (l.charAt(0) === "#") { if (sec) notes[sec].push(l); else head.push(l); return; }
+		if (sec) { items[sec].push(shareItem(sec, l)); total++; }
+	});
+	pickBox.textContent = ""; made.textContent = "";
+	if (!total) { pickBox.appendChild(h("p", { cls: "empty", text: "There is nothing to share yet." })); return; }
+
+	var note = h("input", { type: "text", maxlength: "200", placeholder: "For example: UK fibre, evenings, mostly Call of Duty", autocomplete: "off", "aria-label": "A note for whoever gets the file" });
+	var ta = h("textarea", { cls: "sharetext", rows: "12", readonly: "readonly", "aria-label": "The share file" });
+	var sum = h("p", { cls: "note" }), dl = h("button", { type: "button", cls: "solid", text: "Save as a file" }), cp = h("button", { type: "button", text: "Copy" });
+	var counts = {};
+	function build() {
+		var out = head.slice(), said = [], n = note.value.replace(/[^A-Za-z0-9 .,:()+&-]/g, " ").trim();
+		if (n) out.push("# Note: " + n);
+		out.push("matchwatch-share 1");
+		SHARE.forEach(function (x) {
+			var its = (items[x[0]] || []).filter(function (i) { return i.box.checked; });
+			if (counts[x[0]]) counts[x[0]].textContent = its.length + " of " + items[x[0]].length + " ticked";
+			if (!its.length) return;
+			out.push("", "[" + x[0] + "]"); out = out.concat(notes[x[0]], its.map(function (i) { return i.line; }));
+			said.push(its.length + " " + ONE[x[0]] + (its.length === 1 ? "" : "s"));
+		});
+		ta.value = said.length ? out.join("\n") + "\n" : "";
+		dl.disabled = cp.disabled = !said.length;
+		sum.textContent = said.length ? "In the file: " + said.join(", ") + ". The box above is everything in it. Read it through before you pass it on." : "Nothing is ticked, so there is no file yet.";
+	}
+	SHARE.forEach(function (x) {
+		var its = items[x[0]] || [];
+		if (!its.length) return;
+		var list = h("div", { cls: "picklist" });
+		its.forEach(function (i) { var t = tick1(i.text, "", i.on !== false); i.box = t.box; t.box.addEventListener("change", build); list.appendChild(t.el); });
+		var setAll = function (fn) { its.forEach(function (i) { i.box.checked = !!fn(i); }); build(); };
+		var all = h("button", { type: "button", text: "All" }), none = h("button", { type: "button", text: "None" });
+		all.addEventListener("click", function () { setAll(function () { return true; }); });
+		none.addEventListener("click", function () { setAll(function () { return false; }); });
+		counts[x[0]] = h("span", { cls: "pickcount" });
+		var inner = h("div"), blk = h("details", { cls: "pick" }, h("summary", { cls: "pickhead" }, h("b", x[2]), counts[x[0]]), inner);
+		inner.appendChild(h("div", { cls: "quick" }, all, none));
+		if ((x[0] === "ratings" || x[0] === "favourites") && its.length > 1) {
+			// quick picks: tick by several things at once; single ticks can still be changed after
+			var isFavs = x[0] === "favourites", sels = [];
+			var mk = function (label, opts, val) { var s = h("select", { "aria-label": label }); opts.forEach(function (o) { s.appendChild(h("option", { value: o[0], text: o[1] })); }); s.value = val; sels.push(s); return s; };
+			var uniq = function (key, pre, word) { var seen = []; its.forEach(function (i) { if (i[key] && seen.indexOf(i[key]) < 0) seen.push(i[key]); }); return seen.sort().map(function (v) { return [pre + v, word + v]; }); };
+			var qf = isFavs ? mk("Pick favourites or every server", [["fav", "My favourites"], ["", "Every server I have played on"]], its.some(function (i) { return i.fav; }) ? "fav" : "") : null;
+			var qg = isFavs ? mk("Pick by game", [["", "Any game"]].concat(uniq("game", "", "")), "") : null;
+			var qr = mk("Pick by rating", [["", "Any rating"], ["poor", "Poor: under 50"], ["fair", "Fair or worse: under 70"], ["good", "Good: 70 or more"], ["great", "Excellent: 85 or more"]], "");
+			var qp = mk("Pick by place", [["", "Anywhere"]].concat(uniq("cc", "c:", "Country: "), uniq("city", "t:", "City: ")), "");
+			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], isFavs ? "0" : "2");
+			var apply = function () {
+				setAll(function (i) {
+					var r = qr.value, p = qp.value;
+					if (qf && qf.value === "fav" && !i.fav) return false;
+					if (qg && qg.value && i.game !== qg.value) return false;
+					if (r && (i.avg == null || r === "poor" && i.avg >= 50 || r === "fair" && i.avg >= 70 || r === "good" && i.avg < 70 || r === "great" && i.avg < 85)) return false;
+					if (p && (p.charAt(0) === "c" ? i.cc !== p.slice(2) : i.city !== p.slice(2))) return false;
+					return i.n >= +qn.value;
+				});
+			};
+			var q = h("div", { cls: "quick" }, h("span", "Tick only: "));
+			sels.forEach(function (s) { s.addEventListener("change", apply); q.appendChild(s); });
+			inner.appendChild(q);
+		}
+		inner.appendChild(list);
+		pickBox.appendChild(blk);
+	});
+	note.addEventListener("input", build);
+	pickBox.appendChild(h("div", { cls: "pick" }, h("div", { cls: "pickhead" }, h("b", "A note for whoever gets it"), h("span", { cls: "pickcount", text: "optional" })), h("div", { cls: "stayform" }, note),
+		h("p", { cls: "note", text: "Ratings mean most with some context: roughly where you are and what you play. Only write what you are happy for others to read." })));
+	dl.addEventListener("click", function () { saveText("matchwatch-share.txt", ta.value); });
+	cp.addEventListener("click", function () { ta.select(); try { document.execCommand("copy"); toast("Copied."); } catch (e) { toast("Select the text and copy it by hand.", true); } });
+	made.appendChild(ta); made.appendChild(h("div", { cls: "actions" }, dl, cp)); made.appendChild(sum);
+	build();
+}
 function shareSection() {
 	var box = h("div");
-	box.appendChild(h("h2", "Share with other players"));
-	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
+	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, your favourite servers for each game, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. You pick what goes in, item by item. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
 
-	// ---- make a file
+	// ---- make a file: the router lists everything that could be shared, and every item gets its own tick
 	box.appendChild(h("h3", "Make a share file"));
-	var outTicks = h("div", { cls: "ticks" }), outList = [], made = h("div");
-	var mk = h("button", { type: "button", cls: "solid", text: "Make a share file" });
-	box.appendChild(outTicks); box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(made);
+	var pickBox = h("div"), made = h("div");
+	var mk = h("button", { type: "button", cls: "solid", text: "Choose what to share" });
+	box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(pickBox); box.appendChild(made);
 	mk.addEventListener("click", function () {
-		var want = ticked(outList);
-		if (!want) { toast("Tick at least one thing to share.", true); return; }
 		mk.disabled = true;
-		send({ action: "shareexport", arg: want }).then(function (j) {
-			mk.disabled = false; made.textContent = "";
+		send({ action: "shareexport", arg: "123458" }).then(function (j) {
+			mk.disabled = false;
 			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
-			var text = String(j.out || "") + "\n";
-			var ta = h("textarea", { cls: "sharetext", rows: "10", readonly: "readonly", "aria-label": "The share file" }); ta.value = text;
-			var dl = h("button", { type: "button", text: "Save as a file" }), cp = h("button", { type: "button", text: "Copy" });
-			dl.addEventListener("click", function () { saveText("matchwatch-share.txt", text); });
-			cp.addEventListener("click", function () { ta.select(); try { document.execCommand("copy"); toast("Copied."); } catch (e) { toast("Select the text and copy it by hand.", true); } });
-			made.appendChild(ta); made.appendChild(h("div", { cls: "actions" }, dl, cp));
-			made.appendChild(h("p", { cls: "note", text: "This is everything in the file. Read it through before you pass it on." }));
+			mk.textContent = "Start again";
+			sharePicker(String(j.out || ""), pickBox, made);
 		});
 	});
 
@@ -612,7 +757,7 @@ function shareSection() {
 			var inList = [], rest = [];
 			String(j.out || "").split("\n").forEach(function (line) {
 				var m = /^([a-z]+): (.*)$/.exec(line), s = m && SHARE.filter(function (x) { return x[0] === m[1]; })[0];
-				if (s) { var t = tick1(m[2], s[1], s[0] !== "places" && s[0] !== "settings"); inList.push(t); found.appendChild(t.el); }
+				if (s) { var t = tick1(m[2], s[1], s[0] !== "places" && s[0] !== "settings" && s[0] !== "favplaces"); inList.push(t); found.appendChild(t.el); }
 				else if (line) rest.push(line);
 			});
 			if (rest.length) found.appendChild(h("pre", rest.join("\n")));
@@ -638,14 +783,6 @@ function shareSection() {
 		get("shared.json", function (s) {
 			if (page !== "tools") return;
 			s = s || { have: {}, ratings: [] };
-			var hv = s.have || {};
-			if (!outList.length) {
-				SHARE.forEach(function (x) {
-					var n = x[0] === "settings" ? 1 : (hv[x[0]] || 0);
-					var t = tick1(x[2] + (x[0] === "settings" ? "" : " (" + n + ")"), x[1], n > 0 && x[0] !== "settings");
-					t.box.disabled = !n; outList.push(t); outTicks.appendChild(t.el);
-				});
-			}
 			got.textContent = "";
 			var rs = (s.ratings || []).slice().sort(function (a, b) { return a.avg - b.avg; });
 			if (rs.length) {
@@ -665,25 +802,36 @@ function shareSection() {
 			if (s.undo) btns.appendChild(act("Undo the last import", "shareundo", null, { confirm: "Confirm: put things back", done: after }));
 			if (rs.length) btns.appendChild(act("Remove shared ratings", "shareforget", null, { danger: true, confirm: "Confirm: remove them", done: after }));
 			if (btns.childNodes.length) got.appendChild(btns);
-			if (s.undo) got.appendChild(h("p", { cls: "note", text: "Undo puts your game names, places, ping hosts, shared ratings and thresholds back to how they were just before the last import." }));
+			if (s.undo) got.appendChild(h("p", { cls: "note", text: "Undo puts your game names, favourites, places, ping hosts, shared ratings and thresholds back to how they were just before the last import." }));
 		});
 	}
 	shared();
 	return box;
 }
 
+var TOOLTABS = [["checks", "Checks"], ["games", "Games"], ["share", "Share"], ["data", "Data and settings"]];
+// one row on the Tools page: what the tool does on the left, its control and result on the right
+function tool(title, desc) {
+	var body = h("div", { cls: "toolbody" }), i;
+	for (i = 2; i < arguments.length; i++) if (arguments[i]) body.appendChild(arguments[i]);
+	return h("section", { cls: "tool" }, h("div", { cls: "toolhead" }, h("h3", title), desc ? h("p", { cls: "note", text: desc }) : null), body);
+}
+function outBox() { var p = h("pre"); p.style.display = "none"; p.show = function (text) { p.textContent = text; p.style.display = "block"; }; return p; }
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
 	var i = D.info, hasQos = i.qosmate !== false;
+	// four short pages instead of one long one. The tab is part of the address, so it can be linked and reloaded.
+	var tab = RO ? "data" : (TOOLTABS.some(function (t) { return t[0] === pageArg; }) ? pageArg : "checks");
 	if (!RO) {
-		var out = h("pre"); out.style.display = "none";
-		var show = function (text) { out.textContent = text; out.style.display = "block"; };
-		view.appendChild(h("h2", "Checks"));
-		view.appendChild(h("div", { cls: "actions" }, act("Check MatchWatch is working", "doctor", null, { solid: true, done: show }), hasQos ? act("Is my game prioritised?", "qos", null, { done: show }) : null));
-		view.appendChild(h("p", { cls: "note", text: "Neither check changes anything. The first confirms MatchWatch can see your device's traffic, and takes five seconds." + (hasQos ? " The second looks at whether your game's traffic is in QoSmate's top priority queue, and needs a match in progress." : "") }));
-		view.appendChild(out);
+		var seg = h("div", { cls: "seg" });
+		TOOLTABS.forEach(function (t) { var a = h("a", { href: "#/tools/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
+		view.appendChild(seg);
+	}
+	if (!RO && tab === "checks") {
+		var docOut = outBox();
+		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic. Takes five seconds and changes nothing.",
+			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
 
-		view.appendChild(h("h2", "Test your line"));
 		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
 		lineBtn.addEventListener("click", function () {
 			lineOut.textContent = "";
@@ -694,16 +842,19 @@ function pageTools() {
 				lineOut.appendChild(h("div", { cls: "tablewrap" }, t));
 			});
 		});
-		view.appendChild(h("div", { cls: "actions" }, lineBtn));
-		view.appendChild(h("p", { cls: "note", text: "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your own connection is steady tonight. It changes nothing." }));
-		view.appendChild(lineOut);
+		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
+			h("div", { cls: "actions" }, lineBtn), lineOut));
 
-		view.appendChild(h("h2", "Phone alerts"));
-		view.appendChild(h("div", { cls: "actions" }, act("Send a test alert", "testalert", null, {})));
-		view.appendChild(h("p", { cls: "note", text: i.notify ? "Sends one message to your phone, to prove the address in Settings works." : "No phone alerts address is set yet. Add one under Alerts on the Settings tab, then use this to prove it works." }));
+		if (hasQos) {
+			var qosOut = outBox();
+			view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.",
+				h("div", { cls: "actions" }, act("Check priority", "qos", null, { done: qosOut.show })), qosOut));
+		}
+
+		view.appendChild(tool("Phone alerts", i.notify ? "Sends one message to your phone, to prove the address in Settings works." : "No phone alerts address is set yet. Add one under Alerts on the Settings tab, then use this to prove it works.",
+			h("div", { cls: "actions" }, act("Send a test alert", "testalert", null, {}))));
 
 		if (D.servers.length) {
-			view.appendChild(h("h2", "Route to a server"));
 			var sel = h("select", { "aria-label": "Server to trace" });
 			D.servers.slice().sort(function (a, b) { return b.last - a.last; }).forEach(function (s) { sel.appendChild(h("option", { value: s.ip, text: s.ip + (place(s) ? ", " + place(s) : "") + " (rated " + s.rating + ")" })); });
 			var trOut = h("div"), trBtn = h("button", { type: "button", text: "Trace the route now" });
@@ -712,17 +863,18 @@ function pageTools() {
 				job(trBtn, "trace", sel.value, "trace.json", function (r) {
 					if (!r.hops || !r.hops.length) { trOut.appendChild(h("p", { cls: "note", text: "No hop answered." })); return; }
 					var ol = h("ol", { cls: "hops" }); r.hops.forEach(function (x) { ol.appendChild(h("li", x)); }); trOut.appendChild(ol);
-					trOut.appendChild(h("p", { cls: "note", text: "Each line is one stop between your router and the server, with how long it took to answer. A star means that stop did not answer, which is common and not a fault. Compare with the route in a match report to see whether the path has changed." }));
+					trOut.appendChild(h("p", { cls: "note", text: "Each line is one stop between your router and the server, with how long it took to answer. A star means that stop did not answer, which is common and not a fault." }));
 				});
 			});
-			view.appendChild(h("div", { cls: "stayform" }, sel, trBtn));
-			view.appendChild(trOut);
+			view.appendChild(tool("Route to a server", "Traces the path from your router to a server you have played on. Compare it with the route in a match report to see whether the path has changed.",
+				h("div", { cls: "stayform" }, sel, trBtn), trOut));
 		}
 
+	}
+	if (!RO && tab === "games") {
 		var ports = [], names = {};
 		D.hist.forEach(function (m) { if (m.port && ports.indexOf(m.port) < 0) { ports.push(m.port); names[m.port] = m.game || ""; } });
 		if (ports.length) {
-			view.appendChild(h("h2", "Name a game"));
 			var gsel = h("select", { "aria-label": "Game to name" });
 			ports.forEach(function (p) { gsel.appendChild(h("option", { value: String(p), text: (names[p] || "Unnamed game") + " (server port " + p + ")" })); });
 			var ginp = h("input", { type: "text", maxlength: "40", placeholder: "Name to show", autocomplete: "off", "aria-label": "New name for the game" });
@@ -737,14 +889,11 @@ function pageTools() {
 					if (j.ok) { gsel.options[gsel.selectedIndex].textContent = v + " (server port " + gsel.value + ")"; ginp.value = ""; refresh(true); }
 				});
 			});
-			view.appendChild(h("div", { cls: "stayform" }, gsel, ginp, gbtn));
-			view.appendChild(h("p", { cls: "note", text: "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it." }));
+			view.appendChild(tool("Name a game", "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it.",
+				h("div", { cls: "stayform" }, gsel, ginp, gbtn)));
 		}
-
-		view.appendChild(h("h2", "Skipped as voice chat"));
 		var skBox = h("div");
-		view.appendChild(skBox);
-		view.appendChild(h("p", { cls: "note", text: "Voice chat is not a match, so MatchWatch does not record it, and can never block it. It tells voice chat from games by the server's port, and a few games use ports in the same range. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on." }));
+		view.appendChild(tool("Skipped as voice chat", "Voice chat is not a match, so MatchWatch does not record it and can never block it. A few games use the same ports. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on.", skBox));
 		get("skipped.json", function (sk) {
 			if (page !== "tools") return;
 			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
@@ -758,26 +907,26 @@ function pageTools() {
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});
 
-		view.appendChild(shareSection());
-
-		view.appendChild(h("h2", "Your history"));
+	}
+	if (!RO && tab === "share") view.appendChild(shareSection());
+	if (!RO && tab === "data") {
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
-		view.appendChild(h("div", { cls: "actions" }, dl, act("Clear all history", "clearhistory", null, { danger: true, confirm: "Confirm: delete every recorded match", done: function (o) { toast(o); setTimeout(function () { refresh(true); if (page === "tools") pageTools(); }, 2500); } })));
-		view.appendChild(h("p", { cls: "note", text: D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. Clearing deletes every match and the server ratings built from them, and cannot be undone. Blocks, the places you stay on and your settings are kept. It restarts MatchWatch, so do it between matches." }));
-
-		view.appendChild(h("h2", "Recent activity"));
-		var logOut = h("pre"); logOut.style.display = "none";
-		view.appendChild(h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.textContent = o || "Nothing logged yet."; logOut.style.display = "block"; } })));
-		view.appendChild(h("p", { cls: "note", text: "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent." }));
-		view.appendChild(logOut);
+		view.appendChild(tool("Match history", D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. The download is a CSV file that opens in any spreadsheet.", h("div", { cls: "actions" }, dl)));
+		view.appendChild(tool("Clear all history", "Deletes every match and the server ratings built from them. It cannot be undone. Blocks, favourites, the places you stay on and your settings are kept. It restarts MatchWatch, so do it between matches.",
+			h("div", { cls: "actions" }, act("Clear all history", "clearhistory", null, { danger: true, confirm: "Confirm: delete every recorded match", done: function (o) { toast(o); setTimeout(function () { refresh(true); if (page === "tools") pageTools(); }, 2500); } }))));
+		var logOut = outBox();
+		view.appendChild(tool("Recent activity", "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent.",
+			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
 		if (hasQos) {
 			view.appendChild(h("h2", "QoSmate priority"));
-			view.appendChild(h("p", { cls: "note", text: "If \"Is my game prioritised?\" says your game is not reaching the top queue, this adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as EF: top priority in every QoSmate mode. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes these two out again." }));
-			view.appendChild(h("div", { cls: "actions" }, act("Prioritise my game traffic", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: show }), act("Remove those rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: show })));
+			var fixOut = outBox();
+			view.appendChild(tool("Prioritise my game traffic", "Use this if \"Is my game prioritised?\" says your game is not reaching the top queue. It adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as top priority. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes the two rules out again.",
+				h("div", { cls: "actions" }, act("Add the rules", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: fixOut.show }), act("Remove the rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: fixOut.show })), fixOut));
 		}
 	}
+	if (tab !== "data") return;
 	view.appendChild(h("h2", "Settings in use"));
 	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"],
 		["Blocks last", (i.block_days || 14) + " days"], ["Automatic blocking", i.autoblock ? "On" : "Off"], ["Phone notifications", i.notify ? "On" : "Off"], ["Your PC counts towards scores", i.pc_score === false ? "No" : "Yes"], ["Server location lookups", i.geo === false ? "Off" : "On"],
@@ -808,18 +957,19 @@ function tick() { get("status.json", function (st) { D.st = st; setState(); upda
 function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep, textarea.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
-	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
+	var left = 6, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
 	get("blocklist.json", function (x) { D.blocks = x || []; done(); });
 	get("info.json", function (x) { D.info = x || {}; done(); });
+	get("favourites.json", function (x) { setFavs(x); done(); });
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", function () { updateLive(); if (page === "match" && pageMatch.repaint) pageMatch.repaint(); });
-var first = 5, boot = function () { if (--first === 0) route(); };
+var first = 6, boot = function () { if (--first === 0) route(); };
 get("history.json", function (x) { D.hist = x || []; boot(); }); get("servers.json", function (x) { D.servers = x || []; boot(); }); get("datacentres.json", function (x) { D.dcs = x || []; boot(); });
-get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.json", function (x) { D.info = x || {}; boot(); });
+get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.json", function (x) { D.info = x || {}; boot(); }); get("favourites.json", function (x) { setFavs(x); boot(); });
 get("regions.json", function (x) { D.regions = x || []; });
 tick(); setInterval(tick, 1000); setInterval(function () { setDark(); refresh(false); }, 15000);
 };

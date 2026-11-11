@@ -38,6 +38,7 @@ NF >= 39 {
 	ip = $5
 	if (!(ip in S_n)) { order[++ns] = ip; S_n[ip] = 0 }
 	S_n[ip]++; S_last[ip] = $1; S_cc[ip] = $7; S_city[ip] = $8; S_org[ip] = $9
+	S_port[ip] = $6; S_asn[ip] = $10; if (known($40) && known($41)) { S_lat[ip] = $40; S_lon[ip] = $41 }
 	S_tick[ip] += $11; S_secs[ip] += $2
 	if ($22 != "-") { S_ping[ip] += $22; S_pingn[ip]++ }
 	if ($37 == 1) { S_rn[ip]++; S_rsum[ip] += $36 }
@@ -70,6 +71,7 @@ function drating(k) { return (D_rn[k] > 0) ? int(D_rsum[k] / D_rn[k] + 0.5) : in
 # Distances are compared squared, and cosine is a short series, because BusyBox awk is often built without maths functions.
 function cosd(deg,   x, x2) { x = deg * 0.0174533; x2 = x * x; return 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720 }
 function km2(lat1, lon1, lat2, lon2,   dx, dy) { dy = (lat2 - lat1) * 111.2; dx = (lon2 - lon1) * 111.2 * cosd((lat1 + lat2) / 2); return dx * dx + dy * dy }
+function sc(s) { gsub(/[^A-Za-z0-9 .:,()&+-]/, " ", s); return (s == "-" ? "" : s) }
 function known(x) { return (x != "" && x != "-") }
 # is this point inside the place being kept to? "" when stay mode is off or the point is unknown
 # The pool is a list of places. Each is a circle (lat, lon, km) or a set of countries ("GB,IE").
@@ -114,6 +116,20 @@ function region_of(lat, lon,   i, best, bd, d) {
 function srating(ip) { return (S_rn[ip] > 0) ? int(S_rsum[ip] / S_rn[ip] + 0.5) : int(S_all[ip] / S_n[ip] + 0.5) }
 
 END {
+	# servers for a share file: server|game|city|country|host|rating|matches|latitude|longitude, favourites only
+	# (ARG = favourites) or every server with a tenth field saying whether it is a favourite (ARG = allservers)
+	if (MODE == "share_servers") {
+		while ((getline l < FAVF) > 0) { split(l, ff, "\t"); if (ff[1] != "") { FV[ff[1]] = 1; fo[++nf] = ff[1]; FG[ff[1]] = ff[2]; FC[ff[1]] = ff[3]; FCC[ff[1]] = ff[4]; FO[ff[1]] = ff[5] } }
+		close(FAVF)
+		for (i = 1; i <= ns; i++) {
+			ip = order[i]; if (ARG != "allservers" && !(ip in FV)) continue
+			printf "%s|%s|%s|%s|%s|%s|%d|%s|%s%s\n", ip, sc(game_of(S_port[ip], S_org[ip] " " S_asn[ip])), sc(S_city[ip]), (S_cc[ip] ~ /^[A-Z][A-Z]$/ ? S_cc[ip] : "-"), sc(S_org[ip]),
+				(S_rn[ip] ? sprintf("%.0f", S_rsum[ip] / S_rn[ip]) : ""), S_rn[ip], ((ip in S_lat) ? S_lat[ip] : "-"), ((ip in S_lon) ? S_lon[ip] : "-"), (ARG == "allservers" ? "|" ((ip in FV) ? 1 : 0) : "")
+			shown[ip] = 1
+		}
+		for (i = 1; i <= nf; i++) { ip = fo[i]; if (ip in shown) continue; printf "%s|%s|%s|%s|%s||0|-|-%s\n", ip, sc(FG[ip]), sc(FC[ip]), (FCC[ip] ~ /^[A-Z][A-Z]$/ ? FCC[ip] : "-"), sc(FO[ip]), (ARG == "allservers" ? "|1" : "") }
+		exit
+	}
 	if (MODE == "hist_txt") {
 		lim = 15; only = ""
 		if (ARG ~ /^[0-9]+$/) lim = ARG + 0; else if (ARG != "") { only = ARG; lim = 100000 }

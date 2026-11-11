@@ -18,7 +18,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.14.0"
+VERSION="0.15.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -293,6 +293,7 @@ export_json() {
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
 	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" > "$RUN/www/info.json"
 	regions_export
+	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	share_json > "$RUN/www/shared.json.tmp" && mv -f "$RUN/www/shared.json.tmp" "$RUN/www/shared.json"
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -369,7 +370,11 @@ cmd_block() { # ip [days|auto] [reason]
 	local ip="$1" days="${2:-$BLOCK_DAYS}" reason="${3:-manual}" now exp
 	is_target "$ip" || die "usage: matchwatch block <server-ip or block like 1.2.3.0/24> [days, 0 = until unblocked] [reason]"
 	is_private "$ip" && die "refusing to block a private address"
-	if [ "$days" = auto ]; then days="$BLOCK_DAYS"; reason="auto: $reason"; fi
+	if [ "$days" = auto ]; then
+		# a favourite is never blocked automatically
+		if is_fav "$ip"; then logger -t matchwatch "not blocking $ip automatically: it is one of your favourites" 2>/dev/null; return 0; fi
+		days="$BLOCK_DAYS"; reason="auto: $reason"
+	fi
 	case "$days" in ""|*[!0-9]*) die "days must be a number" ;; esac
 	nft_ready || exit 1
 	mkdir -p "$DATA"; touch "$DATA/blocklist"
@@ -452,6 +457,7 @@ EOF
 	msg="Heading to $loc${org:+ ($org)}"
 	[ -n "$ping" ] && msg="$msg, about $ping ms"
 	msg="$msg."
+	is_fav "$ip" && msg="$msg One of your favourites."
 	if [ "$srv_n" -ge 1 ] 2>/dev/null && [ -n "$srv_rating" ]; then
 		msg="$msg This server rated $srv_rating/100 over $srv_n match(es)."
 		[ "$srv_rating" -lt "$WARN_SCORE" ] && { verdict=bad; msg="$msg That is poor: consider backing out."; }
@@ -638,20 +644,22 @@ cmd_unblock_dc() { # number
 
 # ---- share files: things worth passing to other people, as one plain text file
 # Sections: games (labels), regions (ping hosts), places (a pool to stay on), ratings (per server
-# network), settings (thresholds). A file is only ever made or read when asked; nothing is uploaded.
+# network), settings (thresholds), favourites (servers, each with its game).
+# Two more names are not sections: favplaces (on import: stay near the file's favourite servers) and
+# allservers (on export: every server as a candidate, for the dashboard's picker). A file is only ever made or read when asked; nothing is uploaded.
 # Export leaves out everything about this home: no device, LAN or ISP address, and no match times.
 # Import trusts nothing: every line is checked and bad ones are dropped. Ratings from someone else are
 # shown and mentioned by the lobby alert, and never block anything by themselves.
-SHARE_ALL="games regions places ratings settings"
+SHARE_ALL="games regions places ratings settings favourites"
 cnt() { [ -f "$1" ] || { echo 0; return; }; awk '!/^#/ && NF { n++ } END { print n + 0 }' "$1"; }
 joined() { awk '{ s = s (NR > 1 ? ", " : "") $0 } END { printf "%s", s }'; }
-share_sections() { # "all", nothing, section names, or digits (1 games 2 regions 3 places 4 ratings 5 settings) -> names
+share_sections() { # "all", nothing, names, or digits (1 games 2 regions 3 places 4 ratings 5 settings 6 favourites 7 favplaces 8 allservers) -> names
 	local s="$*" out="" c
 	case "$s" in
 		""|all) echo "$SHARE_ALL" ;;
 		*[!0-9]*)
 			for c in $s; do
-				case " $SHARE_ALL " in *" $c "*) out="$out $c" ;; *) echo "matchwatch: there is no section called '$c'. Sections: $SHARE_ALL" >&2; return 1 ;; esac
+				case " $SHARE_ALL favplaces allservers " in *" $c "*) out="$out $c" ;; *) echo "matchwatch: there is no section called '$c'. Sections: $SHARE_ALL" >&2; return 1 ;; esac
 			done
 			echo $out ;;
 		*)
@@ -660,16 +668,26 @@ share_sections() { # "all", nothing, section names, or digits (1 games 2 regions
 			case "$s" in *3*) out="$out places" ;; esac
 			case "$s" in *4*) out="$out ratings" ;; esac
 			case "$s" in *5*) out="$out settings" ;; esac
+			case "$s" in *6*) out="$out favourites" ;; esac
+			case "$s" in *7*) out="$out favplaces" ;; esac
+			case "$s" in *8*) out="$out allservers" ;; esac
 			[ -n "$out" ] || { echo "matchwatch: choose at least one thing to share" >&2; return 1; }
 			echo $out ;;
 	esac
 }
-share_ratings() { # one line per server network with two or more counted matches: network|matches|average|city|country|host
+share_ratings() { # one line per server network with a counted match: network|matches|average|city|country|host
 	touch "$DATA/sessions.tsv"
 	awk -F'\t' '
 		function clean(s) { gsub(/[^A-Za-z0-9 .,()&-]/, " ", s); return s }
 		NF >= 39 && $37 == 1 { split($5, o, "."); p = o[1] "." o[2] "." o[3] ".0/24"; if (!(p in n)) ord[++k] = p; n[p]++; s[p] += $36; c[p] = $8; cc[p] = $7; g[p] = $9 }
-		END { for (i = 1; i <= k; i++) { p = ord[i]; if (n[p] >= 2) printf "%s|%d|%.0f|%s|%s|%s\n", p, n[p], s[p] / n[p], clean(c[p]), (cc[p] ~ /^[A-Z][A-Z]$/ ? cc[p] : "-"), clean(g[p]) } }' "$DATA/sessions.tsv"
+		END { for (i = 1; i <= k; i++) { p = ord[i]; printf "%s|%d|%.0f|%s|%s|%s\n", p, n[p], s[p] / n[p], clean(c[p]), (cc[p] ~ /^[A-Z][A-Z]$/ ? cc[p] : "-"), clean(g[p]) } }' "$DATA/sessions.tsv"
+}
+share_servers() { # favourites | allservers -> server lines with the game each was played for
+	touch "$DATA/sessions.tsv" "$DATA/favourites"
+	awk -v MODE=share_servers -v ARG="$1" -v FAVF="$DATA/favourites" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv"
+}
+share_favplaces() { # dir -> pool lines for the cities the file's favourite servers are in
+	awk -F'\t' -v k="${STAY_KM:-150}" '$3 != "" && $6 != "-" && $7 != "-" { nm = $3 ($4 != "-" ? ", " $4 : ""); if (!(nm in s)) { s[nm] = 1; printf "%s\t%s\t%s\t%s\t-\n", nm, $6, $7, k } }' "$1/favourites"
 }
 cmd_share_export() { # [sections] -> the share file, on standard output
 	local want sec
@@ -678,8 +696,9 @@ cmd_share_export() { # [sections] -> the share file, on standard output
 	echo "# It holds nothing about the home it came from: no device, LAN or ISP address, and no match times."
 	echo "matchwatch-share 1"
 	for sec in $want; do
+		[ "$sec" = favplaces ] && continue
 		echo
-		echo "[$sec]"
+		if [ "$sec" = allservers ]; then echo "[favourites]"; else echo "[$sec]"; fi
 		case "$sec" in
 			games) echo "# name|server ports|kind (empty = a game, voice = voice chat)|words in the name of the company hosting the servers"
 				[ -f "$DATA/games.local" ] && awk -F'|' '/^#/ || NF < 2 { next } { printf "%s|%s|%s|%s\n", $1, $2, $3, $4 }' "$DATA/games.local" ;;
@@ -690,6 +709,8 @@ cmd_share_export() { # [sections] -> the share file, on standard output
 			ratings) echo "# server network|matches|average rating out of 100|city|country code|host"
 				echo "# These are one home's experience. They mean most to people nearby on a similar connection."
 				share_ratings ;;
+			favourites|allservers) echo "# server|game|city|country code|host|rating out of 100|matches|latitude|longitude"
+				share_servers "$sec" ;;
 			settings) echo "# the thresholds this copy of MatchWatch runs with"
 				printf 'min_down_pps=%s\nmin_up_pps=%s\nwarn_score=%s\nautoblock_score=%s\nautoblock_matches=%s\nlobby_margin_ms=%s\nstay_km=%s\nblock_days=%s\n' \
 					"$MIN_DOWN_PPS" "$MIN_UP_PPS" "$WARN_SCORE" "$AUTOBLOCK_SCORE" "$AUTOBLOCK_MATCHES" "$LOBBY_MARGIN_MS" "$STAY_KM" "$BLOCK_DAYS" ;;
@@ -726,7 +747,7 @@ share_load() { # file dir : check every line. The good ones land in dir/<section
 	}
 	function keep(sec, line, max) { if (N[sec] >= max) { bad("more " sec " than one file may hold"); return } N[sec]++; print line > (OUT "/" sec) }
 	BEGIN {
-		ALL = " games regions places ratings settings "
+		ALL = " games regions places ratings settings favourites "
 		R["min_down_pps"] = "1 1000"; R["min_up_pps"] = "1 1000"; R["warn_score"] = "0 100"; R["autoblock_score"] = "0 100"
 		R["autoblock_matches"] = "1 50"; R["lobby_margin_ms"] = "0 500"; R["stay_km"] = "10 2000"; R["block_days"] = "1 365"
 	}
@@ -768,6 +789,15 @@ share_load() { # file dir : check every line. The good ones land in dir/<section
 			|| !whole(f[2], 1, 9999) || !whole(f[3], 0, 100) || f[4] !~ /^[A-Za-z0-9 .,()&-]*$/ || f[5] !~ /^([A-Z][A-Z]|-)$/ || f[6] !~ /^[A-Za-z0-9 .,()&-]*$/) { bad("a rating line that cannot be read"); next }
 		keep("ratings", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t" f[5] "\t" f[6], 500); next
 	}
+	sec == "favourites" {
+		n = split($0, f, "|"); k = split(f[1], o, ".")
+		if (n != 9 || f[1] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || k != 4 || !whole(o[1], 1, 223) || !whole(o[2], 0, 255) || !whole(o[3], 0, 255) || !whole(o[4], 0, 255) \
+			|| o[1] == 10 || o[1] == 127 || (o[1] == 172 && o[2] >= 16 && o[2] <= 31) || (o[1] == 192 && o[2] == 168) || (o[1] == 169 && o[2] == 254) \
+			|| f[2] !~ /^[A-Za-z0-9 .:,()&+-]*$/ || length(f[2]) > 80 || f[3] !~ /^[A-Za-z0-9 .,()&-]*$/ || f[4] !~ /^([A-Z][A-Z]|-)$/ || f[5] !~ /^[A-Za-z0-9 .:,()&+-]*$/ \
+			|| (f[6] != "" && !whole(f[6], 0, 100)) || !whole(f[7], 0, 9999)) { bad("a favourite server line that cannot be read"); next }
+		la = (num(f[8]) && f[8] >= -90 && f[8] <= 90 && num(f[9]) && f[9] >= -180 && f[9] <= 180) ? f[8] "\t" f[9] : "-\t-"
+		keep("favourites", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t" f[5] "\t" la "\t" f[6] "\t" f[7], 200); next
+	}
 	sec == "settings" {
 		n = split($0, f, "=")
 		if (n != 2 || !(f[1] in R)) { bad("a setting that share files may not change"); next }
@@ -784,7 +814,7 @@ share_load() { # file dir : check every line. The good ones land in dir/<section
 }
 share_count() { awk -F'\t' -v s="$2" '$1 == "ok" && $2 == s { n = $3 } END { print n + 0 }' "$1/summary"; }
 share_describe() { # dir -> what the file holds and what importing each part would do, one line per section
-	local d="$1" sec n more
+	local d="$1" sec n more p
 	for sec in $SHARE_ALL; do
 		n="$(share_count "$d" "$sec")"
 		[ "$n" -ge 1 ] || continue
@@ -794,6 +824,9 @@ share_describe() { # dir -> what the file holds and what importing each part wou
 			regions) echo "regions: $n ping host(s) for the regions table: $(cut -d'|' -f2 "$d/regions" | head -n 8 | joined)$more." ;;
 			places) echo "places: $n place(s) to stay on: $(cut -f1 "$d/places" | head -n 8 | joined)$more. Importing these turns staying on, so game servers elsewhere are blocked." ;;
 			ratings) echo "ratings: $n server rating(s) from someone else. They are shown to you and mentioned by the lobby alert, and never block anything by themselves." ;;
+			favourites) echo "favourites: $n favourite server(s) for $(cut -f2 "$d/favourites" | awk '{ g = ($0 == "" ? "other games" : $0); if (!(g in c)) o[++k] = g; c[g]++ } END { for (i = 1; i <= k; i++) printf "%s%s (%d)", (i > 1 ? ", " : ""), o[i], c[o[i]] }'). They join your favourites under those games: never blocked automatically, and the lobby alert tells you when you land on one."
+				p="$(share_favplaces "$d" | cut -f1 | head -n 8 | joined)"
+				[ -n "$p" ] && echo "favplaces: Stay near those servers: adds $p to the places you stay on and turns staying on, so game servers elsewhere are blocked." ;;
 			settings) echo "settings: $n setting(s): $(joined < "$d/settings"). Importing these restarts MatchWatch, so do it between matches." ;;
 		esac
 	done
@@ -817,17 +850,19 @@ share_set() { # file of key=value lines -> into the settings, then restart so th
 	[ -x /etc/init.d/matchwatch ] && ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 &
 }
 share_keep() { # name : remember this data file as it is now, so the import can be undone
+	[ -f "$DATA/share.undo/$1" ] || [ -f "$DATA/share.undo/$1.none" ] && return 0   # already kept by an earlier section of this import
 	if [ -f "$DATA/$1" ]; then cp "$DATA/$1" "$DATA/share.undo/$1"; else : > "$DATA/share.undo/$1.none"; fi
 }
 cmd_share_import() { # file [sections] : take in the chosen sections of a share file
-	local f="$1" d="$RUN/share.$$" want sec n line p k v
+	local f="$1" d="$RUN/share.$$" want sec src n line p k v
 	shift
 	want="$(share_sections "$@")" || return 1
 	mkdir -p "$RUN" "$DATA"
 	share_load "$f" "$d" || { rm -rf "$d"; return 1; }
 	rm -rf "$DATA/share.undo"; mkdir -p "$DATA/share.undo"
 	for sec in $want; do
-		[ -s "$d/$sec" ] || continue
+		src="$sec"; [ "$sec" = favplaces ] && src=favourites
+		[ -s "$d/$src" ] || continue
 		n=0
 		case "$sec" in
 			games) share_keep games.local; touch "$DATA/games.local"
@@ -857,6 +892,19 @@ cmd_share_import() { # file [sections] : take in the chosen sections of a share 
 				n="$(cnt "$d/ratings")"
 				awk -F'\t' 'NR == FNR { seen[$1] = 1; print; next } !($1 in seen)' "$d/ratings" "$DATA/ratings.shared" | head -n 1000 > "$DATA/ratings.shared.tmp" && mv -f "$DATA/ratings.shared.tmp" "$DATA/ratings.shared"
 				echo "Took in $n server rating(s). They are listed on the Tools page." ;;
+			favourites) share_keep favourites; touch "$DATA/favourites"
+				n="$(awk -F'\t' -v OFS='\t' 'FILENAME == ARGV[1] { have[$1] = 1; c++; next } !($1 in have) && c < 200 { have[$1] = 1; c++; print $1, $2, $3, $4, $5 }' "$DATA/favourites" "$d/favourites" | tee -a "$DATA/favourites" | awk 'END { print NR + 0 }')"
+				echo "Added $n favourite server(s). They are on the Servers page, grouped by game." ;;
+			favplaces) share_favplaces "$d" > "$d/favplaces"
+				[ -s "$d/favplaces" ] || { echo "The favourite servers in the file carry no locations, so there is nowhere to stay near."; continue; }
+				share_keep stay; touch "$DATA/stay" "$DATA/sessions.tsv"
+				while IFS= read -r line; do
+					p="$(echo "$line" | cut -f1)"
+					awk -F'\t' -v p="$p" '$1 == p { f = 1 } END { exit !f }' "$DATA/stay" && continue
+					echo "$line" >> "$DATA/stay"; n=$((n + 1))
+				done < "$d/favplaces"
+				stay_apply >/dev/null
+				echo "Added $n place(s) near those servers. Staying on: $(stay_names)." ;;
 			settings) : > "$DATA/share.undo/settings"
 				while IFS="=" read -r k v; do eval "p=\$$(echo "$k" | tr a-z A-Z)"; echo "$k=$p" >> "$DATA/share.undo/settings"; n=$((n + 1)); done < "$d/settings"
 				share_set "$d/settings"
@@ -871,7 +919,7 @@ cmd_share_import() { # file [sections] : take in the chosen sections of a share 
 cmd_share_undo() { # put back what the last import changed
 	local u="$DATA/share.undo" f
 	[ -d "$u" ] || { echo "matchwatch: there is no import to undo" >&2; return 1; }
-	for f in games.local regions.local stay ratings.shared; do
+	for f in games.local regions.local stay ratings.shared favourites; do
 		if [ -f "$u/$f" ]; then cp "$u/$f" "$DATA/$f"
 		elif [ -f "$u/$f.none" ]; then rm -f "$DATA/$f"
 		else continue; fi
@@ -880,7 +928,7 @@ cmd_share_undo() { # put back what the last import changed
 	[ -f "$u/settings" ] && share_set "$u/settings"
 	rm -rf "$u"
 	export_json
-	echo "The last import is undone. Game names, places, ping hosts, shared ratings and settings are as they were before it."
+	echo "The last import is undone. Game names, places, ping hosts, shared ratings, favourites and settings are as they were before it."
 }
 cmd_share_forget() {
 	rm -f "$DATA/ratings.shared"
@@ -911,9 +959,34 @@ matchwatch share import <file> [sections]    take in a share file, or only some 
 matchwatch share undo                        put back what the last import changed
 matchwatch share forget                      remove ratings other people shared with you
 Sections: $SHARE_ALL (default: all)
+On import, favplaces also stays near the file's favourite servers.
 EOF
 		;;
 	esac
+}
+
+# ---- favourites: servers worth finding again. The dashboard groups them by game.
+# A favourite is never blocked automatically, and the lobby alert says when you land on one.
+is_fav() { [ -f "$DATA/favourites" ] && awk -v ip="$1" '$1 == ip { f = 1 } END { exit !f }' "$DATA/favourites"; }
+cmd_fav() { # add <ip> | remove <ip> | (nothing = list)
+	local ip="$2"
+	mkdir -p "$DATA"; touch "$DATA/favourites"
+	case "$1" in
+		""|list) if [ -s "$DATA/favourites" ]; then cat "$DATA/favourites"; else echo "No favourites yet. Add one with: matchwatch fav add <server-ip>"; fi; return 0 ;;
+		add|remove) ;;
+		*) die "usage: matchwatch fav [add|remove <server-ip>]" ;;
+	esac
+	is_ipv4 "$ip" || die "that is not a server address"
+	is_private "$ip" && die "that is not a game server"
+	awk -v ip="$ip" '$1 != ip' "$DATA/favourites" > "$DATA/favourites.tmp"; mv -f "$DATA/favourites.tmp" "$DATA/favourites"
+	if [ "$1" = add ]; then
+		[ "$(cnt "$DATA/favourites")" -lt 200 ] || die "that is the most favourites MatchWatch keeps (200). Remove one first."
+		echo "$ip" >> "$DATA/favourites"
+		echo "Added $ip to your favourites."
+	else
+		echo "Removed $ip from your favourites."
+	fi
+	export_json
 }
 
 # ---- tools for the dashboard's Tools page
@@ -1045,6 +1118,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		sharecheck|shareimport) f="$RUN/share.in.$$"; mkdir -p "$RUN"; head -c 70000 > "$f"
 			if [ "$action" = sharecheck ]; then ( cmd_share_check "$f" ); else ( cmd_share_import "$f" $arg ); fi; rc=$?
 			rm -f "$f"; return $rc ;;
+		fav) cmd_fav add "$arg" ;;
+		unfav) cmd_fav remove "$arg" ;;
 		shareundo) cmd_share_undo ;;
 		shareforget) cmd_share_forget ;;
 		*) die "unknown action" ;;
@@ -1438,6 +1513,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch block <ip> [days] block a server (default $BLOCK_DAYS days, 0 = until unblocked)
   matchwatch unblock <ip>|all  remove a block
   matchwatch blocklist         show blocked servers
+  matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch share             make, check or import a share file: game labels, ping hosts,
@@ -1473,6 +1549,7 @@ case "$1" in
 	block) shift; cmd_block "$@" ;;
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
+	fav) cmd_fav "$2" "$3" ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
 	share) shift; cmd_share "$@" ;;
@@ -2318,6 +2395,7 @@ NF >= 39 {
 	ip = $5
 	if (!(ip in S_n)) { order[++ns] = ip; S_n[ip] = 0 }
 	S_n[ip]++; S_last[ip] = $1; S_cc[ip] = $7; S_city[ip] = $8; S_org[ip] = $9
+	S_port[ip] = $6; S_asn[ip] = $10; if (known($40) && known($41)) { S_lat[ip] = $40; S_lon[ip] = $41 }
 	S_tick[ip] += $11; S_secs[ip] += $2
 	if ($22 != "-") { S_ping[ip] += $22; S_pingn[ip]++ }
 	if ($37 == 1) { S_rn[ip]++; S_rsum[ip] += $36 }
@@ -2350,6 +2428,7 @@ function drating(k) { return (D_rn[k] > 0) ? int(D_rsum[k] / D_rn[k] + 0.5) : in
 # Distances are compared squared, and cosine is a short series, because BusyBox awk is often built without maths functions.
 function cosd(deg,   x, x2) { x = deg * 0.0174533; x2 = x * x; return 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720 }
 function km2(lat1, lon1, lat2, lon2,   dx, dy) { dy = (lat2 - lat1) * 111.2; dx = (lon2 - lon1) * 111.2 * cosd((lat1 + lat2) / 2); return dx * dx + dy * dy }
+function sc(s) { gsub(/[^A-Za-z0-9 .:,()&+-]/, " ", s); return (s == "-" ? "" : s) }
 function known(x) { return (x != "" && x != "-") }
 # is this point inside the place being kept to? "" when stay mode is off or the point is unknown
 # The pool is a list of places. Each is a circle (lat, lon, km) or a set of countries ("GB,IE").
@@ -2394,6 +2473,20 @@ function region_of(lat, lon,   i, best, bd, d) {
 function srating(ip) { return (S_rn[ip] > 0) ? int(S_rsum[ip] / S_rn[ip] + 0.5) : int(S_all[ip] / S_n[ip] + 0.5) }
 
 END {
+	# servers for a share file: server|game|city|country|host|rating|matches|latitude|longitude, favourites only
+	# (ARG = favourites) or every server with a tenth field saying whether it is a favourite (ARG = allservers)
+	if (MODE == "share_servers") {
+		while ((getline l < FAVF) > 0) { split(l, ff, "\t"); if (ff[1] != "") { FV[ff[1]] = 1; fo[++nf] = ff[1]; FG[ff[1]] = ff[2]; FC[ff[1]] = ff[3]; FCC[ff[1]] = ff[4]; FO[ff[1]] = ff[5] } }
+		close(FAVF)
+		for (i = 1; i <= ns; i++) {
+			ip = order[i]; if (ARG != "allservers" && !(ip in FV)) continue
+			printf "%s|%s|%s|%s|%s|%s|%d|%s|%s%s\n", ip, sc(game_of(S_port[ip], S_org[ip] " " S_asn[ip])), sc(S_city[ip]), (S_cc[ip] ~ /^[A-Z][A-Z]$/ ? S_cc[ip] : "-"), sc(S_org[ip]),
+				(S_rn[ip] ? sprintf("%.0f", S_rsum[ip] / S_rn[ip]) : ""), S_rn[ip], ((ip in S_lat) ? S_lat[ip] : "-"), ((ip in S_lon) ? S_lon[ip] : "-"), (ARG == "allservers" ? "|" ((ip in FV) ? 1 : 0) : "")
+			shown[ip] = 1
+		}
+		for (i = 1; i <= nf; i++) { ip = fo[i]; if (ip in shown) continue; printf "%s|%s|%s|%s|%s||0|-|-%s\n", ip, sc(FG[ip]), sc(FC[ip]), (FCC[ip] ~ /^[A-Z][A-Z]$/ ? FCC[ip] : "-"), sc(FO[ip]), (ARG == "allservers" ? "|1" : "") }
+		exit
+	}
 	if (MODE == "hist_txt") {
 		lim = 15; only = ""
 		if (ARG ~ /^[0-9]+$/) lim = ARG + 0; else if (ARG != "") { only = ARG; lim = 100000 }
@@ -2833,13 +2926,13 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_9'
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
 #   read   checks, the line test, a route trace, the activity log, making a share file, and "I felt that"
-#   write  anything that blocks, stays, measures, alerts, renames, clears, imports, or changes QoSmate or the device
+#   write  anything that blocks, stays, favourites, measures, alerts, renames, clears, imports, or changes QoSmate or the device
 # The work itself is done by /usr/bin/matchwatch _action, which validates every argument.
 
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory sharecheck shareimport shareundo shareforget"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory sharecheck shareimport shareundo shareforget fav unfav"
 
 reply() { # ok(0|1) text
 	json_init
@@ -2961,7 +3054,7 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [] };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {} };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 
 // ---------- small helpers
@@ -3146,6 +3239,52 @@ function namePrompt(redraw) {
 	return box;
 }
 
+// ---------- favourites: servers you want to find again, grouped by the game played on them
+function setFavs(x) { D.favs = []; D.favInfo = {}; (x || []).forEach(function (o) { if (typeof o === "string") o = { ip: o }; D.favs.push(o.ip); D.favInfo[o.ip] = o; }); }
+function isFav(ip) { return D.favs.indexOf(ip) >= 0; }
+function gameOf(ip) { var m = D.hist.filter(function (x) { return x.ip === ip; })[0], f = D.favInfo[ip]; return (m && m.game) || (f && f.game) || "Other games"; }
+// a star that adds or removes one server. wordy: a full button with its label, for pages about one server
+function star(ip, wordy) {
+	var on = isFav(ip);
+	if (RO) return on ? h("span", { cls: "star on", title: "One of your favourites", text: "★" }) : document.createElement("span");
+	var say = on ? "Remove from favourites" : "Add to favourites";
+	var b = h("button", { type: "button", cls: wordy ? "" : "star" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", title: say, "aria-label": say + ": " + ip, text: (on ? "★" : "☆") + (wordy ? (on ? " Favourite" : " Add to favourites") : "") });
+	b.addEventListener("click", function (e) {
+		e.stopPropagation(); b.disabled = true;
+		api(on ? "unfav" : "fav", ip).then(function (j) {
+			b.disabled = false;
+			if (!j.ok) { toast(j.out || j.error || "That did not work.", true); return; }
+			if (on) D.favs = D.favs.filter(function (x) { return x !== ip; }); else { D.favs.push(ip); D.favInfo[ip] = D.favInfo[ip] || { ip: ip }; }
+			toast(j.out || "Done.");
+			var y = window.scrollY;
+			if (page === "servers") { pageServers(); window.scrollTo(0, y); } else if (page === "live") { L.ip = null; updateLive(); } else if (page === "match") { route(true); }
+		});
+	});
+	return b;
+}
+function favSection() {
+	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
+	box.appendChild(h("h2", "Favourites"));
+	if (!D.favs.length) { box.appendChild(h("p", { cls: "empty", text: "No favourites yet. Press the star beside a server below to keep it here, grouped by game. A favourite is never blocked automatically." })); return box; }
+	D.favs.forEach(function (ip) { var g = gameOf(ip); if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(ip); });
+	order.sort().forEach(function (g) {
+		box.appendChild(h("h3", { cls: "favgame" }, g, h("small", groups[g].length + " server" + (groups[g].length === 1 ? "" : "s"))));
+		var t = table([["Server"], ["Where"], ["Host"], ["Matches", "num"], ["Rating", "num"], ["Ping ms", "num"], ["Last played"], ["", ""]]);
+		groups[g].map(function (ip) { return D.servers.filter(function (x) { return x.ip === ip; })[0] || D.favInfo[ip] || { ip: ip }; })
+			.sort(function (a, b) { return (b.rating == null ? -1 : b.rating) - (a.rating == null ? -1 : a.rating); })
+			.forEach(function (s) {
+				var td = h("td", { cls: "act" });
+				td.appendChild(star(s.ip));
+				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" }));
+				t.lastChild.appendChild(row([[s.ip], [place(s)], [s.org && s.org !== "-" ? s.org : ""], [s.matches == null ? "" : String(s.matches), "num"], [s.rating == null ? "" : String(s.rating), "num s " + cls(s.rating)],
+					[s.ping == null ? "" : fmt(s.ping, 1), "num"], [s.last ? when(s.last) : "Not played on yet"], td]));
+			});
+		box.appendChild(h("div", { cls: "tablewrap" }, t));
+	});
+	box.appendChild(h("p", { cls: "note", text: "Best rated first within each game. A favourite is never blocked automatically, and the lobby alert tells you when you land on one. The game still decides which server you get: a favourite cannot be requested." }));
+	return box;
+}
+
 // ---------- Live
 var L = {};
 function pageLive() {
@@ -3203,8 +3342,9 @@ function updateLive() {
 	 ["Missing updates", fmt(s.s_lost, 2), "%"], ["Freezes", String(s.s_frz), "over 100 ms"], ["Your PC send rate", fmt(s.uprate, 0), "per second"], ["Your PC pauses", String(s.s_hitch), "over 100 ms"]]
 		.forEach(function (f) { L.figs.appendChild(fig(f[0], f[1], f[2])); });
 	L.marks.textContent = ""; L.marks.appendChild(marksList(s.marks));
-	if (L.ip !== s.ip + isBlocked(s.ip)) {
-		L.ip = s.ip + isBlocked(s.ip); L.actions.textContent = "";
+	if (L.ip !== s.ip + isBlocked(s.ip) + isFav(s.ip)) {
+		L.ip = s.ip + isBlocked(s.ip) + isFav(s.ip); L.actions.textContent = "";
+		L.actions.appendChild(star(s.ip, true));
 		if (!isBlocked(s.ip)) L.actions.appendChild(act("Block this server", "block", s.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		if (D.info.qosmate !== false) L.actions.appendChild(act("Is my game prioritised?", "qos", null, { done: function (out) { toast(out.split("\n").slice(-1)[0]); } }));
 	}
@@ -3255,6 +3395,7 @@ function pageMatch(id) {
 		var a = h("div", { cls: "actions" });
 		if (isBlocked(m.ip)) a.appendChild(h("span", { cls: "tag", text: "This server is blocked" }));
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
+		a.appendChild(star(m.ip, true));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
 		view.appendChild(a);
@@ -3405,6 +3546,7 @@ function pageServers() {
 	view.appendChild(h("div", { cls: "stayform" }, inp, stays.length ? add : null, go));
 	view.appendChild(h("p", { cls: "note", text: "Type one place or several, separated by commas: cities, countries, or these areas: uk-ireland, western-europe, southern-europe, northern-europe, eastern-europe, europe, north-america, south-america, middle-east, asia, oceania. A city allows servers within about 150 km of it; a country or area allows any server located there. Several places make one pool, and the game picks among them, which keeps queues shorter than a single place." }));
 	}
+	view.appendChild(favSection());
 	view.appendChild(h("h2", "Datacentres, worst first"));
 	if (!D.dcs.length) view.appendChild(h("p", { cls: "empty", text: "No datacentres seen yet." }));
 	else {
@@ -3445,6 +3587,7 @@ function pageServers() {
 		var t2 = table([["Server"], ["Where"], ["Host"], ["Matches", "num"], ["Rating", "num"], ["Worst", "num"], ["Ping ms", "num"], ["", ""]]);
 		D.servers.forEach(function (s) {
 			var td = h("td", { cls: "act" });
+			td.appendChild(star(s.ip));
 			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" }));
 			t2.lastChild.appendChild(row([[s.ip], [place(s)], [s.org === "-" ? "" : s.org], [String(s.matches), "num"], [String(s.rating), "num s " + cls(s.rating)], [String(s.worst), "num"], [s.ping == null ? "n/a" : fmt(s.ping, 1), "num"], td]));
 		});
@@ -3488,7 +3631,7 @@ function downloadHistory() {
 	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
 }
 // ---------- share files: game names, places, ratings, ping hosts and thresholds as a text file to pass on
-var SHARE = [["games", "1", "Game names"], ["regions", "2", "Ping hosts for the regions table"], ["places", "3", "Places you stay on"], ["ratings", "4", "Server ratings"], ["settings", "5", "Thresholds"]];
+var SHARE = [["games", "1", "Game names"], ["favourites", "6", "Favourite servers"], ["places", "3", "Places you stay on"], ["ratings", "4", "Network ratings"], ["regions", "2", "Ping hosts for the regions table"], ["settings", "5", "Thresholds"], ["favplaces", "7", "Stay near those servers"]];
 function saveText(name, text) {
 	var a = document.createElement("a");
 	a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
@@ -3503,30 +3646,125 @@ function tick1(label, value, on) {
 }
 function ticked(list) { return list.filter(function (t) { return t.box.checked; }).map(function (t) { return t.box.value; }).join(""); }
 function send(p) { return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, out: "Could not reach the router." }; }); }
+var SETNAME = { min_down_pps: "A match needs this many packets a second down", min_up_pps: "And this many up", warn_score: "Warn below this rating", autoblock_score: "Automatic block below this rating",
+	autoblock_matches: "Automatic block after this many matches", lobby_margin_ms: "\"Far\" means this many ms slower", stay_km: "A city reaches this many km", block_days: "Blocks last this many days" };
+// what one line of a share file means, in words; for ratings also the facts the quick picks filter on
+function shareItem(sec, line) {
+	var f = line.split(sec === "settings" ? "=" : "|"), o = { line: line, text: line };
+	if (sec === "games") o.text = f[0] + ": server port" + (/[,-]/.test(f[1]) ? "s " : " ") + f[1] + (f[2] === "voice" ? ", voice chat" : "") + (f[3] ? ", only when hosted by " + f[3].split(",").join(" or ") : "");
+	else if (sec === "regions") o.text = f[1] + ", " + f[2] + ": " + f[6];
+	else if (sec === "places") o.text = f[0] + (f[4] && f[4] !== "-" ? " (anywhere in " + f[4].split(",").join(", ") + ")" : " (within " + f[3] + " km)");
+	else if (sec === "ratings") {
+		o.n = +f[1]; o.avg = +f[2]; o.city = f[3] && f[3] !== "-" ? f[3] : ""; o.cc = f[4] && f[4] !== "-" ? f[4] : "";
+		o.text = f[0] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[5] && f[5].trim() ? ", " + f[5].trim() : "") + ": rated " + o.avg + " over " + o.n + " match" + (o.n === 1 ? "" : "es");
+		o.on = o.n >= 2;
+	}
+	else if (sec === "favourites") {
+		// from the router this carries a tenth field: is it one of your favourites? It never goes into the file.
+		o.fav = f[9] !== "0"; o.line = f.slice(0, 9).join("|"); o.game = f[1] || "Other games";
+		o.avg = f[5] === "" ? null : +f[5]; o.n = +f[6] || 0; o.city = f[2] || ""; o.cc = f[3] && f[3] !== "-" ? f[3] : "";
+		o.text = (o.fav ? "\u2605 " : "") + o.game + ": " + f[0] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[4] && f[4].trim() ? ", " + f[4].trim() : "") + (o.avg == null ? "" : ": rated " + o.avg + " over " + o.n + " match" + (o.n === 1 ? "" : "es"));
+		o.on = o.fav;
+	}
+	else if (sec === "settings") { o.text = (SETNAME[f[0]] || f[0]) + ": " + f[1]; o.on = false; }
+	return o;
+}
+// the picker: one block per section, a tick per item, quick picks, a note, and a preview that is exactly the file
+var ONE = { games: "game name", favourites: "favourite server", regions: "ping host", places: "place", ratings: "network rating", settings: "threshold" };
+function sharePicker(text, pickBox, made) {
+	var head = [], notes = {}, items = {}, sec = "", total = 0;
+	text.split("\n").forEach(function (l) {
+		var m = /^\[([a-z]+)\]$/.exec(l);
+		if (m) { sec = m[1]; items[sec] = []; notes[sec] = []; return; }
+		if (!l.trim() || l === "matchwatch-share 1") return;
+		if (l.charAt(0) === "#") { if (sec) notes[sec].push(l); else head.push(l); return; }
+		if (sec) { items[sec].push(shareItem(sec, l)); total++; }
+	});
+	pickBox.textContent = ""; made.textContent = "";
+	if (!total) { pickBox.appendChild(h("p", { cls: "empty", text: "There is nothing to share yet." })); return; }
+
+	var note = h("input", { type: "text", maxlength: "200", placeholder: "For example: UK fibre, evenings, mostly Call of Duty", autocomplete: "off", "aria-label": "A note for whoever gets the file" });
+	var ta = h("textarea", { cls: "sharetext", rows: "12", readonly: "readonly", "aria-label": "The share file" });
+	var sum = h("p", { cls: "note" }), dl = h("button", { type: "button", cls: "solid", text: "Save as a file" }), cp = h("button", { type: "button", text: "Copy" });
+	var counts = {};
+	function build() {
+		var out = head.slice(), said = [], n = note.value.replace(/[^A-Za-z0-9 .,:()+&-]/g, " ").trim();
+		if (n) out.push("# Note: " + n);
+		out.push("matchwatch-share 1");
+		SHARE.forEach(function (x) {
+			var its = (items[x[0]] || []).filter(function (i) { return i.box.checked; });
+			if (counts[x[0]]) counts[x[0]].textContent = its.length + " of " + items[x[0]].length + " ticked";
+			if (!its.length) return;
+			out.push("", "[" + x[0] + "]"); out = out.concat(notes[x[0]], its.map(function (i) { return i.line; }));
+			said.push(its.length + " " + ONE[x[0]] + (its.length === 1 ? "" : "s"));
+		});
+		ta.value = said.length ? out.join("\n") + "\n" : "";
+		dl.disabled = cp.disabled = !said.length;
+		sum.textContent = said.length ? "In the file: " + said.join(", ") + ". The box above is everything in it. Read it through before you pass it on." : "Nothing is ticked, so there is no file yet.";
+	}
+	SHARE.forEach(function (x) {
+		var its = items[x[0]] || [];
+		if (!its.length) return;
+		var list = h("div", { cls: "picklist" });
+		its.forEach(function (i) { var t = tick1(i.text, "", i.on !== false); i.box = t.box; t.box.addEventListener("change", build); list.appendChild(t.el); });
+		var setAll = function (fn) { its.forEach(function (i) { i.box.checked = !!fn(i); }); build(); };
+		var all = h("button", { type: "button", text: "All" }), none = h("button", { type: "button", text: "None" });
+		all.addEventListener("click", function () { setAll(function () { return true; }); });
+		none.addEventListener("click", function () { setAll(function () { return false; }); });
+		counts[x[0]] = h("span", { cls: "pickcount" });
+		var inner = h("div"), blk = h("details", { cls: "pick" }, h("summary", { cls: "pickhead" }, h("b", x[2]), counts[x[0]]), inner);
+		inner.appendChild(h("div", { cls: "quick" }, all, none));
+		if ((x[0] === "ratings" || x[0] === "favourites") && its.length > 1) {
+			// quick picks: tick by several things at once; single ticks can still be changed after
+			var isFavs = x[0] === "favourites", sels = [];
+			var mk = function (label, opts, val) { var s = h("select", { "aria-label": label }); opts.forEach(function (o) { s.appendChild(h("option", { value: o[0], text: o[1] })); }); s.value = val; sels.push(s); return s; };
+			var uniq = function (key, pre, word) { var seen = []; its.forEach(function (i) { if (i[key] && seen.indexOf(i[key]) < 0) seen.push(i[key]); }); return seen.sort().map(function (v) { return [pre + v, word + v]; }); };
+			var qf = isFavs ? mk("Pick favourites or every server", [["fav", "My favourites"], ["", "Every server I have played on"]], its.some(function (i) { return i.fav; }) ? "fav" : "") : null;
+			var qg = isFavs ? mk("Pick by game", [["", "Any game"]].concat(uniq("game", "", "")), "") : null;
+			var qr = mk("Pick by rating", [["", "Any rating"], ["poor", "Poor: under 50"], ["fair", "Fair or worse: under 70"], ["good", "Good: 70 or more"], ["great", "Excellent: 85 or more"]], "");
+			var qp = mk("Pick by place", [["", "Anywhere"]].concat(uniq("cc", "c:", "Country: "), uniq("city", "t:", "City: ")), "");
+			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], isFavs ? "0" : "2");
+			var apply = function () {
+				setAll(function (i) {
+					var r = qr.value, p = qp.value;
+					if (qf && qf.value === "fav" && !i.fav) return false;
+					if (qg && qg.value && i.game !== qg.value) return false;
+					if (r && (i.avg == null || r === "poor" && i.avg >= 50 || r === "fair" && i.avg >= 70 || r === "good" && i.avg < 70 || r === "great" && i.avg < 85)) return false;
+					if (p && (p.charAt(0) === "c" ? i.cc !== p.slice(2) : i.city !== p.slice(2))) return false;
+					return i.n >= +qn.value;
+				});
+			};
+			var q = h("div", { cls: "quick" }, h("span", "Tick only: "));
+			sels.forEach(function (s) { s.addEventListener("change", apply); q.appendChild(s); });
+			inner.appendChild(q);
+		}
+		inner.appendChild(list);
+		pickBox.appendChild(blk);
+	});
+	note.addEventListener("input", build);
+	pickBox.appendChild(h("div", { cls: "pick" }, h("div", { cls: "pickhead" }, h("b", "A note for whoever gets it"), h("span", { cls: "pickcount", text: "optional" })), h("div", { cls: "stayform" }, note),
+		h("p", { cls: "note", text: "Ratings mean most with some context: roughly where you are and what you play. Only write what you are happy for others to read." })));
+	dl.addEventListener("click", function () { saveText("matchwatch-share.txt", ta.value); });
+	cp.addEventListener("click", function () { ta.select(); try { document.execCommand("copy"); toast("Copied."); } catch (e) { toast("Select the text and copy it by hand.", true); } });
+	made.appendChild(ta); made.appendChild(h("div", { cls: "actions" }, dl, cp)); made.appendChild(sum);
+	build();
+}
 function shareSection() {
 	var box = h("div");
-	box.appendChild(h("h2", "Share with other players"));
-	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
+	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, your favourite servers for each game, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. You pick what goes in, item by item. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
 
-	// ---- make a file
+	// ---- make a file: the router lists everything that could be shared, and every item gets its own tick
 	box.appendChild(h("h3", "Make a share file"));
-	var outTicks = h("div", { cls: "ticks" }), outList = [], made = h("div");
-	var mk = h("button", { type: "button", cls: "solid", text: "Make a share file" });
-	box.appendChild(outTicks); box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(made);
+	var pickBox = h("div"), made = h("div");
+	var mk = h("button", { type: "button", cls: "solid", text: "Choose what to share" });
+	box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(pickBox); box.appendChild(made);
 	mk.addEventListener("click", function () {
-		var want = ticked(outList);
-		if (!want) { toast("Tick at least one thing to share.", true); return; }
 		mk.disabled = true;
-		send({ action: "shareexport", arg: want }).then(function (j) {
-			mk.disabled = false; made.textContent = "";
+		send({ action: "shareexport", arg: "123458" }).then(function (j) {
+			mk.disabled = false;
 			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
-			var text = String(j.out || "") + "\n";
-			var ta = h("textarea", { cls: "sharetext", rows: "10", readonly: "readonly", "aria-label": "The share file" }); ta.value = text;
-			var dl = h("button", { type: "button", text: "Save as a file" }), cp = h("button", { type: "button", text: "Copy" });
-			dl.addEventListener("click", function () { saveText("matchwatch-share.txt", text); });
-			cp.addEventListener("click", function () { ta.select(); try { document.execCommand("copy"); toast("Copied."); } catch (e) { toast("Select the text and copy it by hand.", true); } });
-			made.appendChild(ta); made.appendChild(h("div", { cls: "actions" }, dl, cp));
-			made.appendChild(h("p", { cls: "note", text: "This is everything in the file. Read it through before you pass it on." }));
+			mk.textContent = "Start again";
+			sharePicker(String(j.out || ""), pickBox, made);
 		});
 	});
 
@@ -3553,7 +3791,7 @@ function shareSection() {
 			var inList = [], rest = [];
 			String(j.out || "").split("\n").forEach(function (line) {
 				var m = /^([a-z]+): (.*)$/.exec(line), s = m && SHARE.filter(function (x) { return x[0] === m[1]; })[0];
-				if (s) { var t = tick1(m[2], s[1], s[0] !== "places" && s[0] !== "settings"); inList.push(t); found.appendChild(t.el); }
+				if (s) { var t = tick1(m[2], s[1], s[0] !== "places" && s[0] !== "settings" && s[0] !== "favplaces"); inList.push(t); found.appendChild(t.el); }
 				else if (line) rest.push(line);
 			});
 			if (rest.length) found.appendChild(h("pre", rest.join("\n")));
@@ -3579,14 +3817,6 @@ function shareSection() {
 		get("shared.json", function (s) {
 			if (page !== "tools") return;
 			s = s || { have: {}, ratings: [] };
-			var hv = s.have || {};
-			if (!outList.length) {
-				SHARE.forEach(function (x) {
-					var n = x[0] === "settings" ? 1 : (hv[x[0]] || 0);
-					var t = tick1(x[2] + (x[0] === "settings" ? "" : " (" + n + ")"), x[1], n > 0 && x[0] !== "settings");
-					t.box.disabled = !n; outList.push(t); outTicks.appendChild(t.el);
-				});
-			}
 			got.textContent = "";
 			var rs = (s.ratings || []).slice().sort(function (a, b) { return a.avg - b.avg; });
 			if (rs.length) {
@@ -3606,25 +3836,36 @@ function shareSection() {
 			if (s.undo) btns.appendChild(act("Undo the last import", "shareundo", null, { confirm: "Confirm: put things back", done: after }));
 			if (rs.length) btns.appendChild(act("Remove shared ratings", "shareforget", null, { danger: true, confirm: "Confirm: remove them", done: after }));
 			if (btns.childNodes.length) got.appendChild(btns);
-			if (s.undo) got.appendChild(h("p", { cls: "note", text: "Undo puts your game names, places, ping hosts, shared ratings and thresholds back to how they were just before the last import." }));
+			if (s.undo) got.appendChild(h("p", { cls: "note", text: "Undo puts your game names, favourites, places, ping hosts, shared ratings and thresholds back to how they were just before the last import." }));
 		});
 	}
 	shared();
 	return box;
 }
 
+var TOOLTABS = [["checks", "Checks"], ["games", "Games"], ["share", "Share"], ["data", "Data and settings"]];
+// one row on the Tools page: what the tool does on the left, its control and result on the right
+function tool(title, desc) {
+	var body = h("div", { cls: "toolbody" }), i;
+	for (i = 2; i < arguments.length; i++) if (arguments[i]) body.appendChild(arguments[i]);
+	return h("section", { cls: "tool" }, h("div", { cls: "toolhead" }, h("h3", title), desc ? h("p", { cls: "note", text: desc }) : null), body);
+}
+function outBox() { var p = h("pre"); p.style.display = "none"; p.show = function (text) { p.textContent = text; p.style.display = "block"; }; return p; }
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
 	var i = D.info, hasQos = i.qosmate !== false;
+	// four short pages instead of one long one. The tab is part of the address, so it can be linked and reloaded.
+	var tab = RO ? "data" : (TOOLTABS.some(function (t) { return t[0] === pageArg; }) ? pageArg : "checks");
 	if (!RO) {
-		var out = h("pre"); out.style.display = "none";
-		var show = function (text) { out.textContent = text; out.style.display = "block"; };
-		view.appendChild(h("h2", "Checks"));
-		view.appendChild(h("div", { cls: "actions" }, act("Check MatchWatch is working", "doctor", null, { solid: true, done: show }), hasQos ? act("Is my game prioritised?", "qos", null, { done: show }) : null));
-		view.appendChild(h("p", { cls: "note", text: "Neither check changes anything. The first confirms MatchWatch can see your device's traffic, and takes five seconds." + (hasQos ? " The second looks at whether your game's traffic is in QoSmate's top priority queue, and needs a match in progress." : "") }));
-		view.appendChild(out);
+		var seg = h("div", { cls: "seg" });
+		TOOLTABS.forEach(function (t) { var a = h("a", { href: "#/tools/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
+		view.appendChild(seg);
+	}
+	if (!RO && tab === "checks") {
+		var docOut = outBox();
+		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic. Takes five seconds and changes nothing.",
+			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
 
-		view.appendChild(h("h2", "Test your line"));
 		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
 		lineBtn.addEventListener("click", function () {
 			lineOut.textContent = "";
@@ -3635,16 +3876,19 @@ function pageTools() {
 				lineOut.appendChild(h("div", { cls: "tablewrap" }, t));
 			});
 		});
-		view.appendChild(h("div", { cls: "actions" }, lineBtn));
-		view.appendChild(h("p", { cls: "note", text: "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your own connection is steady tonight. It changes nothing." }));
-		view.appendChild(lineOut);
+		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
+			h("div", { cls: "actions" }, lineBtn), lineOut));
 
-		view.appendChild(h("h2", "Phone alerts"));
-		view.appendChild(h("div", { cls: "actions" }, act("Send a test alert", "testalert", null, {})));
-		view.appendChild(h("p", { cls: "note", text: i.notify ? "Sends one message to your phone, to prove the address in Settings works." : "No phone alerts address is set yet. Add one under Alerts on the Settings tab, then use this to prove it works." }));
+		if (hasQos) {
+			var qosOut = outBox();
+			view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.",
+				h("div", { cls: "actions" }, act("Check priority", "qos", null, { done: qosOut.show })), qosOut));
+		}
+
+		view.appendChild(tool("Phone alerts", i.notify ? "Sends one message to your phone, to prove the address in Settings works." : "No phone alerts address is set yet. Add one under Alerts on the Settings tab, then use this to prove it works.",
+			h("div", { cls: "actions" }, act("Send a test alert", "testalert", null, {}))));
 
 		if (D.servers.length) {
-			view.appendChild(h("h2", "Route to a server"));
 			var sel = h("select", { "aria-label": "Server to trace" });
 			D.servers.slice().sort(function (a, b) { return b.last - a.last; }).forEach(function (s) { sel.appendChild(h("option", { value: s.ip, text: s.ip + (place(s) ? ", " + place(s) : "") + " (rated " + s.rating + ")" })); });
 			var trOut = h("div"), trBtn = h("button", { type: "button", text: "Trace the route now" });
@@ -3653,17 +3897,18 @@ function pageTools() {
 				job(trBtn, "trace", sel.value, "trace.json", function (r) {
 					if (!r.hops || !r.hops.length) { trOut.appendChild(h("p", { cls: "note", text: "No hop answered." })); return; }
 					var ol = h("ol", { cls: "hops" }); r.hops.forEach(function (x) { ol.appendChild(h("li", x)); }); trOut.appendChild(ol);
-					trOut.appendChild(h("p", { cls: "note", text: "Each line is one stop between your router and the server, with how long it took to answer. A star means that stop did not answer, which is common and not a fault. Compare with the route in a match report to see whether the path has changed." }));
+					trOut.appendChild(h("p", { cls: "note", text: "Each line is one stop between your router and the server, with how long it took to answer. A star means that stop did not answer, which is common and not a fault." }));
 				});
 			});
-			view.appendChild(h("div", { cls: "stayform" }, sel, trBtn));
-			view.appendChild(trOut);
+			view.appendChild(tool("Route to a server", "Traces the path from your router to a server you have played on. Compare it with the route in a match report to see whether the path has changed.",
+				h("div", { cls: "stayform" }, sel, trBtn), trOut));
 		}
 
+	}
+	if (!RO && tab === "games") {
 		var ports = [], names = {};
 		D.hist.forEach(function (m) { if (m.port && ports.indexOf(m.port) < 0) { ports.push(m.port); names[m.port] = m.game || ""; } });
 		if (ports.length) {
-			view.appendChild(h("h2", "Name a game"));
 			var gsel = h("select", { "aria-label": "Game to name" });
 			ports.forEach(function (p) { gsel.appendChild(h("option", { value: String(p), text: (names[p] || "Unnamed game") + " (server port " + p + ")" })); });
 			var ginp = h("input", { type: "text", maxlength: "40", placeholder: "Name to show", autocomplete: "off", "aria-label": "New name for the game" });
@@ -3678,14 +3923,11 @@ function pageTools() {
 					if (j.ok) { gsel.options[gsel.selectedIndex].textContent = v + " (server port " + gsel.value + ")"; ginp.value = ""; refresh(true); }
 				});
 			});
-			view.appendChild(h("div", { cls: "stayform" }, gsel, ginp, gbtn));
-			view.appendChild(h("p", { cls: "note", text: "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it." }));
+			view.appendChild(tool("Name a game", "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it.",
+				h("div", { cls: "stayform" }, gsel, ginp, gbtn)));
 		}
-
-		view.appendChild(h("h2", "Skipped as voice chat"));
 		var skBox = h("div");
-		view.appendChild(skBox);
-		view.appendChild(h("p", { cls: "note", text: "Voice chat is not a match, so MatchWatch does not record it, and can never block it. It tells voice chat from games by the server's port, and a few games use ports in the same range. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on." }));
+		view.appendChild(tool("Skipped as voice chat", "Voice chat is not a match, so MatchWatch does not record it and can never block it. A few games use the same ports. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on.", skBox));
 		get("skipped.json", function (sk) {
 			if (page !== "tools") return;
 			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
@@ -3699,26 +3941,26 @@ function pageTools() {
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});
 
-		view.appendChild(shareSection());
-
-		view.appendChild(h("h2", "Your history"));
+	}
+	if (!RO && tab === "share") view.appendChild(shareSection());
+	if (!RO && tab === "data") {
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
-		view.appendChild(h("div", { cls: "actions" }, dl, act("Clear all history", "clearhistory", null, { danger: true, confirm: "Confirm: delete every recorded match", done: function (o) { toast(o); setTimeout(function () { refresh(true); if (page === "tools") pageTools(); }, 2500); } })));
-		view.appendChild(h("p", { cls: "note", text: D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. Clearing deletes every match and the server ratings built from them, and cannot be undone. Blocks, the places you stay on and your settings are kept. It restarts MatchWatch, so do it between matches." }));
-
-		view.appendChild(h("h2", "Recent activity"));
-		var logOut = h("pre"); logOut.style.display = "none";
-		view.appendChild(h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.textContent = o || "Nothing logged yet."; logOut.style.display = "block"; } })));
-		view.appendChild(h("p", { cls: "note", text: "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent." }));
-		view.appendChild(logOut);
+		view.appendChild(tool("Match history", D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. The download is a CSV file that opens in any spreadsheet.", h("div", { cls: "actions" }, dl)));
+		view.appendChild(tool("Clear all history", "Deletes every match and the server ratings built from them. It cannot be undone. Blocks, favourites, the places you stay on and your settings are kept. It restarts MatchWatch, so do it between matches.",
+			h("div", { cls: "actions" }, act("Clear all history", "clearhistory", null, { danger: true, confirm: "Confirm: delete every recorded match", done: function (o) { toast(o); setTimeout(function () { refresh(true); if (page === "tools") pageTools(); }, 2500); } }))));
+		var logOut = outBox();
+		view.appendChild(tool("Recent activity", "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent.",
+			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
 		if (hasQos) {
 			view.appendChild(h("h2", "QoSmate priority"));
-			view.appendChild(h("p", { cls: "note", text: "If \"Is my game prioritised?\" says your game is not reaching the top queue, this adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as EF: top priority in every QoSmate mode. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes these two out again." }));
-			view.appendChild(h("div", { cls: "actions" }, act("Prioritise my game traffic", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: show }), act("Remove those rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: show })));
+			var fixOut = outBox();
+			view.appendChild(tool("Prioritise my game traffic", "Use this if \"Is my game prioritised?\" says your game is not reaching the top queue. It adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as top priority. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes the two rules out again.",
+				h("div", { cls: "actions" }, act("Add the rules", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: fixOut.show }), act("Remove the rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: fixOut.show })), fixOut));
 		}
 	}
+	if (tab !== "data") return;
 	view.appendChild(h("h2", "Settings in use"));
 	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"],
 		["Blocks last", (i.block_days || 14) + " days"], ["Automatic blocking", i.autoblock ? "On" : "Off"], ["Phone notifications", i.notify ? "On" : "Off"], ["Your PC counts towards scores", i.pc_score === false ? "No" : "Yes"], ["Server location lookups", i.geo === false ? "Off" : "On"],
@@ -3749,18 +3991,19 @@ function tick() { get("status.json", function (st) { D.st = st; setState(); upda
 function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep, textarea.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
-	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
+	var left = 6, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
 	get("blocklist.json", function (x) { D.blocks = x || []; done(); });
 	get("info.json", function (x) { D.info = x || {}; done(); });
+	get("favourites.json", function (x) { setFavs(x); done(); });
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", function () { updateLive(); if (page === "match" && pageMatch.repaint) pageMatch.repaint(); });
-var first = 5, boot = function () { if (--first === 0) route(); };
+var first = 6, boot = function () { if (--first === 0) route(); };
 get("history.json", function (x) { D.hist = x || []; boot(); }); get("servers.json", function (x) { D.servers = x || []; boot(); }); get("datacentres.json", function (x) { D.dcs = x || []; boot(); });
-get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.json", function (x) { D.info = x || {}; boot(); });
+get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.json", function (x) { D.info = x || {}; boot(); }); get("favourites.json", function (x) { setFavs(x); boot(); });
 get("regions.json", function (x) { D.regions = x || []; });
 tick(); setInterval(tick, 1000); setInterval(function () { setDark(); refresh(false); }, 15000);
 };
@@ -3768,51 +4011,90 @@ MW_FILE_END_12
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.js"
 cat > "$R/www/luci-static/resources/matchwatch/dashboard.css" <<'MW_FILE_END_13'
 :host { display: block; }
+/* Colours. --soft is the quiet fill for buttons and hovers; --grid is every hairline. The chart reads these too. */
 .mw {
-	--paper: #eef2ea; --panel: #f8faf5; --grid: #cbd8c8; --ink: #17313b; --muted: #5d6f6a;
-	--pen: #1f6f78; --pen2: #8a6d1f; --bad: #c8372d; --ok: #2f7d4f; --mid: #a8720d;
+	--paper: #f2f5f1; --panel: #ffffff; --soft: #e6ece5; --grid: #d3dcd2; --ink: #13272d; --muted: #5a6b67;
+	--pen: #0f7a72; --pen2: #9a7412; --bad: #c2362c; --ok: #23804a; --mid: #a86f0a; --star: #c58a00;
 	--display: "Bahnschrift", "DIN Alternate", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+	--r: 8px; --r2: 12px;
 }
-.mw.dark { --paper: #0f2a2b; --panel: #14383a; --grid: #245052; --ink: #e4efe6; --muted: #9db8b0;
-		--pen: #7fd1c0; --pen2: #e3c672; --bad: #ff6b57; --ok: #7fd19a; --mid: #e3b24f; }
+.mw.dark { --paper: #0e2325; --panel: #153032; --soft: #1c3d3f; --grid: #27494b; --ink: #e6f0e9; --muted: #9bb5ad;
+		--pen: #7fd1c0; --pen2: #e3c672; --bad: #ff6f5c; --ok: #7ed69b; --mid: #e6b655; --star: #f0c75e; }
 * { box-sizing: border-box; }
-.mw { text-align: left; background: var(--paper); color: var(--ink); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; }
-a { color: inherit; }
-.top { display: flex; align-items: center; gap: 8px 28px; flex-wrap: wrap; max-width: 1120px; margin: 0 auto; padding: 14px 16px 0; }
-.brand { font: 700 1.35rem/1 var(--display); letter-spacing: 0.01em; text-decoration: none; }
-nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
-nav a { text-decoration: none; padding: 6px 12px; border-radius: 3px; color: var(--muted); font-weight: 600; }
-nav a[aria-current] { background: var(--ink); color: var(--paper); }
-nav a:focus-visible, button:focus-visible, tr[tabindex]:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
-#state { color: var(--muted); font-size: 0.92rem; }
+.mw { text-align: left; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; }
+.mw.full { min-height: 100vh; }
+.mw.framed { border-radius: var(--r2); }
+a { color: var(--pen); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, tr[tabindex]:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
+
+/* ---- top bar */
+.top { display: flex; align-items: center; gap: 10px 28px; flex-wrap: wrap; max-width: 1120px; margin: 0 auto; padding: 16px 16px 0; }
+.brand { font: 700 1.35rem/1 var(--display); letter-spacing: 0.01em; text-decoration: none; color: var(--ink); }
+nav { display: flex; gap: 2px; flex-wrap: wrap; flex: 1; }
+nav a { text-decoration: none; padding: 7px 14px; border-radius: var(--r); color: var(--muted); font-weight: 600; }
+nav a:hover { color: var(--ink); }
+nav a[aria-current] { background: var(--soft); color: var(--ink); }
+#state { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.9rem; padding: 5px 13px; border: 1px solid var(--grid); border-radius: 999px; }
+#state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: 0.6; }
+#state.on { color: var(--ok); font-weight: 700; border-color: var(--ok); }
+#state.on::before { background: var(--ok); opacity: 1; }
+main { max-width: 1120px; margin: 0 auto; padding: 22px 16px 64px; }
 @media (max-width: 680px) {
-	.top { gap: 8px 12px; justify-content: space-between; }
+	.top { gap: 10px 12px; justify-content: space-between; }
 	nav { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px; padding: 0 16px 2px; }
 	nav a { white-space: nowrap; }
 	h1 { font-size: 1.6rem; }
 }
-#state.on { color: var(--ok); font-weight: 700; }
-main { max-width: 1120px; margin: 0 auto; padding: 18px 16px 56px; }
+
+/* ---- type */
 h1 { font: 700 2rem/1.1 var(--display); margin: 0; letter-spacing: 0.005em; }
-h2 { font: 700 1.2rem/1.2 var(--display); margin: 34px 0 10px; }
-h3 { font: 700 1rem/1.2 var(--display); margin: 22px 0 6px; }
-.sub { color: var(--muted); margin: 4px 0 0; }
-.lede { font-size: 1.2rem; max-width: 64ch; margin: 14px 0 0; }
+h2 { font: 700 1.3rem/1.2 var(--display); margin: 44px 0 12px; }
+h3 { font: 700 1.05rem/1.25 var(--display); margin: 24px 0 6px; }
+.sub { color: var(--muted); margin: 6px 0 0; }
+.lede { font-size: 1.15rem; max-width: 64ch; margin: 14px 0 0; }
+.lede.ok, .lede.mid, .lede.low { font-weight: 600; }
 .empty { color: var(--muted); }
+.note { color: var(--muted); font-size: 0.9rem; margin: 8px 0 0; max-width: 70ch; }
+.ok { color: var(--ok); } .mid { color: var(--mid); } .low { color: var(--bad); }
+.s { font-weight: 700; }
 
-.strip { margin-top: 16px; background: var(--panel); border: 1px solid var(--grid); border-radius: 3px; }
+/* ---- buttons and fields */
+button { font: 600 0.9rem/1.3 system-ui, sans-serif; color: var(--ink); background: var(--soft); border: 1px solid transparent; border-radius: var(--r); padding: 7px 14px; margin: 0; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button.solid { background: var(--ink); color: var(--paper); }
+button.solid:hover:not(:disabled) { opacity: 0.88; }
+button.big { font-size: 1.05rem; padding: 13px 22px; }
+button.danger { background: none; border-color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); color: var(--bad); }
+button.danger:hover:not(:disabled) { border-color: var(--bad); }
+button.arm, button.arm:hover:not(:disabled) { background: var(--bad); border-color: var(--bad); color: var(--paper); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.star { background: none; border: 0; padding: 2px 6px; font-size: 1.2rem; line-height: 1; color: var(--muted); }
+button.star:hover:not(:disabled), .star.on { color: var(--star); }
+span.star { font-size: 1.2rem; line-height: 1; padding: 2px 6px; }
+select, input[type="text"], textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 8px 11px; }
+select { padding: 7px 10px; max-width: 100%; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 16px 0 0; }
+.stayform { display: flex; gap: 8px; flex-wrap: wrap; max-width: 560px; }
+.stayform input { flex: 1; min-width: 200px; }
+.banner .stayform { flex: 1; min-width: 260px; }
+td .stayform { max-width: 420px; }
+td .stayform input { min-width: 140px; }
+
+/* ---- chart */
+.strip { margin-top: 18px; background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r2); overflow: hidden; }
 canvas { display: block; width: 100%; height: 300px; }
-.legend { display: flex; gap: 6px 18px; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--grid); color: var(--muted); font-size: 0.85rem; }
-.legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+.legend { display: flex; gap: 6px 18px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--grid); color: var(--muted); font-size: 0.85rem; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 
-.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 4px 20px; margin: 16px 0 0; padding: 0; }
-.figs div { border-top: 2px solid var(--ink); padding-top: 6px; }
+/* ---- the live figures: one tile each */
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0 0; padding: 0; }
+.figs div { background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r2); padding: 12px 14px; }
 .figs dt { color: var(--muted); font-size: 0.85rem; }
-.figs dd { margin: 0; font: 600 1.7rem/1.2 var(--display); }
+.figs dd { margin: 2px 0 0; font: 600 1.7rem/1.2 var(--display); }
 .figs dd small { font: 400 0.85rem system-ui, sans-serif; color: var(--muted); margin-left: 4px; }
 
-/* the path a packet takes: PC, line, route, server. The weak link stands out. */
-.chain { display: grid; grid-template-columns: repeat(4, 1fr); margin: 22px 0 0; position: relative; }
+/* ---- the path a packet takes: PC, line, route, server. The weak link stands out. */
+.chain { display: grid; grid-template-columns: repeat(4, 1fr); margin: 26px 0 0; position: relative; }
 .chain::before { content: ""; position: absolute; left: 12%; right: 12%; top: 27px; border-top: 2px solid var(--grid); }
 .link { position: relative; padding: 0 10px; text-align: center; }
 .link .dot { width: 54px; height: 54px; border-radius: 50%; margin: 0 auto; display: grid; place-items: center; background: var(--paper); border: 3px solid var(--ok); font: 700 1.25rem/1 var(--display); }
@@ -3827,75 +4109,94 @@ canvas { display: block; width: 100%; height: 300px; }
 .score b { font: 700 3.4rem/0.9 var(--display); }
 .score b small { font-size: 1.1rem; color: var(--muted); font-weight: 600; }
 .score span { display: block; font-weight: 700; }
-.ok { color: var(--ok); } .mid { color: var(--mid); } .low { color: var(--bad); }
 
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 0 48px; }
 .kv { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 0 14px; }
-.kv dt, .kv dd { margin: 0; padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.kv dt, .kv dd { margin: 0; padding: 8px 0; border-bottom: 1px solid var(--grid); }
 .kv dd { text-align: right; font-weight: 600; }
 .kv dt small { display: block; color: var(--muted); font-size: 0.82rem; }
-.note { color: var(--muted); font-size: 0.9rem; margin: 6px 0 0; max-width: 70ch; }
 ol.hops { margin: 8px 0 0; padding: 0; list-style: none; font-size: 0.9rem; color: var(--muted); columns: 2 220px; }
 
+/* ---- tables */
 .tablewrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
-th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 2px solid var(--ink); padding: 6px 12px 6px 0; white-space: nowrap; }
-td { border-bottom: 1px solid var(--grid); padding: 8px 12px 8px 0; white-space: nowrap; }
+th { text-align: left; font-weight: 600; font-size: 0.85rem; color: var(--muted); border-bottom: 1px solid var(--grid); padding: 6px 14px 8px 0; white-space: nowrap; }
+td { border-bottom: 1px solid var(--grid); padding: 10px 14px 10px 0; white-space: nowrap; }
 td.num, th.num { text-align: right; }
 td.act { text-align: right; padding-right: 0; }
-tr[tabindex] { cursor: pointer; } tr[tabindex]:hover td { background: var(--panel); }
-.s { font-weight: 700; }
-.tag { background: var(--bad); color: var(--paper); font-size: 0.75rem; font-weight: 700; padding: 2px 7px; border-radius: 2px; }
-.tag.keep { background: var(--ok); }
+td.act > * + * { margin-left: 6px; }
+td.act button:not(.star) { padding: 4px 11px; }
+tr[tabindex] { cursor: pointer; } tr[tabindex]:hover td { background: var(--soft); }
+.tag { display: inline-block; font-size: 0.78rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; color: var(--bad); background: var(--soft); background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.tag.keep { color: var(--ok); background: var(--soft); background: color-mix(in srgb, var(--ok) 16%, transparent); }
 
-button { font: 600 0.9rem system-ui, sans-serif; color: var(--ink); background: none; border: 1.5px solid var(--ink); border-radius: 3px; padding: 5px 12px; cursor: pointer; margin-left: 6px; }
-button.solid { background: var(--ink); color: var(--paper); }
-button.big { font-size: 1.05rem; padding: 12px 20px; margin: 0; }
-button.danger { border-color: var(--bad); color: var(--bad); }
-button.arm { background: var(--bad); border-color: var(--bad); color: var(--paper); }
-button:disabled { opacity: 0.45; cursor: default; }
-.hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; align-items: end; max-width: 760px; margin-top: 6px; }
+/* ---- ratings by hour */
+.hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; align-items: end; max-width: 760px; margin-top: 6px; }
 .hr { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 104px; font-size: 0.72rem; color: var(--muted); }
-button.hr { background: none; border: 0; border-radius: 0; padding: 0; margin: 0; cursor: pointer; font-weight: 400; }
+button.hr, button.hr:hover:not(:disabled) { background: none; border: 0; border-radius: 0; padding: 0; font-weight: 400; }
 button.hr:hover i, button.hr.sel i { outline: 2px solid var(--ink); outline-offset: 1px; }
-.hr i { display: block; width: 100%; background: var(--grid); }
+.hr i { display: block; width: 100%; background: var(--grid); border-radius: 3px 3px 0 0; }
 .hr i.ok { background: var(--ok); } .hr i.mid { background: var(--mid); } .hr i.low { background: var(--bad); }
 .hr span { height: 16px; line-height: 16px; } .hr .v { color: var(--ink); font-weight: 600; }
-select { font: inherit; padding: 6px 10px; color: var(--ink); background: var(--panel); border: 1.5px solid var(--ink); border-radius: 3px; }
-.stayform { display: flex; gap: 8px; flex-wrap: wrap; max-width: 520px; }
-.stayform input { flex: 1; min-width: 200px; font: inherit; padding: 8px 10px; color: var(--ink); background: var(--panel); border: 1.5px solid var(--ink); border-radius: 3px; }
-.stayform input:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
-.stayform button { margin: 0; }
-.stayform select { max-width: 100%; }
-.banner .stayform { flex: 1; min-width: 260px; }
-td .stayform { max-width: 420px; }
-td .stayform input { min-width: 140px; }
-.ticks { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
-.tickbox { display: flex; gap: 8px; align-items: flex-start; max-width: 70ch; margin: 8px 0 0; cursor: pointer; }
-.ticks .tickbox { margin: 0; }
-.tickbox input { margin: 3px 0 0; width: 16px; height: 16px; flex: none; accent-color: var(--ink); }
-.tickbox:has(input:disabled) { color: var(--muted); cursor: default; }
-.sharetext { display: block; width: 100%; max-width: 720px; box-sizing: border-box; margin: 12px 0 0; padding: 10px; font: 0.85rem ui-monospace, Consolas, monospace; color: var(--ink); background: var(--panel); border: 1.5px solid var(--ink); border-radius: 3px; resize: vertical; }
-.sharetext:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
-.filepick { margin: 10px 0 0; }
-.filepick input { font: inherit; color: var(--ink); max-width: 100%; }
-.lede.ok, .lede.mid, .lede.low { font-weight: 600; }
-.actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; }
-.actions button { margin: 0; }
 
-.banner { margin: 14px 0 18px; padding: 12px 14px; border-left: 5px solid var(--pen); background: var(--panel); display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-.banner.far { border-color: var(--mid); } .banner.bad { border-color: var(--bad); }
+/* ---- messages */
+.banner { margin: 16px 0 18px; padding: 14px 16px; border: 1px solid var(--grid); border-left: 4px solid var(--pen); border-radius: var(--r2); background: var(--panel); display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.banner.far { border-left-color: var(--mid); } .banner.bad { border-left-color: var(--bad); }
 .banner p { margin: 0; max-width: 70ch; }
 .banner b { font-family: var(--display); }
-#toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: min(92vw, 640px); background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 3px; font-size: 0.95rem; white-space: pre-line; display: none; z-index: 5; }
+#toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: min(92vw, 640px); background: var(--ink); color: var(--paper); padding: 11px 18px; border-radius: var(--r2); font-size: 0.95rem; white-space: pre-line; display: none; z-index: 5; }
 #toast.err { background: var(--bad); }
 ul.marks { list-style: none; margin: 10px 0 0; padding: 0; max-width: 72ch; }
-ul.marks li { padding: 6px 0; border-top: 1px solid var(--grid); }
+ul.marks li { padding: 8px 0; border-top: 1px solid var(--grid); }
 ul.marks time { color: var(--muted); margin-right: 10px; }
-pre { background: var(--panel); border: 1px solid var(--grid); padding: 12px; overflow-x: auto; font-size: 0.85rem; white-space: pre-wrap; margin: 12px 0 0; }
-code { background: var(--panel); border: 1px solid var(--grid); padding: 1px 5px; border-radius: 2px; }
-.mw.full { min-height: 100vh; }
-.mw.framed { border-radius: 6px; }
+pre { background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 12px 14px; overflow-x: auto; font-size: 0.85rem; white-space: pre-wrap; margin: 12px 0 0; }
+code { background: var(--panel); border: 1px solid var(--grid); padding: 1px 5px; border-radius: 4px; }
+
+/* ---- Tools: one row per tool. What it does on the left, the control and its result on the right. */
+.tool { display: grid; grid-template-columns: minmax(220px, 330px) minmax(0, 1fr); gap: 10px 36px; padding: 18px 0; border-top: 1px solid var(--grid); }
+h2 + .tool, .seg + .tool { border-top: 0; padding-top: 4px; }
+/* the tabs inside Tools */
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; margin: 16px 0 14px; padding: 3px; background: var(--soft); border-radius: 10px; }
+.seg a { text-decoration: none; padding: 6px 16px; border-radius: 7px; color: var(--muted); font-weight: 600; font-size: 0.93rem; }
+.seg a:hover { color: var(--ink); }
+.seg a[aria-current] { background: var(--panel); color: var(--ink); }
+.seg + .note { margin-top: 0; }
+.toolhead h3 { margin: 0; }
+.toolhead .note { margin: 4px 0 0; }
+.toolbody > :first-child { margin-top: 0; }
+.toolbody .stayform { max-width: none; }
+@media (max-width: 760px) { .tool { grid-template-columns: 1fr; } }
+
+/* ---- favourites */
+.favgame { display: flex; align-items: baseline; gap: 10px; }
+.favgame small { color: var(--muted); font: 400 0.9rem system-ui, sans-serif; }
+
+/* ---- share files */
+.ticks { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
+.tickbox { display: flex; gap: 9px; align-items: flex-start; max-width: 70ch; margin: 8px 0 0; cursor: pointer; }
+.ticks .tickbox { margin: 0; }
+.tickbox input { margin: 4px 0 0; width: 16px; height: 16px; flex: none; accent-color: var(--pen); }
+.tickbox:has(input:disabled) { color: var(--muted); cursor: default; }
+.sharetext { display: block; width: 100%; max-width: 720px; margin: 12px 0 0; padding: 12px; font: 0.85rem/1.45 ui-monospace, Consolas, monospace; resize: vertical; }
+.pick { margin: 8px 0 0; max-width: 720px; }
+details.pick { border: 1px solid var(--grid); border-radius: var(--r); background: var(--panel); padding: 9px 14px; }
+details.pick > summary { cursor: pointer; }
+details.pick > summary b { margin-left: 4px; }
+details.pick .picklist { border: 0; padding: 4px 0 2px; background: none; max-height: 230px; }
+details.pick + div.pick { margin-top: 16px; }
+.pickhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.quick button, .quick select { padding: 3px 10px; font-size: 0.82rem; }
+.pickcount { color: var(--muted); font-size: 0.9rem; margin-right: auto; }
+summary.pickhead { display: list-item; }
+summary.pickhead .pickcount { margin-left: 8px; }
+.quick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 0; color: var(--muted); font-size: 0.9rem; }
+.picklist { display: flex; flex-direction: column; gap: 7px; margin: 8px 0 0; padding: 12px 14px; max-height: 250px; overflow-y: auto; border: 1px solid var(--grid); border-radius: var(--r); background: var(--panel); }
+.picklist .tickbox { margin: 0; max-width: none; }
+.pick .stayform { margin: 8px 0 0; max-width: none; }
+.filepick { margin: 10px 0 0; }
+.filepick input { font: inherit; color: var(--ink); max-width: 100%; }
+
+h2 + .kv { max-width: 640px; }
 MW_FILE_END_13
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css"
 cat > "$R/www/luci-static/resources/view/matchwatch/dashboard.js" <<'MW_FILE_END_14'

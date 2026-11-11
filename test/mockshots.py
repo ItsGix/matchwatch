@@ -53,7 +53,7 @@ def build(site):
         s = {"server": 100, "route": 100, "line": 100, "pc": 100}
         if code in s: s[code] = max(2, overall - 20)
         p = round(ping + random.uniform(-0.4, 0.4), 1)
-        m = {"game": "Example Shooter", "start": start, "dur": dur, "analysed": dur - 6, "device": "192.168.1.50", "ip": ip, "port": 30120, "cc": cc, "city": city, "org": org, "asn": "AS64500",
+        m = {"game": "Example Arena" if cc == "SE" else "Example Shooter", "start": start, "dur": dur, "analysed": dur - 6, "device": "192.168.1.50", "ip": ip, "port": 30120, "cc": cc, "city": city, "org": org, "asn": "AS64500",
              "tick": 20.1, "jit": 2.68 if code == "server" else round(random.uniform(0.2, 0.6), 2), "late": 2.78 if code == "server" else 0.03, "lost": 2.4 if code == "server" else round(random.uniform(0, 0.1), 2),
              "clump": 3.1 if code == "route" else 0.0, "freeze": 3 if code == "server" else 0, "rough": 51.0 if code == "server" else (18.0 if bad else 0.0), "uprate": 95.2, "upjit": 0.2,
              "hitch": 4 if code == "pc" else 0, "farkind": "server", "ping": p, "pingjit": 3.9 if code == "route" else 0.3, "pingloss": 1.5 if code == "route" else 0.0, "nearping": 3.7, "nearjit": 0.3, "nearloss": 0,
@@ -90,7 +90,8 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.14.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True}}
+           "info": {"version": "0.15.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True}}
+    out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["shared"] = {"undo": True, "have": {"games": 3, "regions": 0, "places": 2, "ratings": 6},
                      "ratings": [{"p": "203.0.113.0/24", "n": 14, "avg": 38, "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "blocked": True},
                                  {"p": "198.51.100.0/24", "n": 9, "avg": 61, "city": "Paris", "cc": "FR", "org": "Example Hosting Paris", "blocked": False},
@@ -112,11 +113,45 @@ MatchwatchDashboard(document.getElementById("mw"), { css: "/%s/dashboard.css", f
 matchwatch-share 1
 
 [games]
-Example Game|7777-7800||example
+# name|server ports|kind (empty = a game, voice = voice chat)|words in the name of the company hosting the servers
+Example Arena|7777-7800||
+Example Shooter|20000-29000||examplehost,as64500
+Example Racing|8211||
+
+[places]
+# name|latitude|longitude|reach in km|country codes
+Germany|-|-|0|DE
+Stockholm, SE|59.33|18.07|150|-
 
 [ratings]
-203.0.113.0/24|14|38|Madrid|ES|Example Hosting Madrid`;
+# server network|matches|average rating out of 100|city|country code|host
+203.0.113.0/24|14|38|Madrid|ES|Example Hosting Madrid
+198.51.100.0/24|9|61|Paris|FR|Example Hosting Paris
+192.0.2.0/24|22|93|Frankfurt|DE|Example Hosting Frankfurt
+192.0.2.0/24|6|88|Stockholm|SE|Example Hosting Stockholm
+198.51.100.0/24|1|72|Amsterdam|NL|Example Hosting Amsterdam
+
+[favourites]
+# server|game|city|country code|host|rating out of 100|matches|latitude|longitude
+198.51.100.12|Example Arena|Stockholm|SE|Example Hosting Stockholm|100|2|59.33|18.07|1
+198.51.100.90|Example Arena|Stockholm|SE|Example Hosting Stockholm|100|1|59.33|18.07|1
+192.0.2.150|Example Shooter|Madrid|ES|Example Hosting Madrid|100|1|40.42|-3.70|1
+203.0.113.21|Example Shooter|Frankfurt|DE|Example Hosting Frankfurt|100|3|50.11|8.68|0
+203.0.113.77|Example Shooter|Frankfurt|DE|Example Hosting Frankfurt|12|2|50.11|8.68|0
+
+[settings]
+# the thresholds this copy of MatchWatch runs with
+min_down_pps=15
+min_up_pps=8
+warn_score=55
+autoblock_score=45
+autoblock_matches=2
+lobby_margin_ms=4
+stay_km=150
+block_days=14`;
 		if (p.action === "sharecheck") out = `games: 2 game label(s): Example Game, Another Game. They go below the names you have given yourself, which always win.
+favourites: 3 favourite server(s) for Example Arena (2), Example Shooter (1). They join your favourites under those games: never blocked automatically, and the lobby alert tells you when you land on one.
+favplaces: Stay near those servers: adds Stockholm, SE, Madrid, ES to the places you stay on and turns staying on, so game servers elsewhere are blocked.
 places: 1 place(s) to stay on: UK and Ireland. Importing these turns staying on, so game servers elsewhere are blocked.
 ratings: 3 server rating(s) from someone else. They are shown to you and mentioned by the lobby alert, and never block anything by themselves.
 1 line(s) were not accepted and are left out:
@@ -125,6 +160,8 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		return Promise.resolve({ ok: true, out: out });
 	} });
+// for the Tools screenshot: open the picker, as a visitor would
+setTimeout(function () { var b = Array.prototype.filter.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { return x.textContent === "Choose what to share"; })[0]; if (b) b.click(); }, 3000);
 </script></body></html>""" % (RES, RES))
     return [m for m in hist if m["code"] == "server"][0]["start"]
 
@@ -152,7 +189,7 @@ if __name__ == "__main__":
         print(f"http://127.0.0.1:{PORT}/matchwatch/"); srv.serve_forever()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     os.makedirs(ROOT + "/docs", exist_ok=True)
-    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 4000), ("#/tools", "tools", 3800)):
+    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 4600), ("#/tools", "tools", 2200), ("#/tools/share", "share", 4200)):
         shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
     srv.shutdown()
     shutil.rmtree(site, ignore_errors=True)

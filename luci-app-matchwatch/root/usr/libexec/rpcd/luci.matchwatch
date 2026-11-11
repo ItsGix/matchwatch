@@ -2,13 +2,13 @@
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
 #   read   checks, the line test, a route trace, the activity log, making a share file, and "I felt that"
-#   write  anything that blocks, stays, measures, alerts, renames, clears, imports, or changes QoSmate or the device
+#   write  anything that blocks, stays, favourites, measures, alerts, renames, clears, imports, or changes QoSmate or the device
 # The work itself is done by /usr/bin/matchwatch _action, which validates every argument.
 
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory sharecheck shareimport shareundo shareforget"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory sharecheck shareimport shareundo shareforget fav unfav"
 
 reply() { # ok(0|1) text
 	json_init

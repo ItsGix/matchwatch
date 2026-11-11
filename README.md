@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.14.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.15.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -35,9 +35,9 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 | --- | --- |
 | ![Matches](docs/matches.png) | ![Servers](docs/servers-pool.png) |
 
-| Tools |
-| --- |
-| ![Tools](docs/tools.png) |
+| Tools | Sharing |
+| --- | --- |
+| ![Tools](docs/tools.png) | ![Sharing](docs/share.png) |
 
 The screenshots are made from invented data (`test/mockshots.py`); the addresses and matches in them are not real.
 
@@ -96,7 +96,7 @@ keeps your history and settings. Use `purge` instead of `remove` to delete those
 - **Live**: the match in progress, with ping, update rate, jitter, late and missing updates, freezes, your PC's send rate and pauses, a two-minute chart, and the "I felt that" button. When the game starts connecting you somewhere, a banner says where, how far, and how that server has rated.
 - **Last match**: the full report for one match: verdict, the four links in the chain, a chart of the whole match, every figure, the route trace and your marks.
 - **Matches**: every recorded match, your latest session in a sentence, and ratings by hour of the day.
-- **Servers**: datacentres, regions and servers with their ratings, and buttons to block, unblock or stay on them.
+- **Servers**: your favourites by game, then datacentres, regions and servers with their ratings, and buttons to favourite, block, unblock or stay on them.
 - **Tools**: checks and utilities, listed under [Tools](#tools) below.
 
 ### Settings
@@ -126,6 +126,7 @@ Everything is also available over SSH:
 | `matchwatch places` | The areas you can stay on |
 | `matchwatch regions [measure]` | Ping every region, nearest first |
 | `matchwatch blocklist` | What is blocked and for how long |
+| `matchwatch fav` / `fav add <ip>` / `fav remove <ip>` | Your favourite servers |
 | `matchwatch mark` | Flag this moment, same as the "I felt that" button |
 | `matchwatch qos` | During a match: is the game in QoSmate's top priority queue? |
 | `matchwatch qos fix` / `qos unfix` | Add or remove QoSmate rules that prioritise your gaming device |
@@ -138,7 +139,7 @@ Settings live in `/etc/config/matchwatch`. To change one over SSH: `uci set matc
 
 ## Tools
 
-The Tools page in the dashboard has:
+The Tools page has four tabs: Checks, Games, Share, and Data and settings. Each tool says what it does beside its button. Between them the tabs hold:
 
 - **Check MatchWatch is working.** Confirms the programs it needs are present and that it can see your device's traffic. Takes five seconds and changes nothing.
 - **Is my game prioritised?** Only shown when QoSmate is installed. Checks whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.
@@ -148,7 +149,7 @@ The Tools page in the dashboard has:
 - **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it, and staying on places, the lobby alert and automatic blocking start to cover it.
 - **Skipped as voice chat.** Lists streams MatchWatch took for voice chat in the last six hours, so you can name one as a game if it got that wrong.
 - **Share with other players.** Makes a share file from your game names, places, server ratings, ping hosts and thresholds, or takes one in. See [Sharing with other players](#sharing-with-other-players).
-- **Your history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
+- **Match history and Clear all history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
 - **QoSmate priority.** Only shown when QoSmate is installed. See [QoSmate check and fix](#qosmate-check-and-fix).
 
@@ -206,11 +207,24 @@ Make one, or use one, under **Share with other players** on the Tools page.
 |---|---|---|
 | Game names | The games you have named, with their server ports and, where needed, who hosts them | Adds them to your own names, so those games are recognised. A name you gave yourself always wins |
 | Places you stay on | Your pool of cities, countries and areas | Adds them to your pool and turns staying on |
-| Server ratings | How each server network has rated for you: number of matches and average rating | Shows them in a table on the Tools page, and the lobby alert mentions one when you land on that network for the first time |
+| Favourite servers | Servers you have starred, each with its game, where it is and how it has rated for you. You can also include servers you have not starred, picked by game, rating, place or number of matches | Adds them to the other person's favourites under the same games. They can also choose **Stay near those servers**, which adds the servers' cities to the places they stay on |
+| Network ratings | How each server network has rated for you: number of matches and average rating | Shows them in a table on the Tools page, and the lobby alert mentions one when you land on that network for the first time |
 | Ping hosts | Extra test hosts for the regions table, for hosting companies other than Vultr | Adds them to the regions table and measures them |
 | Thresholds | Your rating and capture thresholds | Sets yours to match, and restarts MatchWatch |
 
-You tick which sections go into a file, and which sections you take from one.
+### Choosing exactly what to share
+
+"Choose what to share" lists everything you could share, and every item has its own tick: each game name, each place, each server network, each ping host and each threshold. Nothing goes in unless it is ticked.
+
+- **All** and **None** on every section.
+- **Favourite servers** starts with your starred servers ticked. Switch it to every server you have played on, then tick by game, rating, country or city, and number of matches: for example every Call of Duty server rated 85 or more over three matches.
+- **Network ratings** can be ticked in one go by rating (only the poor ones, only the good ones), by country or city, and by how many matches you have played there. Single ticks can still be changed afterwards. Networks with only one match start unticked, because one match says little.
+- **Thresholds** start unticked.
+- **A note** can be added for whoever gets the file, such as roughly where you are and what you play. It is the only free text in the file, and only what you type goes in.
+
+The box underneath is the file itself and changes as you tick. Save it or copy it from there.
+
+When you take a file in, you choose by section. To take only some lines, delete the others from the text before checking it.
 
 ### What keeps it safe
 
@@ -225,9 +239,10 @@ You tick which sections go into a file, and which sections you take from one.
 
 ```
 matchwatch share export > mine.txt            # everything
-matchwatch share export games ratings > mine.txt
+matchwatch share export games favourites > mine.txt
 matchwatch share check theirs.txt             # what is in it; changes nothing
 matchwatch share import theirs.txt            # or: ... import theirs.txt games
+matchwatch share import theirs.txt favourites favplaces   # their favourites, and stay near them
 matchwatch share undo
 matchwatch share forget                       # remove ratings other people shared with you
 ```
@@ -282,6 +297,18 @@ Blocks live in their own nftables table, so your firewall rules are untouched. A
 - Individual addresses rotate, so ratings are also grouped by datacentre: one operator in one city. Blocking a datacentre blocks every /24 address block you have been placed on there. It can't know the datacentre's other blocks.
 
 A match only counts towards a server's rating when it lasted at least a minute and your own line was stable.
+
+## Favourites
+
+Press the star beside any server, on the Servers page, the Live page or a match report, to keep it as a favourite. The Servers page lists your favourites at the top, grouped by game and best rated first, with where each one is, its rating, ping and when you last played on it.
+
+- A favourite is never blocked automatically, however it rates. You can still block one yourself.
+- Favourites can be shared: see [Sharing with other players](#sharing-with-other-players). Ones you take from someone else show under the same games, marked "Not played on yet" until you land on them.
+- The lobby alert tells you when the game is sending you to one.
+- Clearing your match history keeps your favourites.
+- The game still decides which server you get. A favourite cannot be requested; it is a list for you, and a guard against automatic blocking.
+
+From the command line: `matchwatch fav`, `matchwatch fav add <ip>`, `matchwatch fav remove <ip>`.
 
 ## Staying in a pool of places
 
