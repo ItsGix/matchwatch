@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.10.1.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.11.0.
 
 ## Layout
 
@@ -20,6 +20,8 @@ matchwatch runs on an OpenWrt router and judges each online match: the game serv
 On the router: `/usr/bin/matchwatch`, `/usr/lib/matchwatch/`, `/etc/config/matchwatch` (settings), `/etc/matchwatch/` (`sessions.tsv`, `matches/*.json`, blocklist, stay), `/tmp/matchwatch/` (runtime; `www/` holds the JSON the dashboard reads), the LuCI files under `/www/luci-static/resources/` and `/usr/share/`. With the no-login page on, the service also creates `/www/matchwatch/` and `/www/cgi-bin/matchwatch-mark` at start, and removes them when it is off.
 
 Settings: the script reads `/etc/config/matchwatch` through `config_get`. With `MW_CONF` set it sources that shell file instead, which is how the tests run it off-router. Versions before 0.10.0 kept settings in `/etc/matchwatch/config`; `matchwatch _migrate` (run by the init script) carries them over once and renames the file to `config.imported`. Saving in LuCI fires the init script's reload trigger, which restarts the service.
+
+Slow tools: an rpcd call must answer within seconds, so the line test and route trace start in the background, print a job number, and write `linetest.json` or `trace.json` into `/tmp/matchwatch/www/`. The dashboard's `job()` polls that file until its `id` matches. Follow the same pattern for anything that takes more than a few seconds.
 
 ## Rules that have bitten already
 

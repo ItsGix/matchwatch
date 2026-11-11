@@ -10,10 +10,10 @@
 var DATA = '/tmp/matchwatch/www/';
 
 var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: [ 'action', 'arg' ], expect: {} });
-var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region' ], expect: {} });
+var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1 };
 
 function loadDashboard() {
 	if (window.MatchwatchDashboard)
@@ -68,7 +68,7 @@ return view.extend({
 				if (READS[p.action])
 					return callRead(p.action, p.arg || '');
 
-				return callWrite(p.action, p.arg || '', p.days || '', p.region || '');
+				return callWrite(p.action, p.arg || '', p.days || '', p.region || '', p.name || '');
 			}
 		});
 

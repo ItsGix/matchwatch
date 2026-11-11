@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.10.1"
+VERSION="0.11.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -239,7 +239,7 @@ export_json() {
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" > "$RUN/www/info.json"
 	regions_export
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -575,9 +575,102 @@ cmd_unblock_dc() { # number
 	echo "$list" | tail -n +2 | while read -r p; do cmd_unblock "$p"; done
 }
 
+# ---- tools for the dashboard's Tools page
+cmd_testalert() { # send one alert to the phone, to prove the address works
+	[ -n "$NTFY_URL" ] || die "no phone alerts address is set. Add one under Settings, Alerts, and save."
+	fetch "$NTFY_URL" "MatchWatch test alert. Phone alerts are working." >/dev/null || die "the alert could not be sent. Check the address, and that the router can reach the internet."
+	echo "Sent. It should reach your phone within a few seconds."
+}
+cmd_log() { logread -e matchwatch 2>/dev/null | tail -n 25 | cut -c1-220; }
+cmd_clear_history() { # forget every recorded match. Blocks, the stay pool and settings are kept
+	local f n
+	mkdir -p "$DATA"; touch "$DATA/sessions.tsv"
+	n="$(wc -l < "$DATA/sessions.tsv")"
+	: > "$DATA/sessions.tsv"
+	for f in "$DATA"/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
+	rm -f "$DATA/last.txt" "$RUN/last.txt"
+	[ -d "$RUN/www" ] && export_json
+	# the running engine still remembers the old ratings, so start it afresh
+	[ -z "$CONF" ] && [ -x /etc/init.d/matchwatch ] && ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 &
+	echo "Cleared $n match(es), and the server ratings built from them. Blocks, the places you stay on and your settings are kept."
+}
+# Two tools take longer than a web request should wait. They start in the background, print a job
+# number straight away, and write their result to a file the dashboard reads once it is done.
+cmd_trace() { # server-ip : trace the route to a server now
+	local ip="$1" id f="$RUN/www/trace.json"
+	is_ipv4 "$ip" || die "choose a server first"
+	is_private "$ip" && die "that is not a game server"
+	have traceroute || die "traceroute is not installed on this router"
+	id="$(date +%s)$$"
+	mkdir -p "$RUN/www"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( traceroute -n -w 1 -q 1 -m 20 "$ip" 2>/dev/null | awk -v id="$id" -v ip="$ip" -v now="$(date +%s)" '
+		BEGIN { printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"ip\":\"%s\",\"hops\":[", id, now, ip }
+		$1 ~ /^[0-9]+$/ { gsub(/["\\]/, " "); gsub(/[ \t]+/, " "); sub(/^ /, ""); printf "%s\"%s\"", (n++ ? "," : ""), $0 }
+		END { print "]}" }' > "$f.tmp" && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+	echo "$id"
+}
+cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
+	local id f="$RUN/www/linetest.json" busy="$RUN/linetest.busy"
+	mkdir -p "$RUN/www"
+	[ -f "$busy" ] && [ $(( $(date +%s) - $(cat "$busy") )) -lt 60 ] && die "a line test is already running"
+	id="$(date +%s)$$"
+	date +%s > "$busy"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( linetest_run "$id" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f"; rm -f "$busy" ) >/dev/null 2>&1 &
+	echo "$id"
+}
+linetest_run() { # job-id -> the result as JSON
+	local d="$RUN/linetest.$$" near t list
+	mkdir -p "$d"
+	# the first hop inside the ISP: the nearest thing that is not this house
+	near="$(traceroute -n -w 1 -q 1 -m 8 1.1.1.1 2>/dev/null | awk '$2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { split($2, a, "."); if (!(a[1] == 10 || (a[1] == 172 && a[2] >= 16 && a[2] <= 31) || (a[1] == 192 && a[2] == 168))) { print $2; exit } }')"
+	case "$near" in 1.1.1.1|9.9.9.9) near="" ;; esac
+	list="${near:+$near }1.1.1.1 9.9.9.9"
+	for t in $list; do
+		ping -c 20 -W 1 "$t" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' > "$d/$t" &
+	done
+	wait
+	awk -v D="$d" -v T="$list" -v NEAR="$near" -v ID="$1" -v NOW="$(date +%s)" -v SENT=20 '
+	BEGIN {
+		nt = split(T, t, " ")
+		printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"rows\":[", ID, NOW
+		for (k = 1; k <= nt; k++) {
+			n = 0; f = D "/" t[k]
+			while ((getline v < f) > 0) a[++n] = v + 0
+			close(f)
+			jit = 0
+			for (i = 2; i <= n; i++) { x = a[i] - a[i - 1]; jit += (x < 0 ? -x : x) }
+			if (n > 1) jit /= (n - 1)
+			for (i = 2; i <= n; i++) { v = a[i]; for (j = i - 1; j >= 1 && a[j] > v; j--) a[j + 1] = a[j]; a[j + 1] = v }
+			med = n ? a[int((n + 1) / 2)] : 0
+			q = int(n * 0.95 + 0.5); if (q < 1) q = 1
+			p95 = n ? a[q] : 0
+			loss = 100 * (SENT - n) / SENT
+			printf "%s{\"name\":\"%s\",\"ip\":\"%s\",\"answered\":%s,\"loss\":%.0f,\"med\":%.1f,\"p95\":%.1f,\"jit\":%.2f}", (k > 1 ? "," : ""), (t[k] == NEAR ? "Your provider, first hop" : "Public server"), t[k], (n ? "true" : "false"), loss, med, p95, jit
+			if (n) {
+				ans++
+				# trouble shared by every target is the line; trouble with one target is that target
+				if (ans == 1 || loss < bl) bl = loss
+				if (ans == 1 || jit < bj) bj = jit
+				if (ans == 1 || p95 - med < bs) bs = p95 - med
+				if (ans == 1 || med < bm) bm = med
+			}
+		}
+		if (!ans) { vd = "unknown"; msg = "Nothing answered. The router may be offline, or pings are blocked." }
+		else if (bl >= 2) { vd = "poor"; msg = sprintf("Your line is losing packets: at least %d%% went missing to every target. Expect rubber-banding until that clears.", bl) }
+		else if (bl > 0 || bj > 3 || bs > 10) { vd = "fair"; msg = sprintf("Your line is a little unsteady right now: jitter %.1f ms, slowest replies %.0f ms above normal%s.", bj, bs, (bl > 0 ? ", some loss" : "")) }
+		else { vd = "good"; msg = sprintf("Your line is steady: about %.0f ms to the nearest target, no loss, jitter %.1f ms.", bm, bj) }
+		printf "],\"verdict\":\"%s\",\"msg\":\"%s\"}\n", vd, msg
+	}'
+	rm -f "$d"/*; rmdir "$d" 2>/dev/null
+}
+
 # ---- what the dashboard's buttons run (through LuCI's rpcd backend, /usr/libexec/rpcd/luci.matchwatch)
-cmd_action() { # action [arg] [days] [place] : prints the result; a non-zero exit means it did not work
-	local action="$1" arg="$2" days="$3" region="$4"
+cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-zero exit means it did not work
+	local action="$1" arg="$2" days="$3" region="$4" name="$5"
+	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
+	[ "${#name}" -le 40 ] || die "that name is too long"
 	case "$arg" in *[!0-9./]*) die "that is not an address or a number" ;; esac
 	case "$days" in *[!0-9]*) die "days must be a number" ;; esac
 	case "$region" in *[!a-z0-9\ ,-]*) die "place names may only use letters, numbers, spaces, commas and hyphens" ;; esac
@@ -600,6 +693,12 @@ cmd_action() { # action [arg] [days] [place] : prints the result; a non-zero exi
 		setdeviceall) cmd_device all ;;
 		doctor) cmd_doctor ;;
 		regions) cmd_regions measure | head -n 6 ;;
+		testalert) cmd_testalert ;;
+		log) cmd_log ;;
+		linetest) cmd_linetest ;;
+		trace) cmd_trace "$arg" ;;
+		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" ;;
+		clearhistory) cmd_clear_history ;;
 		*) die "unknown action" ;;
 	esac
 }
@@ -991,7 +1090,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch block <ip> [days] block a server (default $BLOCK_DAYS days, 0 = until unblocked)
   matchwatch unblock <ip>|all  remove a block
   matchwatch blocklist         show blocked servers
-  matchwatch doctor            check that everything needed is in place
+  matchwatch doctor            check that everything needed is in place (changes nothing)
+  matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   /etc/init.d/matchwatch start|stop|restart|enable
 
 Dashboard and settings: LuCI, under Services, MatchWatch
@@ -1024,6 +1124,7 @@ case "$1" in
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
 	doctor) cmd_doctor ;;
+	clear-history) cmd_clear_history ;;
 	version) echo "$VERSION" ;;
 	_probe_start) shift; cmd_probe_start "$@" ;;
 	_probe_stop) cmd_probe_stop "$2" ;;

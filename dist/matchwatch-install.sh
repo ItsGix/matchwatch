@@ -51,7 +51,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.10.1"
+VERSION="0.11.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -288,7 +288,7 @@ export_json() {
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" > "$RUN/www/info.json"
 	regions_export
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -624,9 +624,102 @@ cmd_unblock_dc() { # number
 	echo "$list" | tail -n +2 | while read -r p; do cmd_unblock "$p"; done
 }
 
+# ---- tools for the dashboard's Tools page
+cmd_testalert() { # send one alert to the phone, to prove the address works
+	[ -n "$NTFY_URL" ] || die "no phone alerts address is set. Add one under Settings, Alerts, and save."
+	fetch "$NTFY_URL" "MatchWatch test alert. Phone alerts are working." >/dev/null || die "the alert could not be sent. Check the address, and that the router can reach the internet."
+	echo "Sent. It should reach your phone within a few seconds."
+}
+cmd_log() { logread -e matchwatch 2>/dev/null | tail -n 25 | cut -c1-220; }
+cmd_clear_history() { # forget every recorded match. Blocks, the stay pool and settings are kept
+	local f n
+	mkdir -p "$DATA"; touch "$DATA/sessions.tsv"
+	n="$(wc -l < "$DATA/sessions.tsv")"
+	: > "$DATA/sessions.tsv"
+	for f in "$DATA"/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
+	rm -f "$DATA/last.txt" "$RUN/last.txt"
+	[ -d "$RUN/www" ] && export_json
+	# the running engine still remembers the old ratings, so start it afresh
+	[ -z "$CONF" ] && [ -x /etc/init.d/matchwatch ] && ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 &
+	echo "Cleared $n match(es), and the server ratings built from them. Blocks, the places you stay on and your settings are kept."
+}
+# Two tools take longer than a web request should wait. They start in the background, print a job
+# number straight away, and write their result to a file the dashboard reads once it is done.
+cmd_trace() { # server-ip : trace the route to a server now
+	local ip="$1" id f="$RUN/www/trace.json"
+	is_ipv4 "$ip" || die "choose a server first"
+	is_private "$ip" && die "that is not a game server"
+	have traceroute || die "traceroute is not installed on this router"
+	id="$(date +%s)$$"
+	mkdir -p "$RUN/www"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( traceroute -n -w 1 -q 1 -m 20 "$ip" 2>/dev/null | awk -v id="$id" -v ip="$ip" -v now="$(date +%s)" '
+		BEGIN { printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"ip\":\"%s\",\"hops\":[", id, now, ip }
+		$1 ~ /^[0-9]+$/ { gsub(/["\\]/, " "); gsub(/[ \t]+/, " "); sub(/^ /, ""); printf "%s\"%s\"", (n++ ? "," : ""), $0 }
+		END { print "]}" }' > "$f.tmp" && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+	echo "$id"
+}
+cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
+	local id f="$RUN/www/linetest.json" busy="$RUN/linetest.busy"
+	mkdir -p "$RUN/www"
+	[ -f "$busy" ] && [ $(( $(date +%s) - $(cat "$busy") )) -lt 60 ] && die "a line test is already running"
+	id="$(date +%s)$$"
+	date +%s > "$busy"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( linetest_run "$id" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f"; rm -f "$busy" ) >/dev/null 2>&1 &
+	echo "$id"
+}
+linetest_run() { # job-id -> the result as JSON
+	local d="$RUN/linetest.$$" near t list
+	mkdir -p "$d"
+	# the first hop inside the ISP: the nearest thing that is not this house
+	near="$(traceroute -n -w 1 -q 1 -m 8 1.1.1.1 2>/dev/null | awk '$2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { split($2, a, "."); if (!(a[1] == 10 || (a[1] == 172 && a[2] >= 16 && a[2] <= 31) || (a[1] == 192 && a[2] == 168))) { print $2; exit } }')"
+	case "$near" in 1.1.1.1|9.9.9.9) near="" ;; esac
+	list="${near:+$near }1.1.1.1 9.9.9.9"
+	for t in $list; do
+		ping -c 20 -W 1 "$t" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' > "$d/$t" &
+	done
+	wait
+	awk -v D="$d" -v T="$list" -v NEAR="$near" -v ID="$1" -v NOW="$(date +%s)" -v SENT=20 '
+	BEGIN {
+		nt = split(T, t, " ")
+		printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"rows\":[", ID, NOW
+		for (k = 1; k <= nt; k++) {
+			n = 0; f = D "/" t[k]
+			while ((getline v < f) > 0) a[++n] = v + 0
+			close(f)
+			jit = 0
+			for (i = 2; i <= n; i++) { x = a[i] - a[i - 1]; jit += (x < 0 ? -x : x) }
+			if (n > 1) jit /= (n - 1)
+			for (i = 2; i <= n; i++) { v = a[i]; for (j = i - 1; j >= 1 && a[j] > v; j--) a[j + 1] = a[j]; a[j + 1] = v }
+			med = n ? a[int((n + 1) / 2)] : 0
+			q = int(n * 0.95 + 0.5); if (q < 1) q = 1
+			p95 = n ? a[q] : 0
+			loss = 100 * (SENT - n) / SENT
+			printf "%s{\"name\":\"%s\",\"ip\":\"%s\",\"answered\":%s,\"loss\":%.0f,\"med\":%.1f,\"p95\":%.1f,\"jit\":%.2f}", (k > 1 ? "," : ""), (t[k] == NEAR ? "Your provider, first hop" : "Public server"), t[k], (n ? "true" : "false"), loss, med, p95, jit
+			if (n) {
+				ans++
+				# trouble shared by every target is the line; trouble with one target is that target
+				if (ans == 1 || loss < bl) bl = loss
+				if (ans == 1 || jit < bj) bj = jit
+				if (ans == 1 || p95 - med < bs) bs = p95 - med
+				if (ans == 1 || med < bm) bm = med
+			}
+		}
+		if (!ans) { vd = "unknown"; msg = "Nothing answered. The router may be offline, or pings are blocked." }
+		else if (bl >= 2) { vd = "poor"; msg = sprintf("Your line is losing packets: at least %d%% went missing to every target. Expect rubber-banding until that clears.", bl) }
+		else if (bl > 0 || bj > 3 || bs > 10) { vd = "fair"; msg = sprintf("Your line is a little unsteady right now: jitter %.1f ms, slowest replies %.0f ms above normal%s.", bj, bs, (bl > 0 ? ", some loss" : "")) }
+		else { vd = "good"; msg = sprintf("Your line is steady: about %.0f ms to the nearest target, no loss, jitter %.1f ms.", bm, bj) }
+		printf "],\"verdict\":\"%s\",\"msg\":\"%s\"}\n", vd, msg
+	}'
+	rm -f "$d"/*; rmdir "$d" 2>/dev/null
+}
+
 # ---- what the dashboard's buttons run (through LuCI's rpcd backend, /usr/libexec/rpcd/luci.matchwatch)
-cmd_action() { # action [arg] [days] [place] : prints the result; a non-zero exit means it did not work
-	local action="$1" arg="$2" days="$3" region="$4"
+cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-zero exit means it did not work
+	local action="$1" arg="$2" days="$3" region="$4" name="$5"
+	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
+	[ "${#name}" -le 40 ] || die "that name is too long"
 	case "$arg" in *[!0-9./]*) die "that is not an address or a number" ;; esac
 	case "$days" in *[!0-9]*) die "days must be a number" ;; esac
 	case "$region" in *[!a-z0-9\ ,-]*) die "place names may only use letters, numbers, spaces, commas and hyphens" ;; esac
@@ -649,6 +742,12 @@ cmd_action() { # action [arg] [days] [place] : prints the result; a non-zero exi
 		setdeviceall) cmd_device all ;;
 		doctor) cmd_doctor ;;
 		regions) cmd_regions measure | head -n 6 ;;
+		testalert) cmd_testalert ;;
+		log) cmd_log ;;
+		linetest) cmd_linetest ;;
+		trace) cmd_trace "$arg" ;;
+		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" ;;
+		clearhistory) cmd_clear_history ;;
 		*) die "unknown action" ;;
 	esac
 }
@@ -1040,7 +1139,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch block <ip> [days] block a server (default $BLOCK_DAYS days, 0 = until unblocked)
   matchwatch unblock <ip>|all  remove a block
   matchwatch blocklist         show blocked servers
-  matchwatch doctor            check that everything needed is in place
+  matchwatch doctor            check that everything needed is in place (changes nothing)
+  matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   /etc/init.d/matchwatch start|stop|restart|enable
 
 Dashboard and settings: LuCI, under Services, MatchWatch
@@ -1073,6 +1173,7 @@ case "$1" in
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
 	doctor) cmd_doctor ;;
+	clear-history) cmd_clear_history ;;
 	version) echo "$VERSION" ;;
 	_probe_start) shift; cmd_probe_start "$@" ;;
 	_probe_stop) cmd_probe_stop "$2" ;;
@@ -2269,14 +2370,14 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_9'
 #!/bin/sh
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
-#   read   checks, and "I felt that" (which only records a time)
-#   write  anything that blocks, stays, measures, or changes QoSmate or the watched device
+#   read   checks, the line test, a route trace, the activity log, and "I felt that"
+#   write  anything that blocks, stays, measures, alerts, renames, clears, or changes QoSmate or the device
 # The work itself is done by /usr/bin/matchwatch _action, which validates every argument.
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall"
+READ="hello mark devices doctor qos log linetest trace"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory"
 
 reply() { # ok(0|1) text
 	json_init
@@ -2287,7 +2388,7 @@ reply() { # ok(0|1) text
 
 case "$1" in
 	list)
-		echo '{"read":{"action":"str","arg":"str"},"write":{"action":"str","arg":"str","days":"str","region":"str"}}'
+		echo '{"read":{"action":"str","arg":"str"},"write":{"action":"str","arg":"str","days":"str","region":"str","name":"str"}}'
 		;;
 	call)
 		read -r input
@@ -2296,6 +2397,7 @@ case "$1" in
 		json_get_var arg arg
 		json_get_var days days
 		json_get_var region region
+		json_get_var name name
 
 		case "$2" in
 			read) allowed="$READ" ;;
@@ -2305,7 +2407,7 @@ case "$1" in
 		case "$action" in ""|*[!a-z]*) reply 0 "unknown action"; exit 0 ;; esac
 		case " $allowed " in *" $action "*) ;; *) reply 0 "unknown action"; exit 0 ;; esac
 
-		if out="$(/usr/bin/matchwatch _action "$action" "$arg" "$days" "$region" 2>&1)"; then
+		if out="$(/usr/bin/matchwatch _action "$action" "$arg" "$days" "$region" "$name" 2>&1)"; then
 			reply 1 "$out"
 		else
 			reply 0 "$out"
@@ -2376,7 +2478,7 @@ cat > "$R/www/luci-static/resources/matchwatch/dashboard.js" <<'MW_FILE_END_12'
 // and the optional page that needs no login. Each home supplies T, how to talk to the router:
 //   T.css       address of dashboard.css
 //   T.get(file) promise of one parsed JSON data file (status.json, matches/<id>.json, ...)
-//   T.act(p)    promise of {ok, out} for a button: p = {action, arg, region}
+//   T.act(p)    promise of {ok, out} for a button: p = {action, arg, region, name}
 //   T.readonly  true = view only: buttons that change things are left out
 //   T.dark()    optional: true when the surrounding page is dark (default: the device's setting)
 //   T.settings  optional: address of the settings page
@@ -2601,7 +2703,7 @@ function updateLive() {
 	if (L.ip !== s.ip + isBlocked(s.ip)) {
 		L.ip = s.ip + isBlocked(s.ip); L.actions.textContent = "";
 		if (!isBlocked(s.ip)) L.actions.appendChild(act("Block this server", "block", s.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
-		L.actions.appendChild(act("Check QoSmate", "qos", null, { done: function (out) { toast(out.split("\n").slice(-1)[0]); } }));
+		if (D.info.qosmate !== false) L.actions.appendChild(act("Is my game prioritised?", "qos", null, { done: function (out) { toast(out.split("\n").slice(-1)[0]); } }));
 	}
 	drawChart(L.cv, { d: s.tl_d || [], u: s.tl_u || [], p: s.tl_p || [], dn: s.tick ? 1000 / s.tick : 0, un: s.uprate ? 1000 / s.uprate : 0, slots: 120,
 		marks: (s.marks || []).map(function (m) { return 119 - (now - m.t); }) });
@@ -2854,21 +2956,120 @@ function pageServers() {
 		view.appendChild(h("div", { cls: "tablewrap" }, t3));
 	}
 }
+// A slow tool: the router starts it and answers with a job number; the result lands in a data file a little later.
+function job(btn, action, arg, file, done) {
+	var label = btn.textContent, reset = function () { btn.disabled = false; btn.textContent = label; };
+	btn.disabled = true; btn.textContent = "Working...";
+	api(action, arg).then(function (j) {
+		if (!j.ok) { reset(); toast(j.out || j.error || "That did not work.", true); return; }
+		var id = String(j.out || "").trim(), tries = 0;
+		var t = setInterval(function () {
+			get(file, function (r) {
+				if (r && r.state === "done" && r.id === id) { clearInterval(t); reset(); done(r); }
+				else if (++tries > 45) { clearInterval(t); reset(); toast("That took too long. Try again.", true); }
+			});
+		}, 2000);
+	});
+}
+function csvCell(v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+function downloadHistory() {
+	var cols = ["start", "game", "city", "cc", "ip", "port", "dur", "ping", "jit", "lost", "overall", "code", "verdict"];
+	var lines = [["When", "Game", "City", "Country", "Server", "Port", "Seconds", "Ping ms", "Jitter ms", "Missing %", "Overall", "Finding", "Verdict"].join(",")];
+	D.hist.forEach(function (m) { lines.push(cols.map(function (c) { return csvCell(c === "start" ? new Date(m.start * 1000).toISOString() : m[c]); }).join(",")); });
+	var a = document.createElement("a");
+	a.href = URL.createObjectURL(new Blob([lines.join("\r\n") + "\r\n"], { type: "text/csv" }));
+	a.download = "matchwatch-history.csv";
+	document.body.appendChild(a); a.click(); a.remove();
+	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+}
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
+	var i = D.info, hasQos = i.qosmate !== false;
 	if (!RO) {
 		var out = h("pre"); out.style.display = "none";
 		var show = function (text) { out.textContent = text; out.style.display = "block"; };
 		view.appendChild(h("h2", "Checks"));
-		view.appendChild(h("div", { cls: "actions" }, act("Check QoSmate", "qos", null, { solid: true, done: show }), act("Run the self-check", "doctor", null, { done: show })));
-		view.appendChild(h("p", { cls: "note", text: "The QoSmate check needs a match in progress. The self-check listens for five seconds." }));
+		view.appendChild(h("div", { cls: "actions" }, act("Check MatchWatch is working", "doctor", null, { solid: true, done: show }), hasQos ? act("Is my game prioritised?", "qos", null, { done: show }) : null));
+		view.appendChild(h("p", { cls: "note", text: "Neither check changes anything. The first confirms MatchWatch can see your device's traffic, and takes five seconds." + (hasQos ? " The second looks at whether your game's traffic is in QoSmate's top priority queue, and needs a match in progress." : "") }));
 		view.appendChild(out);
-		view.appendChild(h("h2", "QoSmate priority"));
-		view.appendChild(h("p", { cls: "note", text: "If the check says your game is not reaching the top queue, this adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as EF: top priority in every QoSmate mode. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes these two out again." }));
-		view.appendChild(h("div", { cls: "actions" }, act("Prioritise my game traffic", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: show }), act("Remove those rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: show })));
+
+		view.appendChild(h("h2", "Test your line"));
+		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
+		lineBtn.addEventListener("click", function () {
+			lineOut.textContent = "";
+			job(lineBtn, "linetest", null, "linetest.json", function (r) {
+				lineOut.appendChild(h("p", { cls: "lede " + (r.verdict === "good" ? "ok" : r.verdict === "fair" ? "mid" : r.verdict === "poor" ? "low" : ""), text: r.msg }));
+				var t = table([["Target"], ["Address"], ["Ping ms", "num"], ["Slowest 5% ms", "num"], ["Jitter ms", "num"], ["Lost %", "num"]]);
+				(r.rows || []).forEach(function (x) { t.lastChild.appendChild(row(x.answered ? [[x.name], [x.ip], [fmt(x.med, 1), "num s"], [fmt(x.p95, 1), "num"], [fmt(x.jit, 2), "num"], [fmt(x.loss, 0), "num"]] : [[x.name], [x.ip], ["Does not answer ping", "num"], ["", "num"], ["", "num"], ["", "num"]])); });
+				lineOut.appendChild(h("div", { cls: "tablewrap" }, t));
+			});
+		});
+		view.appendChild(h("div", { cls: "actions" }, lineBtn));
+		view.appendChild(h("p", { cls: "note", text: "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your own connection is steady tonight. It changes nothing." }));
+		view.appendChild(lineOut);
+
+		view.appendChild(h("h2", "Phone alerts"));
+		view.appendChild(h("div", { cls: "actions" }, act("Send a test alert", "testalert", null, {})));
+		view.appendChild(h("p", { cls: "note", text: i.notify ? "Sends one message to your phone, to prove the address in Settings works." : "No phone alerts address is set yet. Add one under Alerts on the Settings tab, then use this to prove it works." }));
+
+		if (D.servers.length) {
+			view.appendChild(h("h2", "Route to a server"));
+			var sel = h("select", { "aria-label": "Server to trace" });
+			D.servers.slice().sort(function (a, b) { return b.last - a.last; }).forEach(function (s) { sel.appendChild(h("option", { value: s.ip, text: s.ip + (place(s) ? ", " + place(s) : "") + " (rated " + s.rating + ")" })); });
+			var trOut = h("div"), trBtn = h("button", { type: "button", text: "Trace the route now" });
+			trBtn.addEventListener("click", function () {
+				trOut.textContent = "";
+				job(trBtn, "trace", sel.value, "trace.json", function (r) {
+					if (!r.hops || !r.hops.length) { trOut.appendChild(h("p", { cls: "note", text: "No hop answered." })); return; }
+					var ol = h("ol", { cls: "hops" }); r.hops.forEach(function (x) { ol.appendChild(h("li", x)); }); trOut.appendChild(ol);
+					trOut.appendChild(h("p", { cls: "note", text: "Each line is one stop between your router and the server, with how long it took to answer. A star means that stop did not answer, which is common and not a fault. Compare with the route in a match report to see whether the path has changed." }));
+				});
+			});
+			view.appendChild(h("div", { cls: "stayform" }, sel, trBtn));
+			view.appendChild(trOut);
+		}
+
+		var ports = [], names = {};
+		D.hist.forEach(function (m) { if (m.port && ports.indexOf(m.port) < 0) { ports.push(m.port); names[m.port] = m.game || ""; } });
+		if (ports.length) {
+			view.appendChild(h("h2", "Name a game"));
+			var gsel = h("select", { "aria-label": "Game to name" });
+			ports.forEach(function (p) { gsel.appendChild(h("option", { value: String(p), text: (names[p] || "Unnamed game") + " (server port " + p + ")" })); });
+			var ginp = h("input", { type: "text", maxlength: "40", placeholder: "Name to show", autocomplete: "off", "aria-label": "New name for the game" });
+			var gbtn = h("button", { type: "button", text: "Save name" });
+			gbtn.addEventListener("click", function () {
+				var v = ginp.value.replace(/[^A-Za-z0-9 .:-]/g, "").trim();
+				if (!v) { ginp.focus(); return; }
+				gbtn.disabled = true;
+				T.act({ action: "gamename", arg: gsel.value, name: v }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+					gbtn.disabled = false; toast(j.out || "That did not work.", !j.ok);
+					// relabel in place: redrawing the page would wipe the results of the other tools
+					if (j.ok) { gsel.options[gsel.selectedIndex].textContent = v + " (server port " + gsel.value + ")"; ginp.value = ""; refresh(true); }
+				});
+			});
+			view.appendChild(h("div", { cls: "stayform" }, gsel, ginp, gbtn));
+			view.appendChild(h("p", { cls: "note", text: "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it." }));
+		}
+
+		view.appendChild(h("h2", "Your history"));
+		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
+		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
+		view.appendChild(h("div", { cls: "actions" }, dl, act("Clear all history", "clearhistory", null, { danger: true, confirm: "Confirm: delete every recorded match", done: function (o) { toast(o); setTimeout(function () { refresh(true); if (page === "tools") pageTools(); }, 2500); } })));
+		view.appendChild(h("p", { cls: "note", text: D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. Clearing deletes every match and the server ratings built from them, and cannot be undone. Blocks, the places you stay on and your settings are kept. It restarts MatchWatch, so do it between matches." }));
+
+		view.appendChild(h("h2", "Recent activity"));
+		var logOut = h("pre"); logOut.style.display = "none";
+		view.appendChild(h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.textContent = o || "Nothing logged yet."; logOut.style.display = "block"; } })));
+		view.appendChild(h("p", { cls: "note", text: "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent." }));
+		view.appendChild(logOut);
+
+		if (hasQos) {
+			view.appendChild(h("h2", "QoSmate priority"));
+			view.appendChild(h("p", { cls: "note", text: "If \"Is my game prioritised?\" says your game is not reaching the top queue, this adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as EF: top priority in every QoSmate mode. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes these two out again." }));
+			view.appendChild(h("div", { cls: "actions" }, act("Prioritise my game traffic", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: show }), act("Remove those rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: show })));
+		}
 	}
 	view.appendChild(h("h2", "Settings in use"));
-	var i = D.info;
 	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"],
 		["Blocks last", (i.block_days || 14) + " days"], ["Automatic blocking", i.autoblock ? "On" : "Off"], ["Phone notifications", i.notify ? "On" : "Off"], ["Your PC counts towards scores", i.pc_score === false ? "No" : "Yes"], ["Server location lookups", i.geo === false ? "Off" : "On"],
 		["This dashboard without login", i.web ? "On, view only" : "Off"]]));
@@ -3014,6 +3215,8 @@ select { font: inherit; padding: 6px 10px; color: var(--ink); background: var(--
 .stayform input { flex: 1; min-width: 200px; font: inherit; padding: 8px 10px; color: var(--ink); background: var(--panel); border: 1.5px solid var(--ink); border-radius: 3px; }
 .stayform input:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
 .stayform button { margin: 0; }
+.stayform select { max-width: 100%; }
+.lede.ok, .lede.mid, .lede.low { font-weight: 600; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; }
 .actions button { margin: 0; }
 
@@ -3045,10 +3248,10 @@ cat > "$R/www/luci-static/resources/view/matchwatch/dashboard.js" <<'MW_FILE_END
 var DATA = '/tmp/matchwatch/www/';
 
 var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: [ 'action', 'arg' ], expect: {} });
-var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region' ], expect: {} });
+var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1 };
 
 function loadDashboard() {
 	if (window.MatchwatchDashboard)
@@ -3103,7 +3306,7 @@ return view.extend({
 				if (READS[p.action])
 					return callRead(p.action, p.arg || '');
 
-				return callWrite(p.action, p.arg || '', p.days || '', p.region || '');
+				return callWrite(p.action, p.arg || '', p.days || '', p.region || '', p.name || '');
 			}
 		});
 

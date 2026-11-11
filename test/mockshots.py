@@ -90,7 +90,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.10.1", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False}}
+           "info": {"version": "0.11.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True}}
     d, u = timeline(120, "clean"); d[40], d[41], d[95] = 265.3, 98, 150; u[70] = 166
     p = [round(random.uniform(5.8, 6.4), 1) for _ in range(120)]; p[40], p[41] = 14.5, 9.0
     out["status"] = {"ts": NOW + 3600, "candidates": 0, "flows": 3, "sessions": [{"ip": "203.0.113.21", "port": 30120, "device": "192.168.1.50", "age": 412, "start": NOW - 412, "loc": "Frankfurt, DE", "org": "Example Hosting Frankfurt",
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     os.makedirs(ROOT + "/docs", exist_ok=True)
-    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 4000)):
+    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 4000), ("#/tools", "tools", 2600)):
         shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
     srv.shutdown()
     shutil.rmtree(site, ignore_errors=True)

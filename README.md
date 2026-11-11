@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.10.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.11.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -21,7 +21,8 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Keeps a history with a full report and chart for each match, and ratings per server and datacentre.
 - Has an "I felt that" button: press it when something feels off and it shows what the network was doing.
 - Can block bad servers or datacentres, or keep you to a pool of places you choose.
-- Can alert your phone through ntfy, and check that QoSmate is prioritising your game.
+- Can alert your phone through ntfy, including the moment a match starts, for when you have stepped away during a queue.
+- Can test your line before you queue, and check that QoSmate is prioritising your game.
 - Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
 
 | Live | Match report |
@@ -31,6 +32,10 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 | Matches | Servers |
 | --- | --- |
 | ![Matches](docs/matches.png) | ![Servers](docs/servers-pool.png) |
+
+| Tools |
+| --- |
+| ![Tools](docs/tools.png) |
 
 The screenshots are made from invented data (`test/mockshots.py`); the addresses and matches in them are not real.
 
@@ -90,7 +95,7 @@ keeps your history and settings. Use `purge` instead of `remove` to delete those
 - **Last match**: the full report for one match: verdict, the four links in the chain, a chart of the whole match, every figure, the route trace and your marks.
 - **Matches**: every recorded match, your latest session in a sentence, and ratings by hour of the day.
 - **Servers**: datacentres, regions and servers with their ratings, and buttons to block, unblock or stay on them.
-- **Tools**: the QoSmate check, the self-check and the settings in use.
+- **Tools**: checks and utilities, listed under [Tools](#tools) below.
 
 ### Settings
 
@@ -123,9 +128,24 @@ Everything is also available over SSH:
 | `matchwatch qos` | During a match: is the game in QoSmate's top priority queue? |
 | `matchwatch qos fix` / `qos unfix` | Add or remove QoSmate rules that prioritise your gaming device |
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
-| `matchwatch doctor` | Checks that capture works |
+| `matchwatch doctor` | Checks that capture works. Changes nothing |
+| `matchwatch clear-history` | Forgets every recorded match. Blocks and settings are kept |
 
 Settings live in `/etc/config/matchwatch`. To change one over SSH: `uci set matchwatch.main.<option>=<value>`, `uci commit matchwatch`, then `/etc/init.d/matchwatch restart`.
+
+## Tools
+
+The Tools page in the dashboard has:
+
+- **Check MatchWatch is working.** Confirms the programs it needs are present and that it can see your device's traffic. Takes five seconds and changes nothing.
+- **Is my game prioritised?** Only shown when QoSmate is installed. Checks whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.
+- **Test my line.** Twenty seconds of pings from the router to your provider's first hop and two public servers, with no game needed. It gives a plain verdict on ping, jitter and loss, so you can tell before you queue whether your own connection is steady. Trouble seen on every target is blamed on your line; trouble with one target is not.
+- **Send a test alert.** Sends one message to your phone to prove the alerts address works.
+- **Route to a server.** Traces the route to any server in your history, to compare with the route in a match report.
+- **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it.
+- **Your history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
+- **Recent activity.** The last things MatchWatch wrote to the router's log.
+- **QoSmate priority.** Only shown when QoSmate is installed. See [QoSmate check and fix](#qosmate-check-and-fix).
 
 ## What it measures
 
@@ -150,9 +170,15 @@ Each part gets a score out of 100. The verdict names the weakest part. Scoring s
 
 Press the button on the Live page (or the M key with the page focused) when something feels off: a shot that should have hit, a rubber-band, a death behind cover. MatchWatch looks at the six seconds before the press and says whether the server stalled, your ping jumped, your PC stopped sending, or nothing showed on the network at all. Marks appear on the chart, in the match report and in the history.
 
-## Lobby alert
+## Lobby and match-start alerts
 
-When the game first contacts a server it recognises as a game server (same port or address block as an earlier match), MatchWatch looks up where it is, measures the ping and checks its history. The Live page shows the result, with a button to block the server before the match starts. With phone alerts set up, you are notified when the server is noticeably further than your best datacentre or has rated badly. It needs at least one recorded match before it can recognise game servers.
+**Lobby alert.** When the game first contacts a server it recognises as a game server (same port or address block as an earlier match), MatchWatch looks up where it is, measures the ping and checks its history. The Live page shows the result, with a button to block the server before the match starts. With phone alerts set up, you are notified when the server is noticeably further than your best datacentre or has rated badly. It needs at least one recorded match before it can recognise game servers.
+
+**Match-start alert.** Away from your desk during a long queue? Turn on "Alert when a match starts" in Settings and your phone is told the moment the game itself begins, with where the server is and the ping:
+
+> Match started: Frankfurt, DE, ping about 6 ms.
+
+It fires when the steady game traffic starts, not while you are still in the lobby or on a loading screen, so it means "get back to your seat now". It needs phone alerts set up (see [Phone alerts](#phone-alerts)), and is off by default.
 
 ## Blocking
 

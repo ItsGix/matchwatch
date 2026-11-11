@@ -2,7 +2,7 @@
 // and the optional page that needs no login. Each home supplies T, how to talk to the router:
 //   T.css       address of dashboard.css
 //   T.get(file) promise of one parsed JSON data file (status.json, matches/<id>.json, ...)
-//   T.act(p)    promise of {ok, out} for a button: p = {action, arg, region}
+//   T.act(p)    promise of {ok, out} for a button: p = {action, arg, region, name}
 //   T.readonly  true = view only: buttons that change things are left out
 //   T.dark()    optional: true when the surrounding page is dark (default: the device's setting)
 //   T.settings  optional: address of the settings page
@@ -227,7 +227,7 @@ function updateLive() {
 	if (L.ip !== s.ip + isBlocked(s.ip)) {
 		L.ip = s.ip + isBlocked(s.ip); L.actions.textContent = "";
 		if (!isBlocked(s.ip)) L.actions.appendChild(act("Block this server", "block", s.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
-		L.actions.appendChild(act("Check QoSmate", "qos", null, { done: function (out) { toast(out.split("\n").slice(-1)[0]); } }));
+		if (D.info.qosmate !== false) L.actions.appendChild(act("Is my game prioritised?", "qos", null, { done: function (out) { toast(out.split("\n").slice(-1)[0]); } }));
 	}
 	drawChart(L.cv, { d: s.tl_d || [], u: s.tl_u || [], p: s.tl_p || [], dn: s.tick ? 1000 / s.tick : 0, un: s.uprate ? 1000 / s.uprate : 0, slots: 120,
 		marks: (s.marks || []).map(function (m) { return 119 - (now - m.t); }) });
@@ -480,21 +480,120 @@ function pageServers() {
 		view.appendChild(h("div", { cls: "tablewrap" }, t3));
 	}
 }
+// A slow tool: the router starts it and answers with a job number; the result lands in a data file a little later.
+function job(btn, action, arg, file, done) {
+	var label = btn.textContent, reset = function () { btn.disabled = false; btn.textContent = label; };
+	btn.disabled = true; btn.textContent = "Working...";
+	api(action, arg).then(function (j) {
+		if (!j.ok) { reset(); toast(j.out || j.error || "That did not work.", true); return; }
+		var id = String(j.out || "").trim(), tries = 0;
+		var t = setInterval(function () {
+			get(file, function (r) {
+				if (r && r.state === "done" && r.id === id) { clearInterval(t); reset(); done(r); }
+				else if (++tries > 45) { clearInterval(t); reset(); toast("That took too long. Try again.", true); }
+			});
+		}, 2000);
+	});
+}
+function csvCell(v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+function downloadHistory() {
+	var cols = ["start", "game", "city", "cc", "ip", "port", "dur", "ping", "jit", "lost", "overall", "code", "verdict"];
+	var lines = [["When", "Game", "City", "Country", "Server", "Port", "Seconds", "Ping ms", "Jitter ms", "Missing %", "Overall", "Finding", "Verdict"].join(",")];
+	D.hist.forEach(function (m) { lines.push(cols.map(function (c) { return csvCell(c === "start" ? new Date(m.start * 1000).toISOString() : m[c]); }).join(",")); });
+	var a = document.createElement("a");
+	a.href = URL.createObjectURL(new Blob([lines.join("\r\n") + "\r\n"], { type: "text/csv" }));
+	a.download = "matchwatch-history.csv";
+	document.body.appendChild(a); a.click(); a.remove();
+	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+}
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
+	var i = D.info, hasQos = i.qosmate !== false;
 	if (!RO) {
 		var out = h("pre"); out.style.display = "none";
 		var show = function (text) { out.textContent = text; out.style.display = "block"; };
 		view.appendChild(h("h2", "Checks"));
-		view.appendChild(h("div", { cls: "actions" }, act("Check QoSmate", "qos", null, { solid: true, done: show }), act("Run the self-check", "doctor", null, { done: show })));
-		view.appendChild(h("p", { cls: "note", text: "The QoSmate check needs a match in progress. The self-check listens for five seconds." }));
+		view.appendChild(h("div", { cls: "actions" }, act("Check MatchWatch is working", "doctor", null, { solid: true, done: show }), hasQos ? act("Is my game prioritised?", "qos", null, { done: show }) : null));
+		view.appendChild(h("p", { cls: "note", text: "Neither check changes anything. The first confirms MatchWatch can see your device's traffic, and takes five seconds." + (hasQos ? " The second looks at whether your game's traffic is in QoSmate's top priority queue, and needs a match in progress." : "") }));
 		view.appendChild(out);
-		view.appendChild(h("h2", "QoSmate priority"));
-		view.appendChild(h("p", { cls: "note", text: "If the check says your game is not reaching the top queue, this adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as EF: top priority in every QoSmate mode. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes these two out again." }));
-		view.appendChild(h("div", { cls: "actions" }, act("Prioritise my game traffic", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: show }), act("Remove those rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: show })));
+
+		view.appendChild(h("h2", "Test your line"));
+		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
+		lineBtn.addEventListener("click", function () {
+			lineOut.textContent = "";
+			job(lineBtn, "linetest", null, "linetest.json", function (r) {
+				lineOut.appendChild(h("p", { cls: "lede " + (r.verdict === "good" ? "ok" : r.verdict === "fair" ? "mid" : r.verdict === "poor" ? "low" : ""), text: r.msg }));
+				var t = table([["Target"], ["Address"], ["Ping ms", "num"], ["Slowest 5% ms", "num"], ["Jitter ms", "num"], ["Lost %", "num"]]);
+				(r.rows || []).forEach(function (x) { t.lastChild.appendChild(row(x.answered ? [[x.name], [x.ip], [fmt(x.med, 1), "num s"], [fmt(x.p95, 1), "num"], [fmt(x.jit, 2), "num"], [fmt(x.loss, 0), "num"]] : [[x.name], [x.ip], ["Does not answer ping", "num"], ["", "num"], ["", "num"], ["", "num"]])); });
+				lineOut.appendChild(h("div", { cls: "tablewrap" }, t));
+			});
+		});
+		view.appendChild(h("div", { cls: "actions" }, lineBtn));
+		view.appendChild(h("p", { cls: "note", text: "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your own connection is steady tonight. It changes nothing." }));
+		view.appendChild(lineOut);
+
+		view.appendChild(h("h2", "Phone alerts"));
+		view.appendChild(h("div", { cls: "actions" }, act("Send a test alert", "testalert", null, {})));
+		view.appendChild(h("p", { cls: "note", text: i.notify ? "Sends one message to your phone, to prove the address in Settings works." : "No phone alerts address is set yet. Add one under Alerts on the Settings tab, then use this to prove it works." }));
+
+		if (D.servers.length) {
+			view.appendChild(h("h2", "Route to a server"));
+			var sel = h("select", { "aria-label": "Server to trace" });
+			D.servers.slice().sort(function (a, b) { return b.last - a.last; }).forEach(function (s) { sel.appendChild(h("option", { value: s.ip, text: s.ip + (place(s) ? ", " + place(s) : "") + " (rated " + s.rating + ")" })); });
+			var trOut = h("div"), trBtn = h("button", { type: "button", text: "Trace the route now" });
+			trBtn.addEventListener("click", function () {
+				trOut.textContent = "";
+				job(trBtn, "trace", sel.value, "trace.json", function (r) {
+					if (!r.hops || !r.hops.length) { trOut.appendChild(h("p", { cls: "note", text: "No hop answered." })); return; }
+					var ol = h("ol", { cls: "hops" }); r.hops.forEach(function (x) { ol.appendChild(h("li", x)); }); trOut.appendChild(ol);
+					trOut.appendChild(h("p", { cls: "note", text: "Each line is one stop between your router and the server, with how long it took to answer. A star means that stop did not answer, which is common and not a fault. Compare with the route in a match report to see whether the path has changed." }));
+				});
+			});
+			view.appendChild(h("div", { cls: "stayform" }, sel, trBtn));
+			view.appendChild(trOut);
+		}
+
+		var ports = [], names = {};
+		D.hist.forEach(function (m) { if (m.port && ports.indexOf(m.port) < 0) { ports.push(m.port); names[m.port] = m.game || ""; } });
+		if (ports.length) {
+			view.appendChild(h("h2", "Name a game"));
+			var gsel = h("select", { "aria-label": "Game to name" });
+			ports.forEach(function (p) { gsel.appendChild(h("option", { value: String(p), text: (names[p] || "Unnamed game") + " (server port " + p + ")" })); });
+			var ginp = h("input", { type: "text", maxlength: "40", placeholder: "Name to show", autocomplete: "off", "aria-label": "New name for the game" });
+			var gbtn = h("button", { type: "button", text: "Save name" });
+			gbtn.addEventListener("click", function () {
+				var v = ginp.value.replace(/[^A-Za-z0-9 .:-]/g, "").trim();
+				if (!v) { ginp.focus(); return; }
+				gbtn.disabled = true;
+				T.act({ action: "gamename", arg: gsel.value, name: v }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+					gbtn.disabled = false; toast(j.out || "That did not work.", !j.ok);
+					// relabel in place: redrawing the page would wipe the results of the other tools
+					if (j.ok) { gsel.options[gsel.selectedIndex].textContent = v + " (server port " + gsel.value + ")"; ginp.value = ""; refresh(true); }
+				});
+			});
+			view.appendChild(h("div", { cls: "stayform" }, gsel, ginp, gbtn));
+			view.appendChild(h("p", { cls: "note", text: "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it." }));
+		}
+
+		view.appendChild(h("h2", "Your history"));
+		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
+		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
+		view.appendChild(h("div", { cls: "actions" }, dl, act("Clear all history", "clearhistory", null, { danger: true, confirm: "Confirm: delete every recorded match", done: function (o) { toast(o); setTimeout(function () { refresh(true); if (page === "tools") pageTools(); }, 2500); } })));
+		view.appendChild(h("p", { cls: "note", text: D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. Clearing deletes every match and the server ratings built from them, and cannot be undone. Blocks, the places you stay on and your settings are kept. It restarts MatchWatch, so do it between matches." }));
+
+		view.appendChild(h("h2", "Recent activity"));
+		var logOut = h("pre"); logOut.style.display = "none";
+		view.appendChild(h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.textContent = o || "Nothing logged yet."; logOut.style.display = "block"; } })));
+		view.appendChild(h("p", { cls: "note", text: "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent." }));
+		view.appendChild(logOut);
+
+		if (hasQos) {
+			view.appendChild(h("h2", "QoSmate priority"));
+			view.appendChild(h("p", { cls: "note", text: "If \"Is my game prioritised?\" says your game is not reaching the top queue, this adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as EF: top priority in every QoSmate mode. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes these two out again." }));
+			view.appendChild(h("div", { cls: "actions" }, act("Prioritise my game traffic", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: show }), act("Remove those rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: show })));
+		}
 	}
 	view.appendChild(h("h2", "Settings in use"));
-	var i = D.info;
 	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"],
 		["Blocks last", (i.block_days || 14) + " days"], ["Automatic blocking", i.autoblock ? "On" : "Off"], ["Phone notifications", i.notify ? "On" : "Off"], ["Your PC counts towards scores", i.pc_score === false ? "No" : "Yes"], ["Server location lookups", i.geo === false ? "Off" : "On"],
 		["This dashboard without login", i.web ? "On, view only" : "Off"]]));
