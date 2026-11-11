@@ -70,6 +70,11 @@ return view.extend({
 			return (value === '' || /^https?:\/\/[^\s'"]+$/.test(value)) ? true : _('Enter a web address starting with http:// or https://');
 		};
 
+		o = s.taboption('alerts', form.Flag, 'notify_start', _('Alert when a match starts'),
+			_('Tells your phone the moment the game itself begins, with where the server is and the ping. Handy when you have stepped away during a long queue.'));
+		o.default = '0';
+		o.rmempty = false;
+
 		o = s.taboption('alerts', form.Flag, 'notify_every_match', _('Alert after every match'),
 			_('Off: only after bad matches and when you land on a server with a bad history.'));
 		o.default = '0';

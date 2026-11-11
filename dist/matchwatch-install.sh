@@ -51,7 +51,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.10.0"
+VERSION="0.10.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -69,6 +69,7 @@ MIN_UP_PPS=8
 GEO=1
 NTFY_URL=""
 NOTIFY_EVERY_MATCH=0
+NOTIFY_START=0
 WARN_SCORE=55
 PC_SCORE=1
 AUTOBLOCK=0
@@ -96,6 +97,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get GEO main geo "$GEO"
 	config_get NTFY_URL main ntfy_url "$NTFY_URL"
 	config_get NOTIFY_EVERY_MATCH main notify_every_match "$NOTIFY_EVERY_MATCH"
+	config_get NOTIFY_START main notify_start "$NOTIFY_START"
 	config_get WARN_SCORE main warn_score "$WARN_SCORE"
 	config_get PC_SCORE main pc_score "$PC_SCORE"
 	config_get AUTOBLOCK main autoblock "$AUTOBLOCK"
@@ -179,12 +181,27 @@ ploop() { # name ip [hop] : one probe a second, a line per attempt (ms, or x for
 }
 start_ping() { [ -e "$PD/stop" ] && return; ploop "$1" "$2" "$3" & echo $! > "$PD/$1.pid"; }
 
+notify_start() { # server-ip : tell the phone a match has begun, for when you are away from the screen
+	local g cc country city rest p loc
+	sleep 4
+	[ -d "$PD" ] || return 0
+	g="$(geo_lookup "$1")"
+	IFS="$TAB" read -r cc country city rest <<EOF
+$g
+EOF
+	loc="${city:+$city, }$cc"
+	p="$(cat "$PD/far.last" 2>/dev/null)"
+	case "$p" in ""|x) p="" ;; *) p="$(echo "$p" | awk '{ printf "%.0f", $1 }')" ;; esac
+	cmd_notify "Match started${loc:+: $loc}${p:+, ping about $p ms}."
+}
+
 cmd_probe_start() {
 	local sid="$1" rip="$2" lip="$3" near last hops reached
 	is_ipv4 "$rip" || return 1
 	PD="$RUN/probe.$sid"; mkdir -p "$PD"
 	echo server > "$PD/far.kind"; echo "$rip" > "$PD/far.ip"
 	start_ping far "$rip"
+	[ "$NOTIFY_START" = 1 ] && notify_start "$rip" &
 	[ -n "$lip" ] && is_ipv4 "$lip" && start_ping lan "$lip"
 	( geo_lookup "$rip" > "$PD/geo.tmp" 2>/dev/null && mv "$PD/geo.tmp" "$PD/geo" ) &
 	[ -n "$4" ] && ( sleep 5; [ -d "$PD" ] && qos_probe "$rip" "$4" > "$PD/qos.tmp" 2>/dev/null && mv "$PD/qos.tmp" "$PD/qos" ) &
@@ -2670,7 +2687,7 @@ function pageMatch(id) {
 }
 
 // ---------- lists
-var gameFilter = "", hourFilter = -1;
+var gameFilter = "", hourFilter = -1, regionsAll = false;
 function hourOf(m) { return new Date(m.start * 1000).getHours(); }
 function hh(i) { return (i < 10 ? "0" : "") + i + ":00"; }
 function recap() {
@@ -2801,14 +2818,19 @@ function pageServers() {
 	if (!rg.length) view.appendChild(h("p", { cls: "empty", text: "Not measured yet." }));
 	else {
 		var tr = table([["Region"], ["Area"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Your matches there", "num"], ["Rating", "num"], ["Ping in matches", "num"], ["", ""]]);
-		rg.forEach(function (r) {
+		(regionsAll ? rg : rg.slice(0, 4)).forEach(function (r) {
 			tr.lastChild.appendChild(row([[r.city + ", " + r.cc], [r.area], [r.ping == null ? "No reply" : fmt(r.ping, 1), "num s"], [r.jit == null ? "" : fmt(r.jit, 1), "num"],
 				[r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.matchping == null ? "" : fmt(r.matchping, 1), "num"],
 				(function () { var td = h("td", { cls: "act" }); if (r.stay) td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); else if (r.ping != null && stays.length) td.appendChild(act("Add", "stayadd", null, { extra: "&region=" + r.code })); else if (r.ping != null) td.appendChild(act("Stay here", "stay", null, { extra: "&region=" + r.code, confirm: "Confirm: turn the others away" })); return td; })()]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, tr));
 	}
-	view.appendChild(h("div", { cls: "actions" }, act("Measure now", "regions", null, { done: function () { toast("Regions measured."); } })));
+	var more = null;
+	if (rg.length > 4) {
+		more = h("button", { type: "button", text: regionsAll ? "Show the nearest 4" : "Show all " + rg.length + " regions" });
+		more.addEventListener("click", function () { var y = window.scrollY; regionsAll = !regionsAll; pageServers(); window.scrollTo(0, y); });
+	}
+	view.appendChild(h("div", { cls: "actions" }, more, act("Measure now", "regions", null, { done: function () { toast("Regions measured."); } })));
 	view.appendChild(h("p", { cls: "note", text: "Ping from your router to the test server Vultr runs in each of its datacentres" + (rg.length ? ", measured " + when(rg[0].ts) : "") + ". Every Call of Duty server you have been placed on so far is hosted by Vultr, but the game is reported to use other hosts in some places, so this is not a complete list of where it has servers. Stay here on a row is the same as typing that city above: it allows servers within about 150 km of it, whoever hosts them. The game still decides which regions to offer you." }));
 	view.appendChild(h("h2", "Servers, worst first"));
 	if (!D.servers.length) view.appendChild(h("p", { cls: "empty", text: "No servers seen yet." }));
@@ -2855,14 +2877,14 @@ function pageTools() {
 }
 
 // ---------- routing and refresh
-function route() {
+function route(keep) { // keep === true: a redraw with fresh data, so stay where the reader is
 	var parts = (location.hash || "#/").replace(/^#\/?/, "").split("/");
 	page = parts[0] || "live"; pageArg = parts[1] || "";
 	if (["live", "match", "matches", "servers", "tools"].indexOf(page) < 0) page = "live";
 	Array.prototype.forEach.call(shadow.querySelectorAll("nav a"), function (a) { if (a.getAttribute("data-p") === page) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
 	pageMatch.repaint = null;
 	if (page === "live") pageLive(); else if (page === "match") pageMatch(pageArg || "last"); else if (page === "matches") pageMatches(); else if (page === "servers") pageServers(); else pageTools();
-	window.scrollTo(0, 0);
+	if (keep !== true) window.scrollTo(0, 0);
 }
 function setState() {
 	var e = shadow.getElementById("state"), st = D.st, s = session();
@@ -2872,9 +2894,11 @@ function setState() {
 	else { e.className = ""; e.textContent = "Waiting for a match"; }
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
+// half-typed text in the places box would be wiped by a redraw
+function typing() { var i = shadow.getElementById("place"); return !!(i && i.value); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
-	var left = 5, done = function () { if (--left === 0 && (force || !armed) && page !== "live" && page !== "match" && page !== "tools") route(); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
+	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
@@ -3160,6 +3184,11 @@ return view.extend({
 		o.validate = function (section_id, value) {
 			return (value === '' || /^https?:\/\/[^\s'"]+$/.test(value)) ? true : _('Enter a web address starting with http:// or https://');
 		};
+
+		o = s.taboption('alerts', form.Flag, 'notify_start', _('Alert when a match starts'),
+			_('Tells your phone the moment the game itself begins, with where the server is and the ping. Handy when you have stepped away during a long queue.'));
+		o.default = '0';
+		o.rmempty = false;
 
 		o = s.taboption('alerts', form.Flag, 'notify_every_match', _('Alert after every match'),
 			_('Off: only after bad matches and when you land on a server with a bad history.'));

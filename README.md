@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.10.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.10.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -200,7 +200,7 @@ This only happens when you ask for it. If you already have rules named `Game_Out
 
 ## Phone alerts
 
-Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.sh/<your topic>` under Alerts in Settings. You get an alert when you land on a server with a bad history, and after bad matches.
+Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.sh/<your topic>` under Alerts in Settings. You get an alert when you land on a server with a bad history, and after bad matches. Turn on "Alert when a match starts" to also be told the moment the game itself begins, which helps if you step away during a long queue.
 
 ## Privacy and security
 

@@ -313,7 +313,7 @@ function pageMatch(id) {
 }
 
 // ---------- lists
-var gameFilter = "", hourFilter = -1;
+var gameFilter = "", hourFilter = -1, regionsAll = false;
 function hourOf(m) { return new Date(m.start * 1000).getHours(); }
 function hh(i) { return (i < 10 ? "0" : "") + i + ":00"; }
 function recap() {
@@ -444,14 +444,19 @@ function pageServers() {
 	if (!rg.length) view.appendChild(h("p", { cls: "empty", text: "Not measured yet." }));
 	else {
 		var tr = table([["Region"], ["Area"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Your matches there", "num"], ["Rating", "num"], ["Ping in matches", "num"], ["", ""]]);
-		rg.forEach(function (r) {
+		(regionsAll ? rg : rg.slice(0, 4)).forEach(function (r) {
 			tr.lastChild.appendChild(row([[r.city + ", " + r.cc], [r.area], [r.ping == null ? "No reply" : fmt(r.ping, 1), "num s"], [r.jit == null ? "" : fmt(r.jit, 1), "num"],
 				[r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.matchping == null ? "" : fmt(r.matchping, 1), "num"],
 				(function () { var td = h("td", { cls: "act" }); if (r.stay) td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); else if (r.ping != null && stays.length) td.appendChild(act("Add", "stayadd", null, { extra: "&region=" + r.code })); else if (r.ping != null) td.appendChild(act("Stay here", "stay", null, { extra: "&region=" + r.code, confirm: "Confirm: turn the others away" })); return td; })()]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, tr));
 	}
-	view.appendChild(h("div", { cls: "actions" }, act("Measure now", "regions", null, { done: function () { toast("Regions measured."); } })));
+	var more = null;
+	if (rg.length > 4) {
+		more = h("button", { type: "button", text: regionsAll ? "Show the nearest 4" : "Show all " + rg.length + " regions" });
+		more.addEventListener("click", function () { var y = window.scrollY; regionsAll = !regionsAll; pageServers(); window.scrollTo(0, y); });
+	}
+	view.appendChild(h("div", { cls: "actions" }, more, act("Measure now", "regions", null, { done: function () { toast("Regions measured."); } })));
 	view.appendChild(h("p", { cls: "note", text: "Ping from your router to the test server Vultr runs in each of its datacentres" + (rg.length ? ", measured " + when(rg[0].ts) : "") + ". Every Call of Duty server you have been placed on so far is hosted by Vultr, but the game is reported to use other hosts in some places, so this is not a complete list of where it has servers. Stay here on a row is the same as typing that city above: it allows servers within about 150 km of it, whoever hosts them. The game still decides which regions to offer you." }));
 	view.appendChild(h("h2", "Servers, worst first"));
 	if (!D.servers.length) view.appendChild(h("p", { cls: "empty", text: "No servers seen yet." }));
@@ -498,14 +503,14 @@ function pageTools() {
 }
 
 // ---------- routing and refresh
-function route() {
+function route(keep) { // keep === true: a redraw with fresh data, so stay where the reader is
 	var parts = (location.hash || "#/").replace(/^#\/?/, "").split("/");
 	page = parts[0] || "live"; pageArg = parts[1] || "";
 	if (["live", "match", "matches", "servers", "tools"].indexOf(page) < 0) page = "live";
 	Array.prototype.forEach.call(shadow.querySelectorAll("nav a"), function (a) { if (a.getAttribute("data-p") === page) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
 	pageMatch.repaint = null;
 	if (page === "live") pageLive(); else if (page === "match") pageMatch(pageArg || "last"); else if (page === "matches") pageMatches(); else if (page === "servers") pageServers(); else pageTools();
-	window.scrollTo(0, 0);
+	if (keep !== true) window.scrollTo(0, 0);
 }
 function setState() {
 	var e = shadow.getElementById("state"), st = D.st, s = session();
@@ -515,9 +520,11 @@ function setState() {
 	else { e.className = ""; e.textContent = "Waiting for a match"; }
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
+// half-typed text in the places box would be wiped by a redraw
+function typing() { var i = shadow.getElementById("place"); return !!(i && i.value); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
-	var left = 5, done = function () { if (--left === 0 && (force || !armed) && page !== "live" && page !== "match" && page !== "tools") route(); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
+	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });

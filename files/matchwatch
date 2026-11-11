@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.10.0"
+VERSION="0.10.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -20,6 +20,7 @@ MIN_UP_PPS=8
 GEO=1
 NTFY_URL=""
 NOTIFY_EVERY_MATCH=0
+NOTIFY_START=0
 WARN_SCORE=55
 PC_SCORE=1
 AUTOBLOCK=0
@@ -47,6 +48,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get GEO main geo "$GEO"
 	config_get NTFY_URL main ntfy_url "$NTFY_URL"
 	config_get NOTIFY_EVERY_MATCH main notify_every_match "$NOTIFY_EVERY_MATCH"
+	config_get NOTIFY_START main notify_start "$NOTIFY_START"
 	config_get WARN_SCORE main warn_score "$WARN_SCORE"
 	config_get PC_SCORE main pc_score "$PC_SCORE"
 	config_get AUTOBLOCK main autoblock "$AUTOBLOCK"
@@ -130,12 +132,27 @@ ploop() { # name ip [hop] : one probe a second, a line per attempt (ms, or x for
 }
 start_ping() { [ -e "$PD/stop" ] && return; ploop "$1" "$2" "$3" & echo $! > "$PD/$1.pid"; }
 
+notify_start() { # server-ip : tell the phone a match has begun, for when you are away from the screen
+	local g cc country city rest p loc
+	sleep 4
+	[ -d "$PD" ] || return 0
+	g="$(geo_lookup "$1")"
+	IFS="$TAB" read -r cc country city rest <<EOF
+$g
+EOF
+	loc="${city:+$city, }$cc"
+	p="$(cat "$PD/far.last" 2>/dev/null)"
+	case "$p" in ""|x) p="" ;; *) p="$(echo "$p" | awk '{ printf "%.0f", $1 }')" ;; esac
+	cmd_notify "Match started${loc:+: $loc}${p:+, ping about $p ms}."
+}
+
 cmd_probe_start() {
 	local sid="$1" rip="$2" lip="$3" near last hops reached
 	is_ipv4 "$rip" || return 1
 	PD="$RUN/probe.$sid"; mkdir -p "$PD"
 	echo server > "$PD/far.kind"; echo "$rip" > "$PD/far.ip"
 	start_ping far "$rip"
+	[ "$NOTIFY_START" = 1 ] && notify_start "$rip" &
 	[ -n "$lip" ] && is_ipv4 "$lip" && start_ping lan "$lip"
 	( geo_lookup "$rip" > "$PD/geo.tmp" 2>/dev/null && mv "$PD/geo.tmp" "$PD/geo" ) &
 	[ -n "$4" ] && ( sleep 5; [ -d "$PD" ] && qos_probe "$rip" "$4" > "$PD/qos.tmp" 2>/dev/null && mv "$PD/qos.tmp" "$PD/qos" ) &
