@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.15.0"
+VERSION="0.15.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -162,6 +162,8 @@ geo_lookup() {
 	line="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$(jstr "$json" countryCode)" "$(jstr "$json" country)" \
 		"$(jstr "$json" city)" "$(jnum "$json" lat)" "$(jnum "$json" lon)" "$(jstr "$json" isp)" "$(jstr "$json" org)" "$asn")"
 	printf '%s\t%s\n' "$ip" "$line" >> "$DATA/geo.cache"
+	# the cache lives on flash: keep the newest 2000 servers once it passes 3000
+	[ "$(awk 'END { print NR }' "$DATA/geo.cache")" -gt 3000 ] && tail -n 2000 "$DATA/geo.cache" > "$DATA/geo.cache.tmp" && mv -f "$DATA/geo.cache.tmp" "$DATA/geo.cache"
 	echo "$line"
 }
 
@@ -2348,6 +2350,10 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 	}
 	s = s "],\"candidates\":" cand ",\"flows\":" NFLOW "}"
 	if (txt == "") txt = "No match in progress. Watching " NFLOW " UDP flow(s).\n"
+	# with nothing to show, refresh the files every five seconds, not every one: each refresh starts a shell.
+	# The dashboard calls the service stopped only after twenty seconds of silence.
+	if (first && cand == 0) { if (ST_idle && now - ST_last < 5) return; ST_idle = 1 } else ST_idle = 0
+	ST_last = now
 	print s > sf; close(sf)
 	printf "%s", txt > tf; close(tf)
 	system("mv -f " sf " " RUN "/www/status.json; mv -f " tf " " RUN "/status.txt")

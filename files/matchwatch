@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.15.0"
+VERSION="0.15.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -112,6 +112,8 @@ geo_lookup() {
 	line="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$(jstr "$json" countryCode)" "$(jstr "$json" country)" \
 		"$(jstr "$json" city)" "$(jnum "$json" lat)" "$(jnum "$json" lon)" "$(jstr "$json" isp)" "$(jstr "$json" org)" "$asn")"
 	printf '%s\t%s\n' "$ip" "$line" >> "$DATA/geo.cache"
+	# the cache lives on flash: keep the newest 2000 servers once it passes 3000
+	[ "$(awk 'END { print NR }' "$DATA/geo.cache")" -gt 3000 ] && tail -n 2000 "$DATA/geo.cache" > "$DATA/geo.cache.tmp" && mv -f "$DATA/geo.cache.tmp" "$DATA/geo.cache"
 	echo "$line"
 }
 

@@ -779,6 +779,10 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 	}
 	s = s "],\"candidates\":" cand ",\"flows\":" NFLOW "}"
 	if (txt == "") txt = "No match in progress. Watching " NFLOW " UDP flow(s).\n"
+	# with nothing to show, refresh the files every five seconds, not every one: each refresh starts a shell.
+	# The dashboard calls the service stopped only after twenty seconds of silence.
+	if (first && cand == 0) { if (ST_idle && now - ST_last < 5) return; ST_idle = 1 } else ST_idle = 0
+	ST_last = now
 	print s > sf; close(sf)
 	printf "%s", txt > tf; close(tf)
 	system("mv -f " sf " " RUN "/www/status.json; mv -f " tf " " RUN "/status.txt")
