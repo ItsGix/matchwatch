@@ -26,6 +26,7 @@ nav a:focus-visible, button:focus-visible, tr[tabindex]:focus-visible { outline:
 main { max-width: 1120px; margin: 0 auto; padding: 18px 16px 56px; }
 h1 { font: 700 2rem/1.1 var(--display); margin: 0; letter-spacing: 0.005em; }
 h2 { font: 700 1.2rem/1.2 var(--display); margin: 34px 0 10px; }
+h3 { font: 700 1rem/1.2 var(--display); margin: 22px 0 6px; }
 .sub { color: var(--muted); margin: 4px 0 0; }
 .lede { font-size: 1.2rem; max-width: 64ch; margin: 14px 0 0; }
 .empty { color: var(--muted); }
@@ -100,6 +101,15 @@ select { font: inherit; padding: 6px 10px; color: var(--ink); background: var(--
 .banner .stayform { flex: 1; min-width: 260px; }
 td .stayform { max-width: 420px; }
 td .stayform input { min-width: 140px; }
+.ticks { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
+.tickbox { display: flex; gap: 8px; align-items: flex-start; max-width: 70ch; margin: 8px 0 0; cursor: pointer; }
+.ticks .tickbox { margin: 0; }
+.tickbox input { margin: 3px 0 0; width: 16px; height: 16px; flex: none; accent-color: var(--ink); }
+.tickbox:has(input:disabled) { color: var(--muted); cursor: default; }
+.sharetext { display: block; width: 100%; max-width: 720px; box-sizing: border-box; margin: 12px 0 0; padding: 10px; font: 0.85rem ui-monospace, Consolas, monospace; color: var(--ink); background: var(--panel); border: 1.5px solid var(--ink); border-radius: 3px; resize: vertical; }
+.sharetext:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
+.filepick { margin: 10px 0 0; }
+.filepick input { font: inherit; color: var(--ink); max-width: 100%; }
 .lede.ok, .lede.mid, .lede.low { font-weight: 600; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; }
 .actions button { margin: 0; }

@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.13.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.14.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -132,6 +132,7 @@ Everything is also available over SSH:
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
 | `matchwatch doctor` | Checks that capture works. Changes nothing |
 | `matchwatch clear-history` | Forgets every recorded match. Blocks and settings are kept |
+| `matchwatch share export` / `check` / `import` / `undo` | Make, inspect or take in a share file |
 
 Settings live in `/etc/config/matchwatch`. To change one over SSH: `uci set matchwatch.main.<option>=<value>`, `uci commit matchwatch`, then `/etc/init.d/matchwatch restart`.
 
@@ -146,6 +147,7 @@ The Tools page in the dashboard has:
 - **Route to a server.** Traces the route to any server in your history, to compare with the route in a match report.
 - **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it, and staying on places, the lobby alert and automatic blocking start to cover it.
 - **Skipped as voice chat.** Lists streams MatchWatch took for voice chat in the last six hours, so you can name one as a game if it got that wrong.
+- **Share with other players.** Makes a share file from your game names, places, server ratings, ping hosts and thresholds, or takes one in. See [Sharing with other players](#sharing-with-other-players).
 - **Your history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
 - **QoSmate priority.** Only shown when QoSmate is installed. See [QoSmate check and fix](#qosmate-check-and-fix).
@@ -191,6 +193,48 @@ Discord's voice servers use the high ports from 50000 upwards, and Roblox uses t
 If a game you play is wrongly taken for voice chat, the Tools page lists what was "Skipped as voice chat" in the last six hours, each with a box to name it as a game.
 
 A block you add by hand applies to whatever address you give it. If you use the QoSmate fix, voice chat from your gaming device is prioritised along with the game, because those rules cover all of that device's UDP.
+
+## Sharing with other players
+
+One person cannot research every game's ports or try every datacentre. A share file lets MatchWatch users pass what they have learned to each other. It is a small text file you can read in any editor, post on a forum or send to a friend.
+
+Make one, or use one, under **Share with other players** on the Tools page.
+
+### What a share file can hold
+
+| Section | What it is | What importing it does |
+|---|---|---|
+| Game names | The games you have named, with their server ports and, where needed, who hosts them | Adds them to your own names, so those games are recognised. A name you gave yourself always wins |
+| Places you stay on | Your pool of cities, countries and areas | Adds them to your pool and turns staying on |
+| Server ratings | How each server network has rated for you: number of matches and average rating | Shows them in a table on the Tools page, and the lobby alert mentions one when you land on that network for the first time |
+| Ping hosts | Extra test hosts for the regions table, for hosting companies other than Vultr | Adds them to the regions table and measures them |
+| Thresholds | Your rating and capture thresholds | Sets yours to match, and restarts MatchWatch |
+
+You tick which sections go into a file, and which sections you take from one.
+
+### What keeps it safe
+
+- **Nothing is uploaded.** MatchWatch never sends a share file anywhere. You make the file and you decide who gets it.
+- **Nothing about your home goes in.** A share file has no device name, no LAN or ISP address and no match times. Server ratings are grouped by network and hold only counts and averages. The whole file is shown to you before you save it.
+- **Every imported line is checked.** Lines that are malformed, or that could do harm, are left out and listed. In particular a game label covering more than 2000 ports must name the company hosting its servers; otherwise it would take unrelated traffic for that game, and staying on places could then block it.
+- **Other people's ratings never block anything.** A server that is bad for them can be fine for you. Shared ratings are shown, with a Block button beside each, and that is all.
+- **Checking a file changes nothing**, and **Undo the last import** puts your game names, places, ping hosts, shared ratings and thresholds back as they were.
+- A share file cannot turn on automatic blocking, change your phone alerts address, or choose the device to watch.
+
+### From the command line
+
+```
+matchwatch share export > mine.txt            # everything
+matchwatch share export games ratings > mine.txt
+matchwatch share check theirs.txt             # what is in it; changes nothing
+matchwatch share import theirs.txt            # or: ... import theirs.txt games
+matchwatch share undo
+matchwatch share forget                       # remove ratings other people shared with you
+```
+
+### Community game packs
+
+The [`packs/`](packs/) folder is for game packs anyone can use: share files with only a `[games]` section. [`packs/README.md`](packs/README.md) has the file format and what a pack needs before it is accepted.
 
 ## What it measures
 
@@ -282,6 +326,7 @@ Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.
 - Keep LuCI on a network you trust and never expose it through a public port forward.
 - Server locations come from ip-api.com; only the server's IP address is sent. Turn off "Look up where servers are" to stop this (staying on places and the lobby alert need it on).
 - Nothing else leaves your router unless you set up phone alerts.
+- Share files are only ever made when you ask, are shown to you in full, and hold nothing about your home. MatchWatch never uploads one.
 - The project has not had a security audit.
 
 ## Limits

@@ -61,7 +61,8 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir @DIRS@ 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared"
+		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
 		rmdir "$R/etc/matchwatch" 2>/dev/null

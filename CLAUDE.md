@@ -1,10 +1,10 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.13.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.14.0.
 
 ## Layout
 
-- `files/matchwatch`: the CLI and service (POSIX sh for BusyBox ash). Capture, probes, blocking, stay mode, lobby alert, QoSmate check and fix, and `_action`, which runs the dashboard's buttons.
+- `files/matchwatch`: the CLI and service (POSIX sh for BusyBox ash). Capture, probes, blocking, stay mode, lobby alert, share files, QoSmate check and fix, and `_action`, which runs the dashboard's buttons.
 - `files/analyze.awk`: the engine. Reads `tcpdump -tt -n -q -l` lines plus `TICK` heartbeats, tracks flows, scores sessions, writes history and per-match detail JSON.
 - `files/report.awk`: every report and JSON export built from `sessions.tsv` (history, servers, datacentres, regions, stay lookups, hours, recap, games).
 - `files/matchwatch.config`: default settings, installed as `/etc/config/matchwatch`. The script's own defaults cover anything missing.
@@ -13,15 +13,18 @@ matchwatch runs on an OpenWrt router and judges each online match: the game serv
 - `luci-app-matchwatch/htdocs/luci-static/resources/matchwatch/dashboard.js` and `.css`: the dashboard, vanilla JS, hash routes (Live, Last match, Matches, Servers, Tools). One copy, two homes. Whoever hosts it passes in how to talk to the router (`T.get`, `T.act`), and it draws inside a shadow root so the LuCI theme and the dashboard cannot disturb each other's styling.
 - `luci-app-matchwatch/htdocs/luci-static/resources/view/matchwatch/`: the LuCI pages. `dashboard.js` hosts the dashboard, reading data with `file.read` and running buttons through rpcd. `settings.js` is a native form on `/etc/config/matchwatch`.
 - `luci-app-matchwatch/root/`: menu entry (Services, MatchWatch), permissions (`acl.d`), and the rpcd backend `luci.matchwatch` with two methods, `read` and `write`, so permissions can tell looking from changing. It calls `matchwatch _action`.
+- `packs/`: community share files (game packs) and the format and acceptance rules for them. Not installed; people import what they choose.
 - `build.py`: bundles both directories into `dist/matchwatch-install.sh` (heredocs). Run it after any change to either.
 - `test/`: traffic generator, stand-ins for router tools, a test site serving the view-only dashboard, Playwright screenshots. `test/mockshots.py` makes `docs/*.png` from invented data with headless Edge or Chrome and Pillow; it needs no router or BusyBox.
 - Privacy: the repository is public. Nothing from a real network goes in it: no real LAN, ISP or game server addresses, device names, match history or screenshots of real data. Tests and screenshots use the documentation ranges 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24. Commit with a GitHub no-reply address.
 
-On the router: `/usr/bin/matchwatch`, `/usr/lib/matchwatch/`, `/etc/config/matchwatch` (settings), `/etc/matchwatch/` (`sessions.tsv`, `matches/*.json`, blocklist, stay), `/tmp/matchwatch/` (runtime; `www/` holds the JSON the dashboard reads), the LuCI files under `/www/luci-static/resources/` and `/usr/share/`. With the no-login page on, the service also creates `/www/matchwatch/` and `/www/cgi-bin/matchwatch-mark` at start, and removes them when it is off.
+On the router: `/usr/bin/matchwatch`, `/usr/lib/matchwatch/`, `/etc/config/matchwatch` (settings), `/etc/matchwatch/` (`sessions.tsv`, `matches/*.json`, blocklist, stay, `games.local`, `regions.local`, `ratings.shared`, `share.undo/`), `/tmp/matchwatch/` (runtime; `www/` holds the JSON the dashboard reads), the LuCI files under `/www/luci-static/resources/` and `/usr/share/`. With the no-login page on, the service also creates `/www/matchwatch/` and `/www/cgi-bin/matchwatch-mark` at start, and removes them when it is off.
 
 Settings: the script reads `/etc/config/matchwatch` through `config_get`. With `MW_CONF` set it sources that shell file instead, which is how the tests run it off-router. Versions before 0.10.0 kept settings in `/etc/matchwatch/config`; `matchwatch _migrate` (run by the init script) carries them over once and renames the file to `config.imported`. Saving in LuCI fires the init script's reload trigger, which restarts the service.
 
 Slow tools: an rpcd call must answer within seconds, so the line test and route trace start in the background, print a job number, and write `linetest.json` or `trace.json` into `/tmp/matchwatch/www/`. The dashboard's `job()` polls that file until its `id` matches. Follow the same pattern for anything that takes more than a few seconds.
+
+Share files (`matchwatch share export|check|import|undo|forget`, 0.14.0): one text file, first line `matchwatch-share 1`, sections `[games]` `[regions]` `[places]` `[ratings]` `[settings]`. `share_load` checks every line in one awk pass and writes the good ones to a temp folder; import then merges them into `games.local`, `regions.local`, `stay`, `ratings.shared` and the settings, after copying the old files to `share.undo/`. From the dashboard the file's text travels as the `data` argument of the rpcd `write` method and reaches `_action` on standard input. Unknown sections are skipped, so later versions can add some.
 
 ## Rules that have bitten already
 
@@ -35,7 +38,10 @@ Slow tools: an rpcd call must answer within seconds, so the line test and route 
 - Labels are `name|ports|kind|hosts`, first match wins. `hosts` are words looked for in the server's isp, org and AS name; a label with hosts only matches once the lookup is in `geo.cache` (the engine asks with `matchwatch _geo <ip>`), and until then the stream falls through to later labels. This exists because ports overlap badly: Roblox and Discord voice share 50000-65535, Valorant sits inside Rocket League's range, Apex inside Call of Duty's. Reports only have org and the AS number, so give host-checked labels the AS number too (`roblox,as22697`). Put narrow and host-checked lines above wide ones. Never add a wide range without a host check: it turns every unknown stream in that range into a "game" that stay mode may block.
 - Publishers' port lists mostly do not say whether a port is the server's or the player's, and many are missing. `games.list` marks lines without a publisher source as unconfirmed. Do not add a game from memory; find a source.
 - The lobby alert needs both tests: a game-labelled port, and a port or /24 that carried an earlier match (`KPORT`, `K24`). A patch once dropped the second test; game port ranges are wide (30000-45000), and calls and peer-to-peer traffic use ports inside them, so with stay mode on that would have blocked non-game servers.
+- Share files come from strangers. Import must never be able to block a server or widen what counts as a game without a check: ratings from others are display only (`ratings.shared` is never read by auto-block or stay mode), a game label over 2000 ports wide needs hosts, host words need three characters, settings are a fixed list of numeric keys with ranges (never `autoblock`, `ntfy_url`, `device_ip`, `only_filter`), and region hosts must be names, not addresses. Export must never include the device, LAN or ISP addresses, or match times.
+- A name given by hand goes at the top of `games.local` so it beats an imported label covering the same port; imported labels are appended.
 - A patch script once emptied `files/matchwatch` by opening it for writing before reading. Check file sizes after scripted edits.
+- Python run from a Git Bash heredoc turns `\\n` inside its strings into real newlines. Write patch scripts to a file and run the file.
 - Unix line endings everywhere. On Windows, Python writes CRLF by default and Git for Windows checks files out with CRLF; either breaks every script on the router. `.gitattributes` forces LF and `build.py` writes LF. To count carriage returns in Git Bash use `tr -cd '\r' < file | wc -c`: `grep -c $'\r'` there matches every line, which once made clean files look broken.
 - A LuCI session gets its permissions at login. After installing the app, an already logged-in browser must log out and in before Services, MatchWatch appears or its buttons work.
 - The router's BusyBox `nc` has no `-l` or `-w`, and `uclient-fetch --post-data` sends chunked bodies. To exercise the backend from the router's shell use `ubus call luci.matchwatch read '{"action":"doctor"}'`.
@@ -69,7 +75,7 @@ The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbou
 3. Match mode for the house: hold back other devices' heavy traffic during a match.
 4. Hop-by-hop blame when a route is bad.
 5. A voice chat check (Discord, in-game voice) rated like matches. Discord voice is labelled and protected from blocking since 0.12.0; a verdict worded for calls rather than matches is still to do.
-6. Shareable configs: export and import files people can pass around. Game packs first (labels with ports and hosts, the thing one person cannot research alone), then server and datacentre ratings, region ping hosts for hosts other than Vultr, and stay pool presets. Opt-in files only, never an automatic upload; strip anything that identifies the sharer (LAN and ISP addresses, device names, match times) before export.
+6. Share files exist since 0.14.0. Still to do: real game packs in `packs/` (each needs a source), a way to add a region ping host without editing `regions.local` by hand, and showing shared ratings on the Servers page beside your own.
 7. Packaging and a write-up for the OpenWrt forum. The repository is public with no licence yet: choose one before packaging.
 
 ## Lines not to cross

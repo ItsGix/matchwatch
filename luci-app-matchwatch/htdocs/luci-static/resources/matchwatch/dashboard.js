@@ -546,6 +546,132 @@ function downloadHistory() {
 	document.body.appendChild(a); a.click(); a.remove();
 	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
 }
+// ---------- share files: game names, places, ratings, ping hosts and thresholds as a text file to pass on
+var SHARE = [["games", "1", "Game names"], ["regions", "2", "Ping hosts for the regions table"], ["places", "3", "Places you stay on"], ["ratings", "4", "Server ratings"], ["settings", "5", "Thresholds"]];
+function saveText(name, text) {
+	var a = document.createElement("a");
+	a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+	a.download = name;
+	document.body.appendChild(a); a.click(); a.remove();
+	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+}
+function tick1(label, value, on) {
+	var c = h("input", { type: "checkbox", value: value });
+	c.checked = !!on;
+	return { box: c, el: h("label", { cls: "tickbox" }, c, " " + label) };
+}
+function ticked(list) { return list.filter(function (t) { return t.box.checked; }).map(function (t) { return t.box.value; }).join(""); }
+function send(p) { return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, out: "Could not reach the router." }; }); }
+function shareSection() {
+	var box = h("div");
+	box.appendChild(h("h2", "Share with other players"));
+	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
+
+	// ---- make a file
+	box.appendChild(h("h3", "Make a share file"));
+	var outTicks = h("div", { cls: "ticks" }), outList = [], made = h("div");
+	var mk = h("button", { type: "button", cls: "solid", text: "Make a share file" });
+	box.appendChild(outTicks); box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(made);
+	mk.addEventListener("click", function () {
+		var want = ticked(outList);
+		if (!want) { toast("Tick at least one thing to share.", true); return; }
+		mk.disabled = true;
+		send({ action: "shareexport", arg: want }).then(function (j) {
+			mk.disabled = false; made.textContent = "";
+			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
+			var text = String(j.out || "") + "\n";
+			var ta = h("textarea", { cls: "sharetext", rows: "10", readonly: "readonly", "aria-label": "The share file" }); ta.value = text;
+			var dl = h("button", { type: "button", text: "Save as a file" }), cp = h("button", { type: "button", text: "Copy" });
+			dl.addEventListener("click", function () { saveText("matchwatch-share.txt", text); });
+			cp.addEventListener("click", function () { ta.select(); try { document.execCommand("copy"); toast("Copied."); } catch (e) { toast("Select the text and copy it by hand.", true); } });
+			made.appendChild(ta); made.appendChild(h("div", { cls: "actions" }, dl, cp));
+			made.appendChild(h("p", { cls: "note", text: "This is everything in the file. Read it through before you pass it on." }));
+		});
+	});
+
+	// ---- take one in
+	box.appendChild(h("h3", "Use a share file"));
+	var pick = h("input", { type: "file", accept: ".txt,text/plain", "aria-label": "Choose a share file" });
+	var paste = h("textarea", { cls: "sharetext keep", rows: "5", placeholder: "Choose a file above, or paste the text of one here", "aria-label": "Text of a share file" });
+	var chk = h("button", { type: "button", cls: "solid", text: "Check this file" }), found = h("div");
+	pick.addEventListener("change", function () {
+		var f = pick.files && pick.files[0];
+		if (!f) return;
+		if (f.size > 65536) { toast("That is too big to be a share file.", true); pick.value = ""; return; }
+		var r = new FileReader(); r.onload = function () { paste.value = String(r.result || ""); found.textContent = ""; }; r.readAsText(f);
+	});
+	box.appendChild(h("div", { cls: "filepick" }, pick)); box.appendChild(paste); box.appendChild(h("div", { cls: "actions" }, chk)); box.appendChild(found);
+	box.appendChild(h("p", { cls: "note", text: "Checking changes nothing. It shows what the file holds, and you choose which parts to take. Every line is checked first and anything unsafe is left out. Ratings from someone else are only ever shown to you: MatchWatch never blocks a server because of them." }));
+	chk.addEventListener("click", function () {
+		var text = paste.value;
+		if (!text.trim()) { toast("Choose a share file, or paste one in.", true); return; }
+		chk.disabled = true; found.textContent = "";
+		send({ action: "sharecheck", data: text }).then(function (j) {
+			chk.disabled = false;
+			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
+			var inList = [], rest = [];
+			String(j.out || "").split("\n").forEach(function (line) {
+				var m = /^([a-z]+): (.*)$/.exec(line), s = m && SHARE.filter(function (x) { return x[0] === m[1]; })[0];
+				if (s) { var t = tick1(m[2], s[1], s[0] !== "places" && s[0] !== "settings"); inList.push(t); found.appendChild(t.el); }
+				else if (line) rest.push(line);
+			});
+			if (rest.length) found.appendChild(h("pre", rest.join("\n")));
+			var go = h("button", { type: "button", cls: "solid", text: "Take in the ticked parts" }), res = h("pre"); res.style.display = "none";
+			go.addEventListener("click", function () {
+				var want = ticked(inList);
+				if (!want) { toast("Tick at least one part.", true); return; }
+				go.disabled = true;
+				send({ action: "shareimport", arg: want, data: text }).then(function (k) {
+					go.disabled = false;
+					res.textContent = k.out || "That did not work."; res.style.display = "block";
+					if (k.ok) { go.style.display = "none"; paste.value = ""; pick.value = ""; refresh(true); setTimeout(shared, 1500); }
+				});
+			});
+			found.appendChild(h("div", { cls: "actions" }, go)); found.appendChild(res);
+		});
+	});
+
+	// ---- what has been taken in
+	var got = h("div");
+	box.appendChild(got);
+	function shared() {
+		get("shared.json", function (s) {
+			if (page !== "tools") return;
+			s = s || { have: {}, ratings: [] };
+			var hv = s.have || {};
+			if (!outList.length) {
+				SHARE.forEach(function (x) {
+					var n = x[0] === "settings" ? 1 : (hv[x[0]] || 0);
+					var t = tick1(x[2] + (x[0] === "settings" ? "" : " (" + n + ")"), x[1], n > 0 && x[0] !== "settings");
+					t.box.disabled = !n; outList.push(t); outTicks.appendChild(t.el);
+				});
+			}
+			got.textContent = "";
+			var rs = (s.ratings || []).slice().sort(function (a, b) { return a.avg - b.avg; });
+			if (rs.length) {
+				got.appendChild(h("h3", "Ratings shared with you"));
+				var t = table([["Server network"], ["Where"], ["Hosted by"], ["Matches", "num"], ["Their rating", "num"], [""]]);
+				rs.forEach(function (x) {
+					var td = h("td", { cls: "num" });
+					if (x.blocked) td.textContent = "Blocked";
+					else td.appendChild(act("Block", "block", x.p, { confirm: "Confirm block", done: function (o) { toast(o); td.textContent = "Blocked"; } }));
+					t.lastChild.appendChild(row([[x.p], [place(x)], [x.org || ""], [String(x.n), "num"], [String(x.avg), "num " + cls(x.avg)], td]));
+				});
+				got.appendChild(h("div", { cls: "tablewrap" }, t));
+				got.appendChild(h("p", { cls: "note", text: "Worst first. These are someone else's matches, not yours: a server that is bad for them can be fine for you. The lobby alert mentions a shared rating when you land on one of these for the first time. Blocking is always your choice." }));
+			}
+			var after = function (o) { toast(o); setTimeout(shared, 1500); };
+			var btns = h("div", { cls: "actions" });
+			if (s.undo) btns.appendChild(act("Undo the last import", "shareundo", null, { confirm: "Confirm: put things back", done: after }));
+			if (rs.length) btns.appendChild(act("Remove shared ratings", "shareforget", null, { danger: true, confirm: "Confirm: remove them", done: after }));
+			if (btns.childNodes.length) got.appendChild(btns);
+			if (s.undo) got.appendChild(h("p", { cls: "note", text: "Undo puts your game names, places, ping hosts, shared ratings and thresholds back to how they were just before the last import." }));
+		});
+	}
+	shared();
+	return box;
+}
+
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
 	var i = D.info, hasQos = i.qosmate !== false;
@@ -632,6 +758,8 @@ function pageTools() {
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});
 
+		view.appendChild(shareSection());
+
 		view.appendChild(h("h2", "Your history"));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
@@ -677,7 +805,7 @@ function setState() {
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
 // half-typed text in a box would be wiped by a redraw
-function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep"), function (i) { return !!i.value; }); }
+function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep, textarea.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
 	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };

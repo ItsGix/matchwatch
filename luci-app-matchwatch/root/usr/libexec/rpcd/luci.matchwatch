@@ -1,14 +1,14 @@
 #!/bin/sh
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
-#   read   checks, the line test, a route trace, the activity log, and "I felt that"
-#   write  anything that blocks, stays, measures, alerts, renames, clears, or changes QoSmate or the device
+#   read   checks, the line test, a route trace, the activity log, making a share file, and "I felt that"
+#   write  anything that blocks, stays, measures, alerts, renames, clears, imports, or changes QoSmate or the device
 # The work itself is done by /usr/bin/matchwatch _action, which validates every argument.
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos log linetest trace"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory"
+READ="hello mark devices doctor qos log linetest trace shareexport"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory sharecheck shareimport shareundo shareforget"
 
 reply() { # ok(0|1) text
 	json_init
@@ -19,7 +19,7 @@ reply() { # ok(0|1) text
 
 case "$1" in
 	list)
-		echo '{"read":{"action":"str","arg":"str"},"write":{"action":"str","arg":"str","days":"str","region":"str","name":"str"}}'
+		echo '{"read":{"action":"str","arg":"str"},"write":{"action":"str","arg":"str","days":"str","region":"str","name":"str","data":"str"}}'
 		;;
 	call)
 		read -r input
@@ -29,6 +29,7 @@ case "$1" in
 		json_get_var days days
 		json_get_var region region
 		json_get_var name name
+		json_get_var data data
 
 		case "$2" in
 			read) allowed="$READ" ;;
@@ -38,7 +39,9 @@ case "$1" in
 		case "$action" in ""|*[!a-z]*) reply 0 "unknown action"; exit 0 ;; esac
 		case " $allowed " in *" $action "*) ;; *) reply 0 "unknown action"; exit 0 ;; esac
 
-		if out="$(/usr/bin/matchwatch _action "$action" "$arg" "$days" "$region" "$name" 2>&1)"; then
+		# a share file being checked or imported goes in on standard input
+		if out="$(printf '%s
+' "$data" | /usr/bin/matchwatch _action "$action" "$arg" "$days" "$region" "$name" 2>&1)"; then
 			reply 1 "$out"
 		else
 			reply 0 "$out"

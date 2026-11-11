@@ -90,7 +90,11 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.13.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True}}
+           "info": {"version": "0.14.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True}}
+    out["shared"] = {"undo": True, "have": {"games": 3, "regions": 0, "places": 2, "ratings": 6},
+                     "ratings": [{"p": "203.0.113.0/24", "n": 14, "avg": 38, "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "blocked": True},
+                                 {"p": "198.51.100.0/24", "n": 9, "avg": 61, "city": "Paris", "cc": "FR", "org": "Example Hosting Paris", "blocked": False},
+                                 {"p": "192.0.2.0/24", "n": 22, "avg": 93, "city": "Amsterdam", "cc": "NL", "org": "Example Hosting Amsterdam", "blocked": False}]}
     d, u = timeline(120, "clean"); d[40], d[41], d[95] = 265.3, 98, 150; u[70] = 166
     p = [round(random.uniform(5.8, 6.4), 1) for _ in range(120)]; p[40], p[41] = 14.5, 9.0
     out["status"] = {"ts": NOW + 3600, "candidates": 0, "flows": 3, "sessions": [{"ip": "203.0.113.21", "port": 30120, "device": "192.168.1.50", "age": 412, "start": NOW - 412, "loc": "Frankfurt, DE", "org": "Example Hosting Frankfurt",
@@ -101,7 +105,26 @@ def build(site):
 <style>html, body { margin: 0; background: #0f2a2b; }</style></head><body><div id="mw"></div><script src="/%s/dashboard.js"></script><script>
 MatchwatchDashboard(document.getElementById("mw"), { css: "/%s/dashboard.css", full: true, dark: function () { return true; }, settings: "#",
 	get: function (f) { return fetch("data/" + f).then(function (r) { if (!r.ok) throw 0; return r.json(); }); },
-	act: function () { return Promise.resolve({ ok: true, out: "" }); } });
+	act: function (p) {
+		var out = "";
+		if (p.action === "shareexport") out = `# MatchWatch share file. Import it on the Tools page, or with: matchwatch share import <file>
+# It holds nothing about the home it came from: no device, LAN or ISP address, and no match times.
+matchwatch-share 1
+
+[games]
+Example Game|7777-7800||example
+
+[ratings]
+203.0.113.0/24|14|38|Madrid|ES|Example Hosting Madrid`;
+		if (p.action === "sharecheck") out = `games: 2 game label(s): Example Game, Another Game. They go below the names you have given yourself, which always win.
+places: 1 place(s) to stay on: UK and Ireland. Importing these turns staying on, so game servers elsewhere are blocked.
+ratings: 3 server rating(s) from someone else. They are shown to you and mentioned by the lobby alert, and never block anything by themselves.
+1 line(s) were not accepted and are left out:
+  line 9: a port that cannot be read`;
+		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
+Took in 3 server rating(s). They are listed on the Tools page.`;
+		return Promise.resolve({ ok: true, out: out });
+	} });
 </script></body></html>""" % (RES, RES))
     return [m for m in hist if m["code"] == "server"][0]["start"]
 
@@ -125,9 +148,11 @@ if __name__ == "__main__":
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=site)
     handler.log_message = lambda *a: None
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), handler)
+    if sys.argv[1:] == ["serve"]:   # look at the mock dashboard by hand
+        print(f"http://127.0.0.1:{PORT}/matchwatch/"); srv.serve_forever()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     os.makedirs(ROOT + "/docs", exist_ok=True)
-    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 4000), ("#/tools", "tools", 2600)):
+    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 4000), ("#/tools", "tools", 3800)):
         shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
     srv.shutdown()
     shutil.rmtree(site, ignore_errors=True)

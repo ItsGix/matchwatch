@@ -18,7 +18,8 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared"
+		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
 		rmdir "$R/etc/matchwatch" 2>/dev/null
@@ -51,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.13.0"
+VERSION="0.14.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -292,6 +293,7 @@ export_json() {
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
 	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" > "$RUN/www/info.json"
 	regions_export
+	share_json > "$RUN/www/shared.json.tmp" && mv -f "$RUN/www/shared.json.tmp" "$RUN/www/shared.json"
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
 		ls -1 "$DATA/matches" 2>/dev/null | sort -r | awk 'NR > 60' | while read -r f; do rm -f "$DATA/matches/$f"; done
@@ -455,6 +457,8 @@ EOF
 		[ "$srv_rating" -lt "$WARN_SCORE" ] && { verdict=bad; msg="$msg That is poor: consider backing out."; }
 	else
 		msg="$msg First time on this server."
+		r="$(awk -F'\t' -v p="${ip%.*}.0/24" '$1 == p { print $3 "/100 over " $2 " match(es)"; exit }' "$DATA/ratings.shared" 2>/dev/null)"
+		[ -n "$r" ] && msg="$msg Someone who shared ratings with you scored its network $r."
 	fi
 	if [ "$verdict" = good ] && [ -n "$ping" ] && [ -n "$best_ping" ] && [ "$best_key" != "$key" ]; then
 		if awk -v a="$ping" -v b="$best_ping" -v m="$LOBBY_MARGIN_MS" 'BEGIN { exit !(a > b + m) }'; then
@@ -497,7 +501,9 @@ cmd_regions() { # measure | (nothing = show the last measurement)
 			) &
 			n=$((n + 1))
 			[ $((n % 12)) -eq 0 ] && wait
-		done < "$LIB/regions.list"
+		done <<EOF
+$(cat "$LIB/regions.list" "$DATA/regions.local" 2>/dev/null)
+EOF
 		wait
 		cat "$tmp"/* > "$DATA/regions.tsv.tmp" 2>/dev/null && mv -f "$DATA/regions.tsv.tmp" "$DATA/regions.tsv"
 		rm -f "$tmp"/*; rmdir "$tmp" 2>/dev/null
@@ -550,7 +556,7 @@ resolve_place() { # one place as typed -> a pool line: name, lat, lon, km, count
 		*[!0-9]*)
 			# 1. a named area or a country   2. a city in the regions table   3. any other city, looked up online
 			line="$(awk -F'|' -v w="$want" 'BEGIN { w = tolower(w) } /^#/ { next } tolower($2) == w || tolower($3) == w { print $3 "\t-\t-\t0\t" $4; exit }' "$LIB/places.list" 2>/dev/null)"
-			[ -n "$line" ] || line="$(awk -F'|' -v w="$want" -v k="${STAY_KM:-150}" 'BEGIN { w = tolower(w) } /^#/ { next } tolower($1) == w || tolower($2) == w { print $2 ", " $3 "\t" $5 "\t" $6 "\t" k "\t-"; exit }' "$LIB/regions.list" 2>/dev/null)"
+			[ -n "$line" ] || line="$(awk -F'|' -v w="$want" -v k="${STAY_KM:-150}" 'BEGIN { w = tolower(w) } /^#/ { next } tolower($1) == w || tolower($2) == w { print $2 ", " $3 "\t" $5 "\t" $6 "\t" k "\t-"; exit }' "$LIB/regions.list" $( [ -f "$DATA/regions.local" ] && echo "$DATA/regions.local" ) 2>/dev/null)"
 			if [ -z "$line" ]; then
 				line="$(geocode "$want")" || { echo "matchwatch: could not find a place called '$want'. Try a city, a country, or an area from: matchwatch places" >&2; return 1; }
 				line="$line$TAB${STAY_KM:-150}$TAB-"
@@ -617,8 +623,8 @@ cmd_game() { # name <port or lo-hi> <name>
 	case "$2" in ""|*[!0-9-]*|-*|*-|*-*-*) die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>" ;; esac
 	[ -n "$3" ] || die "usage: matchwatch game name <server port> <name>"
 	touch "$DATA/games.local"
-	grep -v "|$2\$" "$DATA/games.local" > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
-	printf '%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2" >> "$DATA/games.local"
+	# a name you give goes first, so it wins over an imported label that covers the same port
+	{ printf '%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2"; awk -F'|' -v p="$2" '$2 != p' "$DATA/games.local"; } > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
 	export_json
 	echo "Matches on server port $2 are now labelled: $3. Staying on places, the lobby alert and automatic blocking now cover it."
 }
@@ -628,6 +634,286 @@ cmd_unblock_dc() { # number
 	list="$(awk -v MODE=dc_prefixes -v ARG="$1" -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv")"
 	[ -n "$list" ] || die "no datacentre number $1"
 	echo "$list" | tail -n +2 | while read -r p; do cmd_unblock "$p"; done
+}
+
+# ---- share files: things worth passing to other people, as one plain text file
+# Sections: games (labels), regions (ping hosts), places (a pool to stay on), ratings (per server
+# network), settings (thresholds). A file is only ever made or read when asked; nothing is uploaded.
+# Export leaves out everything about this home: no device, LAN or ISP address, and no match times.
+# Import trusts nothing: every line is checked and bad ones are dropped. Ratings from someone else are
+# shown and mentioned by the lobby alert, and never block anything by themselves.
+SHARE_ALL="games regions places ratings settings"
+cnt() { [ -f "$1" ] || { echo 0; return; }; awk '!/^#/ && NF { n++ } END { print n + 0 }' "$1"; }
+joined() { awk '{ s = s (NR > 1 ? ", " : "") $0 } END { printf "%s", s }'; }
+share_sections() { # "all", nothing, section names, or digits (1 games 2 regions 3 places 4 ratings 5 settings) -> names
+	local s="$*" out="" c
+	case "$s" in
+		""|all) echo "$SHARE_ALL" ;;
+		*[!0-9]*)
+			for c in $s; do
+				case " $SHARE_ALL " in *" $c "*) out="$out $c" ;; *) echo "matchwatch: there is no section called '$c'. Sections: $SHARE_ALL" >&2; return 1 ;; esac
+			done
+			echo $out ;;
+		*)
+			case "$s" in *1*) out="$out games" ;; esac
+			case "$s" in *2*) out="$out regions" ;; esac
+			case "$s" in *3*) out="$out places" ;; esac
+			case "$s" in *4*) out="$out ratings" ;; esac
+			case "$s" in *5*) out="$out settings" ;; esac
+			[ -n "$out" ] || { echo "matchwatch: choose at least one thing to share" >&2; return 1; }
+			echo $out ;;
+	esac
+}
+share_ratings() { # one line per server network with two or more counted matches: network|matches|average|city|country|host
+	touch "$DATA/sessions.tsv"
+	awk -F'\t' '
+		function clean(s) { gsub(/[^A-Za-z0-9 .,()&-]/, " ", s); return s }
+		NF >= 39 && $37 == 1 { split($5, o, "."); p = o[1] "." o[2] "." o[3] ".0/24"; if (!(p in n)) ord[++k] = p; n[p]++; s[p] += $36; c[p] = $8; cc[p] = $7; g[p] = $9 }
+		END { for (i = 1; i <= k; i++) { p = ord[i]; if (n[p] >= 2) printf "%s|%d|%.0f|%s|%s|%s\n", p, n[p], s[p] / n[p], clean(c[p]), (cc[p] ~ /^[A-Z][A-Z]$/ ? cc[p] : "-"), clean(g[p]) } }' "$DATA/sessions.tsv"
+}
+cmd_share_export() { # [sections] -> the share file, on standard output
+	local want sec
+	want="$(share_sections "$@")" || exit 1
+	echo "# MatchWatch share file. Import it on the Tools page, or with: matchwatch share import <file>"
+	echo "# It holds nothing about the home it came from: no device, LAN or ISP address, and no match times."
+	echo "matchwatch-share 1"
+	for sec in $want; do
+		echo
+		echo "[$sec]"
+		case "$sec" in
+			games) echo "# name|server ports|kind (empty = a game, voice = voice chat)|words in the name of the company hosting the servers"
+				[ -f "$DATA/games.local" ] && awk -F'|' '/^#/ || NF < 2 { next } { printf "%s|%s|%s|%s\n", $1, $2, $3, $4 }' "$DATA/games.local" ;;
+			regions) echo "# code|city|country code|area|latitude|longitude|ping host"
+				[ -f "$DATA/regions.local" ] && awk '!/^#/ && NF' "$DATA/regions.local" ;;
+			places) echo "# name|latitude|longitude|reach in km|country codes"
+				[ -f "$DATA/stay" ] && awk -F'\t' 'NF >= 4 { gsub(/[^A-Za-z0-9 ,.()-]/, " ", $1); printf "%s|%s|%s|%s|%s\n", $1, $2, $3, $4, ($5 == "" ? "-" : $5) }' "$DATA/stay" ;;
+			ratings) echo "# server network|matches|average rating out of 100|city|country code|host"
+				echo "# These are one home's experience. They mean most to people nearby on a similar connection."
+				share_ratings ;;
+			settings) echo "# the thresholds this copy of MatchWatch runs with"
+				printf 'min_down_pps=%s\nmin_up_pps=%s\nwarn_score=%s\nautoblock_score=%s\nautoblock_matches=%s\nlobby_margin_ms=%s\nstay_km=%s\nblock_days=%s\n' \
+					"$MIN_DOWN_PPS" "$MIN_UP_PPS" "$WARN_SCORE" "$AUTOBLOCK_SCORE" "$AUTOBLOCK_MATCHES" "$LOBBY_MARGIN_MS" "$STAY_KM" "$BLOCK_DAYS" ;;
+		esac
+	done
+	return 0
+}
+share_load() { # file dir : check every line. The good ones land in dir/<section>, the verdicts in dir/summary
+	local why
+	[ -f "$1" ] || { echo "matchwatch: no such file: $1" >&2; return 1; }
+	[ "$(wc -c < "$1")" -le 65536 ] || { echo "matchwatch: that is too big to be a share file" >&2; return 1; }
+	mkdir -p "$2" || return 1
+	awk -v OUT="$2" -v WIDE=2000 '
+	function bad(why) { nbad++; if (nbad <= 8) printf "bad\t%d\t%s\n", NR, why }
+	function num(x) { return x ~ /^-?[0-9]+(\.[0-9]+)?$/ && length(x) <= 12 }
+	function whole(x, lo, hi) { return x ~ /^[0-9]+$/ && length(x) <= 6 && x + 0 >= lo && x + 0 <= hi }
+	function ports(s,   a, k, i, r) {
+		k = split(s, a, ","); if (k < 1 || k > 12) return "a port list that cannot be read"
+		for (i = 1; i <= k; i++) {
+			if (a[i] ~ /^[0-9]+-[0-9]+$/) {
+				split(a[i], r, "-")
+				if (!whole(r[1], 1, 65535) || !whole(r[2], 1, 65535) || r[1] + 0 > r[2] + 0) return "a port range that cannot be read"
+				if (r[2] - r[1] > WIDE) wide = 1
+			} else if (!whole(a[i], 1, 65535)) return "a port that cannot be read"
+		}
+		return ""
+	}
+	function hosts(s,   a, k, i) {
+		if (s == "") return 1
+		if (s !~ /^[a-z0-9 ,.-]+$/) return 0
+		k = split(s, a, ",")
+		for (i = 1; i <= k; i++) if (length(a[i]) < 3) return 0
+		return 1
+	}
+	function keep(sec, line, max) { if (N[sec] >= max) { bad("more " sec " than one file may hold"); return } N[sec]++; print line > (OUT "/" sec) }
+	BEGIN {
+		ALL = " games regions places ratings settings "
+		R["min_down_pps"] = "1 1000"; R["min_up_pps"] = "1 1000"; R["warn_score"] = "0 100"; R["autoblock_score"] = "0 100"
+		R["autoblock_matches"] = "1 50"; R["lobby_margin_ms"] = "0 500"; R["stay_km"] = "10 2000"; R["block_days"] = "1 365"
+	}
+	{ sub(/\r$/, "") }
+	/^[ \t]*$/ || /^#/ { next }
+	!head { if ($0 == "matchwatch-share 1") { head = 1; next } print "bad\t" NR "\tthis is not a MatchWatch share file"; exit }
+	/^\[[a-z]+\]$/ { sec = substr($0, 2, length($0) - 2); if (index(ALL, " " sec " ") == 0) sec = "?"; next }
+	sec == "?" { next }
+	sec == "" { bad("a line before any section"); next }
+	length($0) > 300 { bad("a line that is too long"); next }
+	sec == "games" {
+		n = split($0, f, "|"); wide = 0
+		if (n < 2 || n > 4) { bad("a game needs a name and its server ports"); next }
+		if (f[1] !~ /^[A-Za-z0-9 .:,()&+-]+$/ || length(f[1]) > 80) { bad("a game name with characters that are not allowed"); next }
+		e = ports(f[2]); if (e != "") { bad(e); next }
+		if (f[3] != "" && f[3] != "voice") { bad("a kind that is neither empty nor voice"); next }
+		if (!hosts(f[4])) { bad("host words that cannot be used (lower case, three letters or more each)"); next }
+		if (wide && f[4] == "") { bad("a range over " WIDE " ports wide with no host to check: it would take unrelated traffic for " f[1]); next }
+		keep("games", f[1] "|" f[2] "|" f[3] "|" f[4], 200); next
+	}
+	sec == "regions" {
+		n = split($0, f, "|")
+		if (n != 7 || f[1] !~ /^[a-z0-9-]+$/ || length(f[1]) > 16 || f[2] !~ /^[A-Za-z .-]+$/ || length(f[2]) > 40 || f[3] !~ /^[A-Z][A-Z]$/ || f[4] !~ /^[A-Za-z ]+$/ || length(f[4]) > 30 \
+			|| !num(f[5]) || f[5] < -90 || f[5] > 90 || !num(f[6]) || f[6] < -180 || f[6] > 180 \
+			|| f[7] !~ /^[a-z0-9][a-z0-9.-]*\.[a-z]+$/ || f[7] ~ /\.\./ || length(f[7]) > 80) { bad("a region line that cannot be read"); next }
+		keep("regions", $0, 80); next
+	}
+	sec == "places" {
+		n = split($0, f, "|")
+		if (n != 5 || f[1] !~ /^[A-Za-z0-9 ,.()-]+$/ || length(f[1]) > 60) { bad("a place line that cannot be read"); next }
+		if (f[5] ~ /^[A-Z][A-Z](,[A-Z][A-Z])*$/ && f[4] == "0") { keep("places", f[1] "\t-\t-\t0\t" f[5], 20); next }
+		if (f[5] == "-" && num(f[2]) && f[2] >= -90 && f[2] <= 90 && num(f[3]) && f[3] >= -180 && f[3] <= 180 && whole(f[4], 10, 2000)) { keep("places", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t-", 20); next }
+		bad("a place that is neither a set of countries nor a point with a reach"); next
+	}
+	sec == "ratings" {
+		n = split($0, f, "|"); k = split(f[1], o, ".")
+		if (n != 6 || f[1] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.0\/24$/ || k != 4 || !whole(o[1], 1, 223) || !whole(o[2], 0, 255) || !whole(o[3], 0, 255) \
+			|| o[1] == 10 || o[1] == 127 || (o[1] == 172 && o[2] >= 16 && o[2] <= 31) || (o[1] == 192 && o[2] == 168) || (o[1] == 169 && o[2] == 254) \
+			|| !whole(f[2], 1, 9999) || !whole(f[3], 0, 100) || f[4] !~ /^[A-Za-z0-9 .,()&-]*$/ || f[5] !~ /^([A-Z][A-Z]|-)$/ || f[6] !~ /^[A-Za-z0-9 .,()&-]*$/) { bad("a rating line that cannot be read"); next }
+		keep("ratings", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t" f[5] "\t" f[6], 500); next
+	}
+	sec == "settings" {
+		n = split($0, f, "=")
+		if (n != 2 || !(f[1] in R)) { bad("a setting that share files may not change"); next }
+		split(R[f[1]], lim, " ")
+		if (!whole(f[2], lim[1], lim[2])) { bad(f[1] " must be between " lim[1] " and " lim[2]); next }
+		if (f[1] in SEEN) next
+		SEEN[f[1]] = 1; keep("settings", f[1] "=" (f[2] + 0), 20); next
+	}
+	END { for (s in N) printf "ok\t%s\t%d\n", s, N[s]; printf "rejected\t%d\n", nbad }' "$1" > "$2/summary"
+	grep -q "^ok$TAB" "$2/summary" && return 0
+	why="$(awk -F'\t' '$1 == "bad" { print $3; exit }' "$2/summary")"
+	echo "matchwatch: nothing in that file can be imported${why:+: $why}" >&2
+	return 1
+}
+share_count() { awk -F'\t' -v s="$2" '$1 == "ok" && $2 == s { n = $3 } END { print n + 0 }' "$1/summary"; }
+share_describe() { # dir -> what the file holds and what importing each part would do, one line per section
+	local d="$1" sec n more
+	for sec in $SHARE_ALL; do
+		n="$(share_count "$d" "$sec")"
+		[ "$n" -ge 1 ] || continue
+		more=""; [ "$n" -gt 8 ] && more=" and more"
+		case "$sec" in
+			games) echo "games: $n game label(s): $(cut -d'|' -f1 "$d/games" | head -n 8 | joined)$more. They go below the names you have given yourself, which always win." ;;
+			regions) echo "regions: $n ping host(s) for the regions table: $(cut -d'|' -f2 "$d/regions" | head -n 8 | joined)$more." ;;
+			places) echo "places: $n place(s) to stay on: $(cut -f1 "$d/places" | head -n 8 | joined)$more. Importing these turns staying on, so game servers elsewhere are blocked." ;;
+			ratings) echo "ratings: $n server rating(s) from someone else. They are shown to you and mentioned by the lobby alert, and never block anything by themselves." ;;
+			settings) echo "settings: $n setting(s): $(joined < "$d/settings"). Importing these restarts MatchWatch, so do it between matches." ;;
+		esac
+	done
+	awk -F'\t' '$1 == "rejected" && $2 > 0 { r = $2 } $1 == "bad" { b[++k] = "  line " $2 ": " $3 } END { if (r) { printf "%d line(s) were not accepted and are left out:\n", r; for (i = 1; i <= k; i++) print b[i] } }' "$d/summary"
+}
+cmd_share_check() { # file : say what is in it. Changes nothing
+	local d="$RUN/share.$$" rc=0
+	mkdir -p "$RUN"
+	if share_load "$1" "$d"; then share_describe "$d"; else rc=1; fi
+	rm -rf "$d"
+	return $rc
+}
+share_set() { # file of key=value lines -> into the settings, then restart so they take effect
+	local k v
+	while IFS="=" read -r k v; do
+		[ -n "$k" ] || continue
+		if [ -n "$CONF" ]; then echo "$(echo "$k" | tr a-z A-Z)=$v" >> "$CONF"; else uci -q set "matchwatch.main.$k=$v"; fi
+	done < "$1"
+	[ -n "$CONF" ] && return 0
+	uci -q commit matchwatch
+	[ -x /etc/init.d/matchwatch ] && ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 &
+}
+share_keep() { # name : remember this data file as it is now, so the import can be undone
+	if [ -f "$DATA/$1" ]; then cp "$DATA/$1" "$DATA/share.undo/$1"; else : > "$DATA/share.undo/$1.none"; fi
+}
+cmd_share_import() { # file [sections] : take in the chosen sections of a share file
+	local f="$1" d="$RUN/share.$$" want sec n line p k v
+	shift
+	want="$(share_sections "$@")" || return 1
+	mkdir -p "$RUN" "$DATA"
+	share_load "$f" "$d" || { rm -rf "$d"; return 1; }
+	rm -rf "$DATA/share.undo"; mkdir -p "$DATA/share.undo"
+	for sec in $want; do
+		[ -s "$d/$sec" ] || continue
+		n=0
+		case "$sec" in
+			games) share_keep games.local; touch "$DATA/games.local"
+				while IFS= read -r line; do
+					p="$(echo "$line" | cut -d'|' -f2)"
+					awk -F'|' -v p="$p" '$2 == p { f = 1 } END { exit !f }' "$DATA/games.local" && continue
+					echo "$line" >> "$DATA/games.local"; n=$((n + 1))
+				done < "$d/games"
+				echo "Added $n game label(s). Ones for ports you had already named were left out." ;;
+			regions) share_keep regions.local; touch "$DATA/regions.local"
+				while IFS= read -r line; do
+					p="${line%%|*}"
+					grep -q "^$p|" "$LIB/regions.list" "$DATA/regions.local" 2>/dev/null && continue
+					echo "$line" >> "$DATA/regions.local"; n=$((n + 1))
+				done < "$d/regions"
+				[ "$n" -ge 1 ] && ( cmd_regions measure >/dev/null 2>&1 & )
+				echo "Added $n ping host(s) to the regions table. They are being measured now." ;;
+			places) share_keep stay; touch "$DATA/stay" "$DATA/sessions.tsv"
+				while IFS= read -r line; do
+					p="$(echo "$line" | cut -f1)"
+					awk -F'\t' -v p="$p" '$1 == p { f = 1 } END { exit !f }' "$DATA/stay" && continue
+					echo "$line" >> "$DATA/stay"; n=$((n + 1))
+				done < "$d/places"
+				stay_apply >/dev/null
+				echo "Added $n place(s). Staying on: $(stay_names)." ;;
+			ratings) share_keep ratings.shared; touch "$DATA/ratings.shared"
+				n="$(cnt "$d/ratings")"
+				awk -F'\t' 'NR == FNR { seen[$1] = 1; print; next } !($1 in seen)' "$d/ratings" "$DATA/ratings.shared" | head -n 1000 > "$DATA/ratings.shared.tmp" && mv -f "$DATA/ratings.shared.tmp" "$DATA/ratings.shared"
+				echo "Took in $n server rating(s). They are listed on the Tools page." ;;
+			settings) : > "$DATA/share.undo/settings"
+				while IFS="=" read -r k v; do eval "p=\$$(echo "$k" | tr a-z A-Z)"; echo "$k=$p" >> "$DATA/share.undo/settings"; n=$((n + 1)); done < "$d/settings"
+				share_set "$d/settings"
+				echo "Changed $n setting(s). MatchWatch is restarting to use them." ;;
+		esac
+	done
+	rm -rf "$d"
+	if [ -z "$(ls "$DATA/share.undo")" ]; then rmdir "$DATA/share.undo"; echo "Nothing was imported: the file holds none of the things you chose."; return 0; fi
+	export_json
+	echo "To put things back as they were: matchwatch share undo, or the Undo button on the Tools page."
+}
+cmd_share_undo() { # put back what the last import changed
+	local u="$DATA/share.undo" f
+	[ -d "$u" ] || { echo "matchwatch: there is no import to undo" >&2; return 1; }
+	for f in games.local regions.local stay ratings.shared; do
+		if [ -f "$u/$f" ]; then cp "$u/$f" "$DATA/$f"
+		elif [ -f "$u/$f.none" ]; then rm -f "$DATA/$f"
+		else continue; fi
+		if [ "$f" = stay ]; then if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; else stay_off; fi; fi
+	done
+	[ -f "$u/settings" ] && share_set "$u/settings"
+	rm -rf "$u"
+	export_json
+	echo "The last import is undone. Game names, places, ping hosts, shared ratings and settings are as they were before it."
+}
+cmd_share_forget() {
+	rm -f "$DATA/ratings.shared"
+	export_json
+	echo "Shared ratings removed. Your own ratings are untouched."
+}
+share_json() { # what the Tools page needs: how much there is to share, and the ratings shared with you
+	local undo=false
+	[ -d "$DATA/share.undo" ] && undo=true
+	touch "$DATA/blocklist"
+	printf '{"undo":%s,"have":{"games":%d,"regions":%d,"places":%d,"ratings":%d},"ratings":[' "$undo" \
+		"$(cnt "$DATA/games.local")" "$(cnt "$DATA/regions.local")" "$(cnt "$DATA/stay")" "$(share_ratings | awk 'END { print NR + 0 }')"
+	[ -f "$DATA/ratings.shared" ] && awk -F'\t' -v BL="$DATA/blocklist" 'BEGIN { while ((getline l < BL) > 0) { split(l, b, "\t"); B[b[1]] = 1 } close(BL) } NF >= 3 { printf "%s{\"p\":\"%s\",\"n\":%d,\"avg\":%d,\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\",\"blocked\":%s}", (k++ ? "," : ""), $1, $2, $3, $4, $5, $6, (($1 in B) ? "true" : "false") }' "$DATA/ratings.shared"
+	echo "]}"
+}
+cmd_share() {
+	local f
+	case "$1" in
+		export) shift; cmd_share_export "$@" ;;
+		check) [ -n "$2" ] || die "usage: matchwatch share check <file>"; cmd_share_check "$2" || exit 1 ;;
+		import) [ -n "$2" ] || die "usage: matchwatch share import <file> [$SHARE_ALL]"; f="$2"; shift 2; cmd_share_import "$f" "$@" || exit 1 ;;
+		undo) cmd_share_undo || exit 1 ;;
+		forget) cmd_share_forget ;;
+		*) cat <<EOF
+matchwatch share export [sections] > file    write a share file (nothing about your home goes in it)
+matchwatch share check <file>                say what a share file holds; changes nothing
+matchwatch share import <file> [sections]    take in a share file, or only some sections of it
+matchwatch share undo                        put back what the last import changed
+matchwatch share forget                      remove ratings other people shared with you
+Sections: $SHARE_ALL (default: all)
+EOF
+		;;
+	esac
 }
 
 # ---- tools for the dashboard's Tools page
@@ -723,7 +1009,7 @@ linetest_run() { # job-id -> the result as JSON
 
 # ---- what the dashboard's buttons run (through LuCI's rpcd backend, /usr/libexec/rpcd/luci.matchwatch)
 cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-zero exit means it did not work
-	local action="$1" arg="$2" days="$3" region="$4" name="$5"
+	local action="$1" arg="$2" days="$3" region="$4" name="$5" f rc
 	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
 	[ "${#name}" -le 40 ] || die "that name is too long"
 	case "$arg" in *[!0-9./-]*) die "that is not an address or a number" ;; esac
@@ -754,6 +1040,13 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		trace) cmd_trace "$arg" ;;
 		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" ;;
 		clearhistory) cmd_clear_history ;;
+		shareexport) cmd_share_export $arg ;;
+		# the share file itself arrives on standard input
+		sharecheck|shareimport) f="$RUN/share.in.$$"; mkdir -p "$RUN"; head -c 70000 > "$f"
+			if [ "$action" = sharecheck ]; then ( cmd_share_check "$f" ); else ( cmd_share_import "$f" $arg ); fi; rc=$?
+			rm -f "$f"; return $rc ;;
+		shareundo) cmd_share_undo ;;
+		shareforget) cmd_share_forget ;;
 		*) die "unknown action" ;;
 	esac
 }
@@ -1147,6 +1440,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch blocklist         show blocked servers
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
+  matchwatch share             make, check or import a share file: game labels, ping hosts,
+                               places to stay on, server ratings and thresholds
   /etc/init.d/matchwatch start|stop|restart|enable
 
 Dashboard and settings: LuCI, under Services, MatchWatch
@@ -1180,6 +1475,7 @@ case "$1" in
 	blocklist) cmd_blocklist ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
+	share) shift; cmd_share "$@" ;;
 	version) echo "$VERSION" ;;
 	_probe_start) shift; cmd_probe_start "$@" ;;
 	_probe_stop) cmd_probe_stop "$2" ;;
@@ -2536,14 +2832,14 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_9'
 #!/bin/sh
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
-#   read   checks, the line test, a route trace, the activity log, and "I felt that"
-#   write  anything that blocks, stays, measures, alerts, renames, clears, or changes QoSmate or the device
+#   read   checks, the line test, a route trace, the activity log, making a share file, and "I felt that"
+#   write  anything that blocks, stays, measures, alerts, renames, clears, imports, or changes QoSmate or the device
 # The work itself is done by /usr/bin/matchwatch _action, which validates every argument.
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos log linetest trace"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory"
+READ="hello mark devices doctor qos log linetest trace shareexport"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory sharecheck shareimport shareundo shareforget"
 
 reply() { # ok(0|1) text
 	json_init
@@ -2554,7 +2850,7 @@ reply() { # ok(0|1) text
 
 case "$1" in
 	list)
-		echo '{"read":{"action":"str","arg":"str"},"write":{"action":"str","arg":"str","days":"str","region":"str","name":"str"}}'
+		echo '{"read":{"action":"str","arg":"str"},"write":{"action":"str","arg":"str","days":"str","region":"str","name":"str","data":"str"}}'
 		;;
 	call)
 		read -r input
@@ -2564,6 +2860,7 @@ case "$1" in
 		json_get_var days days
 		json_get_var region region
 		json_get_var name name
+		json_get_var data data
 
 		case "$2" in
 			read) allowed="$READ" ;;
@@ -2573,7 +2870,9 @@ case "$1" in
 		case "$action" in ""|*[!a-z]*) reply 0 "unknown action"; exit 0 ;; esac
 		case " $allowed " in *" $action "*) ;; *) reply 0 "unknown action"; exit 0 ;; esac
 
-		if out="$(/usr/bin/matchwatch _action "$action" "$arg" "$days" "$region" "$name" 2>&1)"; then
+		# a share file being checked or imported goes in on standard input
+		if out="$(printf '%s
+' "$data" | /usr/bin/matchwatch _action "$action" "$arg" "$days" "$region" "$name" 2>&1)"; then
 			reply 1 "$out"
 		else
 			reply 0 "$out"
@@ -3188,6 +3487,132 @@ function downloadHistory() {
 	document.body.appendChild(a); a.click(); a.remove();
 	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
 }
+// ---------- share files: game names, places, ratings, ping hosts and thresholds as a text file to pass on
+var SHARE = [["games", "1", "Game names"], ["regions", "2", "Ping hosts for the regions table"], ["places", "3", "Places you stay on"], ["ratings", "4", "Server ratings"], ["settings", "5", "Thresholds"]];
+function saveText(name, text) {
+	var a = document.createElement("a");
+	a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+	a.download = name;
+	document.body.appendChild(a); a.click(); a.remove();
+	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+}
+function tick1(label, value, on) {
+	var c = h("input", { type: "checkbox", value: value });
+	c.checked = !!on;
+	return { box: c, el: h("label", { cls: "tickbox" }, c, " " + label) };
+}
+function ticked(list) { return list.filter(function (t) { return t.box.checked; }).map(function (t) { return t.box.value; }).join(""); }
+function send(p) { return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, out: "Could not reach the router." }; }); }
+function shareSection() {
+	var box = h("div");
+	box.appendChild(h("h2", "Share with other players"));
+	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
+
+	// ---- make a file
+	box.appendChild(h("h3", "Make a share file"));
+	var outTicks = h("div", { cls: "ticks" }), outList = [], made = h("div");
+	var mk = h("button", { type: "button", cls: "solid", text: "Make a share file" });
+	box.appendChild(outTicks); box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(made);
+	mk.addEventListener("click", function () {
+		var want = ticked(outList);
+		if (!want) { toast("Tick at least one thing to share.", true); return; }
+		mk.disabled = true;
+		send({ action: "shareexport", arg: want }).then(function (j) {
+			mk.disabled = false; made.textContent = "";
+			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
+			var text = String(j.out || "") + "\n";
+			var ta = h("textarea", { cls: "sharetext", rows: "10", readonly: "readonly", "aria-label": "The share file" }); ta.value = text;
+			var dl = h("button", { type: "button", text: "Save as a file" }), cp = h("button", { type: "button", text: "Copy" });
+			dl.addEventListener("click", function () { saveText("matchwatch-share.txt", text); });
+			cp.addEventListener("click", function () { ta.select(); try { document.execCommand("copy"); toast("Copied."); } catch (e) { toast("Select the text and copy it by hand.", true); } });
+			made.appendChild(ta); made.appendChild(h("div", { cls: "actions" }, dl, cp));
+			made.appendChild(h("p", { cls: "note", text: "This is everything in the file. Read it through before you pass it on." }));
+		});
+	});
+
+	// ---- take one in
+	box.appendChild(h("h3", "Use a share file"));
+	var pick = h("input", { type: "file", accept: ".txt,text/plain", "aria-label": "Choose a share file" });
+	var paste = h("textarea", { cls: "sharetext keep", rows: "5", placeholder: "Choose a file above, or paste the text of one here", "aria-label": "Text of a share file" });
+	var chk = h("button", { type: "button", cls: "solid", text: "Check this file" }), found = h("div");
+	pick.addEventListener("change", function () {
+		var f = pick.files && pick.files[0];
+		if (!f) return;
+		if (f.size > 65536) { toast("That is too big to be a share file.", true); pick.value = ""; return; }
+		var r = new FileReader(); r.onload = function () { paste.value = String(r.result || ""); found.textContent = ""; }; r.readAsText(f);
+	});
+	box.appendChild(h("div", { cls: "filepick" }, pick)); box.appendChild(paste); box.appendChild(h("div", { cls: "actions" }, chk)); box.appendChild(found);
+	box.appendChild(h("p", { cls: "note", text: "Checking changes nothing. It shows what the file holds, and you choose which parts to take. Every line is checked first and anything unsafe is left out. Ratings from someone else are only ever shown to you: MatchWatch never blocks a server because of them." }));
+	chk.addEventListener("click", function () {
+		var text = paste.value;
+		if (!text.trim()) { toast("Choose a share file, or paste one in.", true); return; }
+		chk.disabled = true; found.textContent = "";
+		send({ action: "sharecheck", data: text }).then(function (j) {
+			chk.disabled = false;
+			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
+			var inList = [], rest = [];
+			String(j.out || "").split("\n").forEach(function (line) {
+				var m = /^([a-z]+): (.*)$/.exec(line), s = m && SHARE.filter(function (x) { return x[0] === m[1]; })[0];
+				if (s) { var t = tick1(m[2], s[1], s[0] !== "places" && s[0] !== "settings"); inList.push(t); found.appendChild(t.el); }
+				else if (line) rest.push(line);
+			});
+			if (rest.length) found.appendChild(h("pre", rest.join("\n")));
+			var go = h("button", { type: "button", cls: "solid", text: "Take in the ticked parts" }), res = h("pre"); res.style.display = "none";
+			go.addEventListener("click", function () {
+				var want = ticked(inList);
+				if (!want) { toast("Tick at least one part.", true); return; }
+				go.disabled = true;
+				send({ action: "shareimport", arg: want, data: text }).then(function (k) {
+					go.disabled = false;
+					res.textContent = k.out || "That did not work."; res.style.display = "block";
+					if (k.ok) { go.style.display = "none"; paste.value = ""; pick.value = ""; refresh(true); setTimeout(shared, 1500); }
+				});
+			});
+			found.appendChild(h("div", { cls: "actions" }, go)); found.appendChild(res);
+		});
+	});
+
+	// ---- what has been taken in
+	var got = h("div");
+	box.appendChild(got);
+	function shared() {
+		get("shared.json", function (s) {
+			if (page !== "tools") return;
+			s = s || { have: {}, ratings: [] };
+			var hv = s.have || {};
+			if (!outList.length) {
+				SHARE.forEach(function (x) {
+					var n = x[0] === "settings" ? 1 : (hv[x[0]] || 0);
+					var t = tick1(x[2] + (x[0] === "settings" ? "" : " (" + n + ")"), x[1], n > 0 && x[0] !== "settings");
+					t.box.disabled = !n; outList.push(t); outTicks.appendChild(t.el);
+				});
+			}
+			got.textContent = "";
+			var rs = (s.ratings || []).slice().sort(function (a, b) { return a.avg - b.avg; });
+			if (rs.length) {
+				got.appendChild(h("h3", "Ratings shared with you"));
+				var t = table([["Server network"], ["Where"], ["Hosted by"], ["Matches", "num"], ["Their rating", "num"], [""]]);
+				rs.forEach(function (x) {
+					var td = h("td", { cls: "num" });
+					if (x.blocked) td.textContent = "Blocked";
+					else td.appendChild(act("Block", "block", x.p, { confirm: "Confirm block", done: function (o) { toast(o); td.textContent = "Blocked"; } }));
+					t.lastChild.appendChild(row([[x.p], [place(x)], [x.org || ""], [String(x.n), "num"], [String(x.avg), "num " + cls(x.avg)], td]));
+				});
+				got.appendChild(h("div", { cls: "tablewrap" }, t));
+				got.appendChild(h("p", { cls: "note", text: "Worst first. These are someone else's matches, not yours: a server that is bad for them can be fine for you. The lobby alert mentions a shared rating when you land on one of these for the first time. Blocking is always your choice." }));
+			}
+			var after = function (o) { toast(o); setTimeout(shared, 1500); };
+			var btns = h("div", { cls: "actions" });
+			if (s.undo) btns.appendChild(act("Undo the last import", "shareundo", null, { confirm: "Confirm: put things back", done: after }));
+			if (rs.length) btns.appendChild(act("Remove shared ratings", "shareforget", null, { danger: true, confirm: "Confirm: remove them", done: after }));
+			if (btns.childNodes.length) got.appendChild(btns);
+			if (s.undo) got.appendChild(h("p", { cls: "note", text: "Undo puts your game names, places, ping hosts, shared ratings and thresholds back to how they were just before the last import." }));
+		});
+	}
+	shared();
+	return box;
+}
+
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
 	var i = D.info, hasQos = i.qosmate !== false;
@@ -3274,6 +3699,8 @@ function pageTools() {
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});
 
+		view.appendChild(shareSection());
+
 		view.appendChild(h("h2", "Your history"));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
@@ -3319,7 +3746,7 @@ function setState() {
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
 // half-typed text in a box would be wiped by a redraw
-function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep"), function (i) { return !!i.value; }); }
+function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep, textarea.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
 	var left = 5, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
@@ -3368,6 +3795,7 @@ nav a:focus-visible, button:focus-visible, tr[tabindex]:focus-visible { outline:
 main { max-width: 1120px; margin: 0 auto; padding: 18px 16px 56px; }
 h1 { font: 700 2rem/1.1 var(--display); margin: 0; letter-spacing: 0.005em; }
 h2 { font: 700 1.2rem/1.2 var(--display); margin: 34px 0 10px; }
+h3 { font: 700 1rem/1.2 var(--display); margin: 22px 0 6px; }
 .sub { color: var(--muted); margin: 4px 0 0; }
 .lede { font-size: 1.2rem; max-width: 64ch; margin: 14px 0 0; }
 .empty { color: var(--muted); }
@@ -3442,6 +3870,15 @@ select { font: inherit; padding: 6px 10px; color: var(--ink); background: var(--
 .banner .stayform { flex: 1; min-width: 260px; }
 td .stayform { max-width: 420px; }
 td .stayform input { min-width: 140px; }
+.ticks { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
+.tickbox { display: flex; gap: 8px; align-items: flex-start; max-width: 70ch; margin: 8px 0 0; cursor: pointer; }
+.ticks .tickbox { margin: 0; }
+.tickbox input { margin: 3px 0 0; width: 16px; height: 16px; flex: none; accent-color: var(--ink); }
+.tickbox:has(input:disabled) { color: var(--muted); cursor: default; }
+.sharetext { display: block; width: 100%; max-width: 720px; box-sizing: border-box; margin: 12px 0 0; padding: 10px; font: 0.85rem ui-monospace, Consolas, monospace; color: var(--ink); background: var(--panel); border: 1.5px solid var(--ink); border-radius: 3px; resize: vertical; }
+.sharetext:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
+.filepick { margin: 10px 0 0; }
+.filepick input { font: inherit; color: var(--ink); max-width: 100%; }
 .lede.ok, .lede.mid, .lede.low { font-weight: 600; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; }
 .actions button { margin: 0; }
@@ -3474,10 +3911,10 @@ cat > "$R/www/luci-static/resources/view/matchwatch/dashboard.js" <<'MW_FILE_END
 var DATA = '/tmp/matchwatch/www/';
 
 var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: [ 'action', 'arg' ], expect: {} });
-var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name' ], expect: {} });
+var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name', 'data' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1 };
 
 function loadDashboard() {
 	if (window.MatchwatchDashboard)
@@ -3532,7 +3969,7 @@ return view.extend({
 				if (READS[p.action])
 					return callRead(p.action, p.arg || '');
 
-				return callWrite(p.action, p.arg || '', p.days || '', p.region || '', p.name || '');
+				return callWrite(p.action, p.arg || '', p.days || '', p.region || '', p.name || '', p.data || '');
 			}
 		});
 
