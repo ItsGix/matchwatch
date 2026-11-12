@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.24.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.25.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -48,7 +48,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 
 **Acts, when you ask**
 
-- Blocks a bad server or datacentre, or keeps you to a pool of places you choose, turning whole regions away before the game tries them. Single servers from anywhere can be let through.
+- Blocks a bad server or datacentre, or keeps you to a pool of places you choose, turning whole regions away before the game tries them. Single servers from anywhere can be let through, and a game can be made strict so that no unplaced server ever connects.
 - Alerts your phone through ntfy: when a match starts, when a poor server is ahead, after a bad match.
 - Tests your line before you queue, traces the route to a server, and grades both from A+ to F.
 - Checks that QoSmate is prioritising your game, and reports what its queues did in each match.
@@ -302,6 +302,19 @@ Sometimes one server outside your places is worth keeping: a favourite, or one y
 
 From the command line: `matchwatch allow`, `matchwatch allow add <ip>`, `matchwatch allow remove <ip>`.
 
+### Strict games
+
+Normally a server MatchWatch has not seen before gets its first packets through while it is being looked up, and is turned away a moment later if it is outside your places. For most games that is fine. Where it is not, make the game **strict**: on the Servers page, under Strict games, press **Make strict** beside it.
+
+- Every new server on that game's ports is then held until MatchWatch has placed it, usually well under a second. A server outside your places never gets a packet through. One inside them, or one that turns out not to be a game server at all, is let through and not asked about again.
+- It applies only to your gaming device, only to that game's server ports, and only while you are staying on places.
+- **Voice chat is never held.** Ports that voice chat uses are cut out of what is held, and a game that lives mostly on voice chat ports, such as Roblox, cannot be made strict.
+- **It fails open.** If MatchWatch is stopped, restarting, or cannot look a server up, nothing is held.
+- A match in progress keeps its server when you change the pool.
+- A server you added to the pool yourself is always let through. If a game needs a matchmaking server that sits outside your places, add it with **Add to pool**.
+
+From the command line: `matchwatch strict` lists the games, `matchwatch strict on "Call of Duty"` and `strict off` switch one.
+
 ### Whole regions, ahead of time
 
 Learning servers one at a time is slow: the game tries one, waits, gives up and tries the next, and a single city can have dozens of server ranges. So when you stay on places, MatchWatch also refuses every address range it knows to be outside them, before the game tries any.
@@ -496,6 +509,8 @@ Everything is also available over SSH:
 | `matchwatch stay <places>` / `stay off` | Keep to a pool of places, separated by commas |
 | `matchwatch stay add <places>` / `stay remove <n>` | Change the pool |
 | `matchwatch allow` / `allow add <ip>` / `allow remove <ip>` | Single servers let through the places you stay on |
+| `matchwatch strict` / `strict on <game>` / `strict off <game>` | Hold every new server of a game until it has been placed |
+| `matchwatch stay circle <lat> <lon> <km>` | Add a circle to the pool, as the map does |
 | `matchwatch places` | The areas you can stay on |
 | `matchwatch ranges [refresh]` | The hosting companies' address lists used to turn whole regions away |
 | `matchwatch regions [measure]` | Ping every region, nearest first |

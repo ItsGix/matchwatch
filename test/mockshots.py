@@ -94,7 +94,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.24.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.25.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -104,6 +104,7 @@ def build(site):
         {"game": "Example Shooter", "city": "Paris", "cc": "FR", "org": "Example Hosting Paris", "networks": 1, "nets": ["198.51.100.0/24"], "matches": 0, "rating": None, "mine": True, "in": False},
         {"game": "Example Shooter", "city": "Tokyo", "cc": "JP", "org": "Example Hosting Tokyo", "networks": 6, "nets": ["203.0.113.0/24"], "matches": 41, "rating": 88, "mine": False, "in": False},
         {"game": "Example Arena", "city": "Sydney", "cc": "AU", "org": "Example Hosting Sydney", "networks": 4, "nets": ["192.0.2.0/24"], "matches": 17, "rating": 92, "mine": False, "in": False}]
+    out["hold"] = [{"name": "Example Shooter", "on": True, "ok": True, "ports": "20000-29000"}, {"name": "Example Arena", "on": False, "ok": True, "ports": "7777-7800"}, {"name": "Example Blocks", "on": False, "ok": False, "ports": "49152-65535"}]
     out["coverage"] = {"hosts": "Vultr (Call of Duty)", "known": 441, "refusing": True, "refused": 412, "places": [{"name": "Germany", "ranges": 26}, {"name": "Sweden", "ranges": 2}], "suggest": []}
     out["shared"] = {"undo": True, "have": {"games": 3, "regions": 0, "places": 2, "ratings": 6},
                      "ratings": [{"p": "203.0.113.0/24", "n": 14, "avg": 38, "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "blocked": True},
@@ -179,7 +180,7 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace") out = "1";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.24.0.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.25.0.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the Tools screenshots: press what a visitor would, so each picture shows a result

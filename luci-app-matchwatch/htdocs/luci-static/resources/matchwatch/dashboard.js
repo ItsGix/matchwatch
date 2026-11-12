@@ -20,13 +20,13 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null, hold: [] };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // The version this file belongs to (build.py checks it matches the program's). When the router reports
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.24.0", reloading = false;
+var BUILT = "0.25.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -67,9 +67,10 @@ function toast(msg, err) { var t = shadow.getElementById("toast"); t.textContent
 
 // ---------- talking to the router
 function api(action, arg, extra) {
-	var p = { action: action }, m = /region=([^&]*)/.exec(extra || "");
+	var p = { action: action }, m = /region=([^&]*)/.exec(extra || ""), nm = /name=([^&]*)/.exec(extra || "");
 	if (arg != null) p.arg = String(arg);
 	if (m) p.region = m[1].replace(/\+/g, " ");
+	if (nm) p.name = nm[1];
 	return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, error: "Could not reach the router." }; });
 }
 // A button that runs a command. opts: confirm (label for the second press), danger, solid, done(text)
@@ -486,6 +487,27 @@ function mapSync() {
 	MAP.legend.textContent = "Green circles are the places you stay on" + (RO ? "" : "; press one to move, resize or remove it") + ". Round markers are servers you have played on, coloured by how they rated; a number means several in one city, and a faded one is outside your places. Small hollow dots are datacentre regions with their ping."
 		+ (whole.length ? " Also in the pool, but not drawn because they are whole countries or areas: " + whole.join(", ") + "." : "") + " The map pictures come from OpenStreetMap, fetched by your browser.";
 }
+// Strict, per game: hold every new server of a game until it has been placed. Offered for the games you have
+// played, and only where the game's ports are not shared with voice chat.
+function strictSection() {
+	if (RO) return null;
+	var played = {}, rows = [];
+	D.hist.forEach(function (m) { if (m.game) played[m.game] = 1; });
+	(D.hold || []).forEach(function (g) { if (g.on || played[g.name]) rows.push(g); });
+	if (!rows.length) return null;
+	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "Strict games"));
+	box.appendChild(h("p", { cls: "note", text: "Normally a server MatchWatch has not seen before gets its first packets through while it is being looked up, and is then turned away if it is outside your places. Make a game strict and every new server on its ports is held for a moment first, so one outside your places never connects at all. It applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
+	var t = table([["Game"], ["Server ports"], ["", ""]]);
+	rows.forEach(function (g) {
+		var td = h("td", { cls: "act" });
+		if (g.on) { td.appendChild(h("span", { cls: "tag keep", text: staying ? "Strict" : "Strict when you stay" })); td.appendChild(act("Stop", "holdoff", null, { extra: "&name=" + g.name })); }
+		else if (!g.ok) td.appendChild(h("span", { cls: "kept", title: "Most of its ports are also used by voice chat, and holding them would hold the start of a call.", text: "Shares its ports with voice chat" }));
+		else td.appendChild(act("Make strict", "holdon", null, { extra: "&name=" + g.name }));
+		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], td]));
+	});
+	box.appendChild(h("div", { cls: "tablewrap" }, t));
+	return box;
+}
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
 	box.appendChild(h("h2", "Favourites"));
@@ -809,6 +831,7 @@ function pageServers() {
 	} else if (stays.length && !RO) view.appendChild(h("p", { cls: "note", text: "To let one server through from outside these places, press Add to pool beside it in your favourites or the server list below, or on a match report." }));
 	view.appendChild(h("h2", "Map"));
 	view.appendChild(mapSection());
+	addIf(view, strictSection());
 	// stay anywhere: cities, countries or wider areas, as one pool
 	if (!RO) {
 	view.appendChild(h("h2", stays.length ? "Change where you stay" : "Stay in one or more places"));
@@ -1347,7 +1370,8 @@ function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#p
 // rebuilding it each time made it flicker, and anything filled in a moment later pushed the rest down.
 var lastSig = "";
 function loadAll(then) {
-	var left = 9, done = function () { if (--left === 0) then(); };
+	var left = 10, done = function () { if (--left === 0) then(); };
+	get("hold.json", function (x) { D.hold = x || []; done(); });
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
@@ -1358,7 +1382,7 @@ function loadAll(then) {
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
 	get("coverage.json", function (x) { D.cov = x || null; done(); });
 }
-function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov]); } catch (e) { return String(Date.now()); } }
+function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold]); } catch (e) { return String(Date.now()); } }
 function refresh(force) {
 	loadAll(function () {
 		var sig = sigNow(), changed = sig !== lastSig;

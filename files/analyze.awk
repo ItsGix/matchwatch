@@ -79,6 +79,7 @@ $1 == "TICK" {
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
 	# names can change while running (the Tools page, matchwatch game name), so look again now and then
 	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) write_skipped(now) }
+	if (HOLDF != "") load_hold()
 	next
 }
 
@@ -103,6 +104,7 @@ $2 == "IP" && $4 == ">" {
 		rip = a[1] "." a[2] "." a[3] "." a[4]; rport = a[5]
 	} else next
 	advance(int(t))
+	if (NHP > 0) hold_seen(dir, rip, rport)
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
 		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
@@ -186,6 +188,29 @@ function load_games(file,    l, g, k, a, i, r) {
 		}
 	}
 	close(file)
+}
+# Strict games. HOLDF lists the server ports being held (first line: a serial that changes whenever the
+# verdicts were thrown away). The firewall drops the device's packets to such a port until the server has
+# a verdict, so the engine asks for one the moment it sees a packet go out, and keeps asking, slowly, for
+# as long as nothing comes back. A reply means the server is through and needs no more asking.
+function load_hold(    l, a, n, ser) {
+	n = 0; ser = ""
+	while ((getline l < HOLDF) > 0) { if (l ~ /^#/) { ser = l; continue } if (split(l, a, " ") == 2) { n++; HP_lo[n] = a[1] + 0; HP_hi[n] = a[2] + 0 } }
+	close(HOLDF)
+	NHP = n
+	if (ser != HOLD_ser || HO_c > 4000) { HOLD_ser = ser; HO_c = 0; split("", HO_ok); split("", HO_t); split("", HO_n) }
+}
+function hold_seen(dir, ip, port,    i, hit) {
+	if (ip in HO_ok) return
+	hit = 0
+	for (i = 1; i <= NHP; i++) if (port + 0 >= HP_lo[i] && port + 0 <= HP_hi[i]) { hit = 1; break }
+	if (!hit) return
+	if (dir == "D") { HO_ok[ip] = 1; HO_c++; return }
+	if ((ip in HO_t) && cursec - HO_t[ip] < (HO_n[ip] > 5 ? 60 : 4)) return
+	if (!(ip in HO_t)) HO_c++
+	HO_t[ip] = cursec; HO_n[ip]++
+	if (!REPLAY) system(SELF " _hold " ip " " (port + 0) " >/dev/null 2>&1 &")
+	else print "HOLD " ip ":" port
 }
 function reload_games() { NGP = 0; load_games(GAMESL); load_games(GAMES) }
 # who hosts this server: "isp org as" in lower case, or "" while that is not known

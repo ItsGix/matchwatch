@@ -18,7 +18,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/hold" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.24.0"
+VERSION="0.25.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -352,6 +352,7 @@ export_json() {
 	[ -d "$RUN/www" ] || return 0
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	awk -v MODE=hist_json -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/history.json.tmp" && mv -f "$RUN/www/history.json.tmp" "$RUN/www/history.json"
+	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4 } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
@@ -403,6 +404,8 @@ nft_ready() {
 		echo "$t" | grep -q 'flags interval,timeout\|flags interval, timeout' || ok=0
 		echo "$t" | grep -q 'set away' || ok=0
 		echo "$t" | grep -q 'set allowed' || ok=0
+		echo "$t" | grep -q 'set okay' || ok=0
+		if [ -n "$DEVICE_IP" ]; then echo "$t" | grep -q "ip saddr $DEVICE_IP udp dport @hold_ports" || ok=0; fi
 		# the rules for whole ranges name the gaming device, so they are rebuilt when it changes
 		if [ -n "$DEVICE_IP" ]; then echo "$t" | grep -q "ip saddr $DEVICE_IP ip daddr @away" || ok=0
 		else echo "$t" | grep -q '@away' && ok=0; fi
@@ -413,14 +416,17 @@ nft_ready() {
 	# away: whole ranges outside the places being stayed on. Only the gaming device's UDP is refused, so
 	# web sites and other devices that happen to use the same hosting company are untouched.
 	{
-		printf 'table inet matchwatch {\n\tset blocked {\n\t\ttype ipv4_addr\n\t\tflags interval, timeout\n\t}\n\tset away {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\tset allowed {\n\t\ttype ipv4_addr\n\t}\n'
+		printf 'table inet matchwatch {\n\tset blocked {\n\t\ttype ipv4_addr\n\t\tflags interval, timeout\n\t}\n\tset away {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\tset allowed {\n\t\ttype ipv4_addr\n\t}\n\tset hold_ports {\n\t\ttype inet_service\n\t\tflags interval\n\t\tauto-merge\n\t}\n\tset okay {\n\t\ttype ipv4_addr\n\t}\n'
 		# allowed comes first: a server the owner let through is never refused by the two sets below
 		printf '\tchain forward {\n\t\ttype filter hook forward priority -5; policy accept;\n\t\tip daddr @allowed accept\n\t\tip saddr @allowed accept\n\t\tip daddr @blocked counter drop\n\t\tip saddr @blocked counter drop\n'
 		[ -n "$DEVICE_IP" ] && printf '\t\tip saddr %s ip daddr @away meta l4proto udp counter drop\n\t\tip daddr %s ip saddr @away meta l4proto udp counter drop\n' "$DEVICE_IP" "$DEVICE_IP"
+		# strict games: the device's packets to a held port go nowhere until the server has a verdict
+		[ -n "$DEVICE_IP" ] && printf '\t\tip saddr %s udp dport @hold_ports ip daddr != @okay counter drop\n' "$DEVICE_IP"
 		printf '\t}\n}\n'
 	} | nft -f - || return 1
 	[ "$NFT_FILLING" = 1 ] || { NFT_FILLING=1; fill_blocklist; NFT_FILLING=0; }
 	allow_fill
+	[ "$HOLD_FILLING" = 1 ] || { HOLD_FILLING=1; MW_NOWAIT=1 hold_apply; HOLD_FILLING=0; }
 	[ -s "$DATA/stay" ] && [ "$RANGES_RUNNING" != 1 ] && ( stay_ranges >/dev/null 2>&1 & )
 	return 0
 }
@@ -834,6 +840,7 @@ stay_off() {
 	awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist" | while read -r ip; do nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null; done
 	awk -F'\t' '$4 != "stay"' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
 	rm -f "$DATA/stay"
+	hold_apply
 	nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count" "$RUN/www/coverage.json" "$RUN/coverage.sug"
 	export_json
 }
@@ -916,6 +923,7 @@ stay_apply() { # make the blocks match the pool. Prints how many address blocks 
 		MW_QUIET=1 cmd_block "$p" 0 stay; n=$((n + 1))
 	done
 	( stay_ranges >/dev/null 2>&1 & )
+	MW_NOWAIT=1 hold_apply
 	export_json
 	echo "$n"
 }
@@ -1416,6 +1424,116 @@ cmd_allow() { # add <ip> | remove <ip> | (nothing = list)
 	else echo "$ip will be let through when you stay on places. You are not staying anywhere at the moment."; fi
 }
 
+# ---- strict, per game. For a game the owner chose, every server on that game's ports is held back
+# until MatchWatch has placed it: inside the places being stayed on (or not a game server at all) and it
+# is let through, outside and its address block is turned away. Without this a new server gets its first
+# packets through while it is being looked up. /etc/matchwatch/hold lists the games, one name a line.
+# In nftables: hold_ports are those games' server ports, okay the servers with a verdict, and one rule
+# drops the gaming device's UDP to a held port unless the server is in okay. The engine sees the device's
+# packets before that rule (it listens on the LAN side) and asks for a verdict with _hold.
+# Everything fails open: no stay pool, no device, a stopped service or a failed lookup all mean no holding.
+label_kind() { # server-port "isp org asn" -> game | voice | nothing. First matching label wins, as in the engine
+	touch "$DATA/games.local" 2>/dev/null
+	awk -F'|' -v p="$1" -v info="$(echo "$2" | tr 'A-Z' 'a-z')" '
+		/^#/ || $0 == "" { next }
+		{ n = split($2, a, ","); hit = 0
+		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } if (p + 0 >= lo + 0 && p + 0 <= hi + 0) hit = 1 }
+		  if (!hit) next
+		  if ($4 != "") { m = 0; k = split(tolower($4), w, ","); for (i = 1; i <= k; i++) if (w[i] != "" && index(info, w[i]) > 0) m = 1; if (!m) next }
+		  print ($3 == "voice" ? "voice" : "game"); exit }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
+}
+hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports, the ports that would be held
+	touch "$DATA/games.local" "$DATA/hold" 2>/dev/null
+	awk -F'|' -v HF="$DATA/hold" '
+		BEGIN { while ((getline l < HF) > 0) on[l] = 1; close(HF) }
+		/^#/ || $0 == "" || NF < 2 { next }
+		{ n = split($2, a, ",")
+		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } c++; L[c] = lo + 0; H[c] = hi + 0; N[c] = $1; V[c] = ($3 == "voice") }
+		  if ($3 != "voice" && !($1 in seen)) { seen[$1] = 1; order[++k] = $1 } }
+		END { for (j = 1; j <= k; j++) { nm = order[j]; ports = ""; held = ""; all = 0; kept = 0
+			for (x = 1; x <= c; x++) if (N[x] == nm && !V[x] && !((nm, L[x], H[x]) in dup)) {
+				dup[nm, L[x], H[x]] = 1
+				ports = ports (ports == "" ? "" : " ") (L[x] == H[x] ? L[x] : L[x] "-" H[x]); all += H[x] - L[x] + 1
+				# voice chat ports inside a game range are cut out of what is held, so the start of a call is never held
+				ns = 1; SL[1] = L[x]; SH[1] = H[x]
+				for (y = 1; y <= c; y++) if (V[y]) { m = ns; for (z = 1; z <= m; z++) {
+					if (SL[z] > SH[z] || L[y] > SH[z] || H[y] < SL[z]) continue
+					if (L[y] > SL[z] && H[y] < SH[z]) { ns++; SL[ns] = H[y] + 1; SH[ns] = SH[z]; SH[z] = L[y] - 1 }
+					else if (L[y] <= SL[z]) SL[z] = H[y] + 1
+					else SH[z] = L[y] - 1 } }
+				for (z = 1; z <= ns; z++) if (SL[z] <= SH[z]) { held = held (held == "" ? "" : " ") (SL[z] == SH[z] ? SL[z] : SL[z] "-" SH[z]); kept += SH[z] - SL[z] + 1 }
+			}
+			# a game that keeps under half its ports after that mostly lives on voice chat ports: not offered
+			printf "%s\t%d\t%d\t%s\t%s\n", nm, (nm in on), (all > 0 && kept * 2 >= all), ports, held } }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
+}
+hold_apply() { # make the firewall and the engine agree with the list of held games
+	local r live ip
+	rm -f "$RUN/hold.ports"
+	have nft || return 0
+	# first stop holding, then throw the old verdicts away: they were made for the pool as it was
+	nft flush set inet matchwatch hold_ports 2>/dev/null
+	nft flush set inet matchwatch okay 2>/dev/null
+	[ -s "$DATA/stay" ] && [ -s "$DATA/hold" ] && is_ipv4 "$DEVICE_IP" || return 0
+	nft list set inet matchwatch hold_ports >/dev/null 2>&1 || nft_ready || return 1
+	# a match being played keeps its server, whatever the pool now says
+	for ip in $(grep -o '"ip":"[0-9.]*"' "$RUN/www/status.json" 2>/dev/null | sed 's/"ip":"\([0-9.]*\)"/\1/'); do nft add element inet matchwatch okay "{ $ip }" 2>/dev/null; done
+	# the engine learns the ports first, so nothing is held before it is ready to ask about it
+	{ echo "# $(date +%s)"; hold_list | awk -F'\t' '$2 == 1 && $3 == 1 { n = split($5, a, " "); for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } print lo, hi } }'; } > "$RUN/hold.ports.tmp"
+	mv -f "$RUN/hold.ports.tmp" "$RUN/hold.ports"
+	[ "$(wc -l < "$RUN/hold.ports")" -gt 1 ] || { rm -f "$RUN/hold.ports"; return 0; }
+	[ "$MW_NOWAIT" = 1 ] || sleep 2
+	awk '!/^#/ { print ($1 == $2 ? $1 : $1 "-" $2) }' "$RUN/hold.ports" | while read -r r; do nft add element inet matchwatch hold_ports "{ $r }" 2>/dev/null; done
+	return 0
+}
+cmd_hold_check() { # server-ip port : the engine saw the device reach for a server on a held port. Decide
+	local ip="$1" port="$2" g cc country city lat lon isp org asn
+	is_ipv4 "$ip" || return 1
+	[ -s "$DATA/stay" ] && [ -s "$RUN/hold.ports" ] || return 0
+	nft get element inet matchwatch okay "{ $ip }" >/dev/null 2>&1 && return 0
+	nft get element inet matchwatch blocked "{ $ip }" >/dev/null 2>&1 && return 0
+	is_allowed "$ip" && return 0
+	in_away "$ip" && return 0
+	g="$(geo_lookup "$ip")"
+	IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
+$g
+EOF
+	# anything that cannot be placed, and anything that is not a game server, goes through
+	if [ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && [ "$(label_kind "$port" "$isp $org $asn")" = game ] \
+		&& ! grep -q "\"ip\":\"${ip%.*}\\." "$RUN/www/status.json" 2>/dev/null && outside_stay "$lat" "$lon" "$cc"; then
+		tried_note "$ip" "${port:-0}" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
+		MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay
+		logger -t matchwatch "strict: held a new server in ${city:+$city, }$cc and turned it away before it could connect" 2>/dev/null
+	else
+		nft add element inet matchwatch okay "{ $ip }" 2>/dev/null
+	fi
+	return 0
+}
+cmd_hold() { # on <game> | off <game> | (nothing = list)
+	local name="$2" row
+	mkdir -p "$DATA"; touch "$DATA/hold"
+	case "$1" in
+		""|list) hold_list | awk -F'\t' '{ printf "  %-28s %s\n", $1, ($2 == 1 ? "STRICT" : ($3 == 1 ? "-" : "cannot be strict: most of its ports are also used by voice chat")) }'; return 0 ;;
+		on|off) ;;
+		*) die "usage: matchwatch strict [on|off <game name>]" ;;
+	esac
+	[ -n "$name" ] || die "usage: matchwatch strict $1 <game name, as shown by 'matchwatch strict'>"
+	row="$(hold_list | awk -F'\t' -v n="$name" 'tolower($1) == tolower(n) { print; exit }')"
+	[ -n "$row" ] || die "no game called '$name'. Name it first, under Tools, Games."
+	name="$(echo "$row" | cut -f1)"
+	if [ "$1" = off ]; then
+		grep -vxF "$name" "$DATA/hold" > "$DATA/hold.tmp"; mv -f "$DATA/hold.tmp" "$DATA/hold"
+		hold_apply; export_json
+		echo "$name is no longer strict. New servers are looked up as they connect, as before."
+		return 0
+	fi
+	[ "$(echo "$row" | cut -f3)" = 1 ] || die "most of the ports $name uses are also used by voice chat, so it cannot be strict: the start of a call would be held too."
+	is_ipv4 "$DEVICE_IP" || die "choose your gaming device first, in Settings. Strict only ever holds that one device."
+	grep -qxF "$name" "$DATA/hold" || echo "$name" >> "$DATA/hold"
+	hold_apply; export_json
+	if [ -s "$DATA/stay" ]; then echo "$name is now strict: every new server on its ports ($(echo "$row" | cut -f4)) is held for a moment until MatchWatch has placed it. Servers outside your places never get a packet through."
+	else echo "$name will be strict when you stay on places. You are not staying anywhere at the moment, so nothing is held."; fi
+}
+
 cmd_fav() { # add <ip> | remove <ip> | (nothing = list)
 	local ip="$2"
 	mkdir -p "$DATA"; touch "$DATA/favourites"
@@ -1682,6 +1800,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 			rm -f "$f"; return $rc ;;
 		fav) cmd_fav add "$arg" ;;
 		allow) cmd_allow add "$arg" ;;
+		holdon) [ -n "$name" ] || die "choose a game"; cmd_hold on "$name" ;;
+		holdoff) [ -n "$name" ] || die "choose a game"; cmd_hold off "$name" ;;
 		unallow) cmd_allow remove "$arg" ;;
 		unfav) cmd_fav remove "$arg" ;;
 		shareundo) cmd_share_undo ;;
@@ -1997,13 +2117,16 @@ cmd_run() {
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	find_ifaces; build_filter
 	apply_blocklist
+	# strict games are switched on a few seconds after the engine is listening, never before
+	rm -f "$RUN/hold.ports"; nft flush set inet matchwatch hold_ports 2>/dev/null
+	[ -s "$DATA/hold" ] && [ -s "$DATA/stay" ] && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
 	[ -s "$DATA/stay" ] && ( sleep 3; stay_ranges >/dev/null 2>&1 ) &
 	web_setup; export_json
 	echo '{"ts":0,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
 	echo "Starting up..." > "$RUN/status.txt"
 	mkfifo "$RUN/pipe" || die "cannot create $RUN/pipe"
 	tcpdump --help 2>&1 | grep -q immediate-mode && imm="--immediate-mode"
-	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" \
+	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -v HOLDF="$RUN/hold.ports" \
 		-v MINDN="$MIN_DOWN_PPS" -v MINUP="$MIN_UP_PPS" -v WARNSCORE="$WARN_SCORE" \
 		-v PCSCORE="$PC_SCORE" -v AUTOBLOCK="$AUTOBLOCK" -v ABSCORE="$AUTOBLOCK_SCORE" -v ABMATCHES="$AUTOBLOCK_MATCHES" \
 		-f "$LIB/analyze.awk" < "$RUN/pipe" >> "$RUN/engine.log" 2>&1 &
@@ -2087,6 +2210,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch blocklist         show blocked servers
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
+  matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
@@ -2127,6 +2251,8 @@ case "$1" in
 	blocklist) cmd_blocklist ;;
 	fav) cmd_fav "$2" "$3" ;;
 	allow) cmd_allow "$2" "$3" ;;
+	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
+	_hold) cmd_hold_check "$2" "$3" ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
@@ -2229,6 +2355,7 @@ $1 == "TICK" {
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
 	# names can change while running (the Tools page, matchwatch game name), so look again now and then
 	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) write_skipped(now) }
+	if (HOLDF != "") load_hold()
 	next
 }
 
@@ -2253,6 +2380,7 @@ $2 == "IP" && $4 == ">" {
 		rip = a[1] "." a[2] "." a[3] "." a[4]; rport = a[5]
 	} else next
 	advance(int(t))
+	if (NHP > 0) hold_seen(dir, rip, rport)
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
 		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
@@ -2336,6 +2464,29 @@ function load_games(file,    l, g, k, a, i, r) {
 		}
 	}
 	close(file)
+}
+# Strict games. HOLDF lists the server ports being held (first line: a serial that changes whenever the
+# verdicts were thrown away). The firewall drops the device's packets to such a port until the server has
+# a verdict, so the engine asks for one the moment it sees a packet go out, and keeps asking, slowly, for
+# as long as nothing comes back. A reply means the server is through and needs no more asking.
+function load_hold(    l, a, n, ser) {
+	n = 0; ser = ""
+	while ((getline l < HOLDF) > 0) { if (l ~ /^#/) { ser = l; continue } if (split(l, a, " ") == 2) { n++; HP_lo[n] = a[1] + 0; HP_hi[n] = a[2] + 0 } }
+	close(HOLDF)
+	NHP = n
+	if (ser != HOLD_ser || HO_c > 4000) { HOLD_ser = ser; HO_c = 0; split("", HO_ok); split("", HO_t); split("", HO_n) }
+}
+function hold_seen(dir, ip, port,    i, hit) {
+	if (ip in HO_ok) return
+	hit = 0
+	for (i = 1; i <= NHP; i++) if (port + 0 >= HP_lo[i] && port + 0 <= HP_hi[i]) { hit = 1; break }
+	if (!hit) return
+	if (dir == "D") { HO_ok[ip] = 1; HO_c++; return }
+	if ((ip in HO_t) && cursec - HO_t[ip] < (HO_n[ip] > 5 ? 60 : 4)) return
+	if (!(ip in HO_t)) HO_c++
+	HO_t[ip] = cursec; HO_n[ip]++
+	if (!REPLAY) system(SELF " _hold " ip " " (port + 0) " >/dev/null 2>&1 &")
+	else print "HOLD " ip ":" port
 }
 function reload_games() { NGP = 0; load_games(GAMESL); load_games(GAMES) }
 # who hosts this server: "isp org as" in lower case, or "" while that is not known
@@ -3686,6 +3837,12 @@ service_triggers() {
 	procd_add_reload_trigger matchwatch
 }
 
+# a stopped MatchWatch must never leave servers held: nothing would be there to let them through
+stop_service() {
+	nft flush set inet matchwatch hold_ports 2>/dev/null
+	rm -f /tmp/matchwatch/hold.ports
+}
+
 reload_service() {
 	stop
 	start
@@ -3704,7 +3861,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff"
 
 reply() { # ok(0|1) text
 	json_init
@@ -3829,13 +3986,13 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null, hold: [] };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // The version this file belongs to (build.py checks it matches the program's). When the router reports
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.24.0", reloading = false;
+var BUILT = "0.25.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -3876,9 +4033,10 @@ function toast(msg, err) { var t = shadow.getElementById("toast"); t.textContent
 
 // ---------- talking to the router
 function api(action, arg, extra) {
-	var p = { action: action }, m = /region=([^&]*)/.exec(extra || "");
+	var p = { action: action }, m = /region=([^&]*)/.exec(extra || ""), nm = /name=([^&]*)/.exec(extra || "");
 	if (arg != null) p.arg = String(arg);
 	if (m) p.region = m[1].replace(/\+/g, " ");
+	if (nm) p.name = nm[1];
 	return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, error: "Could not reach the router." }; });
 }
 // A button that runs a command. opts: confirm (label for the second press), danger, solid, done(text)
@@ -4295,6 +4453,27 @@ function mapSync() {
 	MAP.legend.textContent = "Green circles are the places you stay on" + (RO ? "" : "; press one to move, resize or remove it") + ". Round markers are servers you have played on, coloured by how they rated; a number means several in one city, and a faded one is outside your places. Small hollow dots are datacentre regions with their ping."
 		+ (whole.length ? " Also in the pool, but not drawn because they are whole countries or areas: " + whole.join(", ") + "." : "") + " The map pictures come from OpenStreetMap, fetched by your browser.";
 }
+// Strict, per game: hold every new server of a game until it has been placed. Offered for the games you have
+// played, and only where the game's ports are not shared with voice chat.
+function strictSection() {
+	if (RO) return null;
+	var played = {}, rows = [];
+	D.hist.forEach(function (m) { if (m.game) played[m.game] = 1; });
+	(D.hold || []).forEach(function (g) { if (g.on || played[g.name]) rows.push(g); });
+	if (!rows.length) return null;
+	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "Strict games"));
+	box.appendChild(h("p", { cls: "note", text: "Normally a server MatchWatch has not seen before gets its first packets through while it is being looked up, and is then turned away if it is outside your places. Make a game strict and every new server on its ports is held for a moment first, so one outside your places never connects at all. It applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
+	var t = table([["Game"], ["Server ports"], ["", ""]]);
+	rows.forEach(function (g) {
+		var td = h("td", { cls: "act" });
+		if (g.on) { td.appendChild(h("span", { cls: "tag keep", text: staying ? "Strict" : "Strict when you stay" })); td.appendChild(act("Stop", "holdoff", null, { extra: "&name=" + g.name })); }
+		else if (!g.ok) td.appendChild(h("span", { cls: "kept", title: "Most of its ports are also used by voice chat, and holding them would hold the start of a call.", text: "Shares its ports with voice chat" }));
+		else td.appendChild(act("Make strict", "holdon", null, { extra: "&name=" + g.name }));
+		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], td]));
+	});
+	box.appendChild(h("div", { cls: "tablewrap" }, t));
+	return box;
+}
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
 	box.appendChild(h("h2", "Favourites"));
@@ -4618,6 +4797,7 @@ function pageServers() {
 	} else if (stays.length && !RO) view.appendChild(h("p", { cls: "note", text: "To let one server through from outside these places, press Add to pool beside it in your favourites or the server list below, or on a match report." }));
 	view.appendChild(h("h2", "Map"));
 	view.appendChild(mapSection());
+	addIf(view, strictSection());
 	// stay anywhere: cities, countries or wider areas, as one pool
 	if (!RO) {
 	view.appendChild(h("h2", stays.length ? "Change where you stay" : "Stay in one or more places"));
@@ -5156,7 +5336,8 @@ function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#p
 // rebuilding it each time made it flicker, and anything filled in a moment later pushed the rest down.
 var lastSig = "";
 function loadAll(then) {
-	var left = 9, done = function () { if (--left === 0) then(); };
+	var left = 10, done = function () { if (--left === 0) then(); };
+	get("hold.json", function (x) { D.hold = x || []; done(); });
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
@@ -5167,7 +5348,7 @@ function loadAll(then) {
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
 	get("coverage.json", function (x) { D.cov = x || null; done(); });
 }
-function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov]); } catch (e) { return String(Date.now()); } }
+function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold]); } catch (e) { return String(Date.now()); } }
 function refresh(force) {
 	loadAll(function () {
 		var sig = sigNow(), changed = sig !== lastSig;
