@@ -22,6 +22,27 @@ function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(wind
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
 var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
+// The version this file belongs to (build.py checks it matches the program's). When the router reports
+// another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
+// files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
+// router kept showing the old dashboard until the browser happened to let go of it.
+var BUILT = "0.22.2", reloading = false;
+function freshReload() {
+	var urls = {}, go = function () { location.reload(); };
+	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
+	setTimeout(go, 5000);
+	Promise.all(Object.keys(urls).map(function (u) { return fetch(u, { cache: "reload", credentials: "same-origin" }).then(null, function () {}); })).then(go, go);
+}
+function versionSeen(v) {
+	var done = null;
+	if (!v || v === BUILT || reloading) return;
+	try { done = sessionStorage.getItem("mw-reloaded"); } catch (e) {}
+	if (done === v) return;                       // already tried once for this version: never loop
+	try { sessionStorage.setItem("mw-reloaded", v); } catch (e) { return; }
+	reloading = true;
+	toast("MatchWatch was updated to " + v + ". Loading the new version.");
+	setTimeout(freshReload, 1500);
+}
 
 // ---------- small helpers
 function h(tag, props) {
@@ -1072,15 +1093,15 @@ function pageTools() {
 	if (!RO && tab === "data") {
 		var upOut = outBox(), upBtn = h("button", { type: "button", cls: "solid", text: "Update now" }), upAgain = h("button", { type: "button", text: "Reload this page" });
 		upBtn.style.display = "none"; upAgain.style.display = "none";
-		upAgain.addEventListener("click", function () { location.reload(); });
+		upAgain.addEventListener("click", freshReload);
 		upBtn.addEventListener("click", function () {
 			upOut.show("Downloading and installing. This takes about half a minute.");
 			job(upBtn, "update", null, "update.json", function (r) {
 				upOut.show(r.out || "");
-				if (r.ok) { upBtn.style.display = "none"; upAgain.style.display = ""; }
+				if (r.ok) { upBtn.style.display = "none"; upAgain.style.display = ""; upOut.show((r.out || "") + " This page reloads by itself in a moment."); setTimeout(function () { refresh(true); }, 2500); }
 			});
 		});
-		view.appendChild(tool("Update MatchWatch", "You have version " + (D.info.version || "?") + ". Checking asks GitHub, where MatchWatch is published, for the newest version number. If there is one, Update now downloads the installer from there, checks it arrived whole and runs it. Your history and settings are kept. It restarts MatchWatch, so do it between matches.",
+		view.appendChild(tool("Update MatchWatch", "You have version " + (D.info.version || "?") + ". Checking asks GitHub, where MatchWatch is published, for the newest version number. If there is one, Update now downloads the installer from there, checks it arrived whole and runs it. Your history and settings are kept, and this page reloads by itself when it is done. It restarts MatchWatch, so do it between matches.",
 			h("div", { cls: "actions" }, act("Check for an update", "updatecheck", null, { done: function (o) { upOut.show(o); upBtn.style.display = /is available/.test(o || "") ? "" : "none"; } }), upBtn, upAgain), upOut));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
@@ -1137,7 +1158,7 @@ function loadAll(then) {
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
 	get("blocklist.json", function (x) { D.blocks = x || []; done(); });
-	get("info.json", function (x) { D.info = x || {}; done(); });
+	get("info.json", function (x) { D.info = x || {}; versionSeen(D.info.version); done(); });
 	get("favourites.json", function (x) { setFavs(x); done(); });
 	get("regions.json", function (x) { D.regions = x || []; done(); });
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });

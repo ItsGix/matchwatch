@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.22.1"
+VERSION="0.22.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1472,7 +1472,7 @@ update_run() { # job-id version sha256 : download the installer, check it is who
 		else
 			sh "$f" > "$RUN/update.log" 2>&1
 			new="$("${MW_ROOT:-}/usr/bin/matchwatch" version 2>/dev/null)"
-			if [ "$new" = "$want" ]; then update_done "$id" true "Updated from $VERSION to $want. Your history and settings are kept. Reload this page to use the new version."
+			if [ "$new" = "$want" ]; then update_done "$id" true "Updated from $VERSION to $want. Your history and settings are kept."
 			else update_done "$id" false "The installer ran but this router still has ${new:-no version}. The installer's output is in $RUN/update.log."; fi
 		fi
 	fi
@@ -1811,7 +1811,8 @@ web_setup() { # the dashboard without login (WEB=1): view only, plus the "I felt
 	rm -f /www/cgi-bin/matchwatch-api
 	if [ "$WEB" = 1 ] && [ -f "$LIB/public.html" ] && [ -f /www/luci-static/resources/matchwatch/dashboard.js ]; then
 		mkdir -p /www/matchwatch
-		cp -f "$LIB/public.html" /www/matchwatch/index.html
+		# the two dashboard files are asked for by version, so a browser drops its old copies after an update
+		sed -e "s|dashboard\.js\"|dashboard.js?v=$VERSION\"|" -e "s|dashboard\.css\"|dashboard.css?v=$VERSION\"|" "$LIB/public.html" > /www/matchwatch/index.html
 		ln -sfn "$RUN/www" /www/matchwatch/data
 		if [ -d /www/cgi-bin ]; then
 			cat > /www/cgi-bin/matchwatch-mark <<'CGI'

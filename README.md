@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.22.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.22.2 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -78,7 +78,7 @@ If the router cannot download the file, fetch [`dist/matchwatch-install.sh`](dis
 
 **What the installer does.** Read it before you run it: it runs as root. It installs `tcpdump` if missing, copies the program and the LuCI app into place, creates `/etc/config/matchwatch`, starts the service and runs a self-check. It works on both `apk` (OpenWrt 25.12) and `opkg` (older releases).
 
-**Updating.** From 0.22.0, open Tools, Data and settings, and press Check for an update; if there is a newer version, Update now installs it. Over SSH that is `matchwatch update` and `matchwatch update now`. On older versions, run the new installer the same way you installed. History and settings are kept. Settings from versions before 0.10.0 are carried over automatically.
+**Updating.** From 0.22.0, open Tools, Data and settings, and press Check for an update; if there is a newer version, Update now installs it and the page reloads itself with the new dashboard. Over SSH that is `matchwatch update` and `matchwatch update now`. On older versions, run the new installer the same way you installed. History and settings are kept. Settings from versions before 0.10.0 are carried over automatically.
 
 **After a firmware upgrade.** History and settings survive, but the program is removed. Run the installer again.
 

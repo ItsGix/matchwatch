@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.22.1"
+VERSION="0.22.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1522,7 +1522,7 @@ update_run() { # job-id version sha256 : download the installer, check it is who
 		else
 			sh "$f" > "$RUN/update.log" 2>&1
 			new="$("${MW_ROOT:-}/usr/bin/matchwatch" version 2>/dev/null)"
-			if [ "$new" = "$want" ]; then update_done "$id" true "Updated from $VERSION to $want. Your history and settings are kept. Reload this page to use the new version."
+			if [ "$new" = "$want" ]; then update_done "$id" true "Updated from $VERSION to $want. Your history and settings are kept."
 			else update_done "$id" false "The installer ran but this router still has ${new:-no version}. The installer's output is in $RUN/update.log."; fi
 		fi
 	fi
@@ -1861,7 +1861,8 @@ web_setup() { # the dashboard without login (WEB=1): view only, plus the "I felt
 	rm -f /www/cgi-bin/matchwatch-api
 	if [ "$WEB" = 1 ] && [ -f "$LIB/public.html" ] && [ -f /www/luci-static/resources/matchwatch/dashboard.js ]; then
 		mkdir -p /www/matchwatch
-		cp -f "$LIB/public.html" /www/matchwatch/index.html
+		# the two dashboard files are asked for by version, so a browser drops its old copies after an update
+		sed -e "s|dashboard\.js\"|dashboard.js?v=$VERSION\"|" -e "s|dashboard\.css\"|dashboard.css?v=$VERSION\"|" "$LIB/public.html" > /www/matchwatch/index.html
 		ln -sfn "$RUN/www" /www/matchwatch/data
 		if [ -d /www/cgi-bin ]; then
 			cat > /www/cgi-bin/matchwatch-mark <<'CGI'
@@ -3737,6 +3738,27 @@ function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(wind
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
 var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
+// The version this file belongs to (build.py checks it matches the program's). When the router reports
+// another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
+// files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
+// router kept showing the old dashboard until the browser happened to let go of it.
+var BUILT = "0.22.2", reloading = false;
+function freshReload() {
+	var urls = {}, go = function () { location.reload(); };
+	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
+	setTimeout(go, 5000);
+	Promise.all(Object.keys(urls).map(function (u) { return fetch(u, { cache: "reload", credentials: "same-origin" }).then(null, function () {}); })).then(go, go);
+}
+function versionSeen(v) {
+	var done = null;
+	if (!v || v === BUILT || reloading) return;
+	try { done = sessionStorage.getItem("mw-reloaded"); } catch (e) {}
+	if (done === v) return;                       // already tried once for this version: never loop
+	try { sessionStorage.setItem("mw-reloaded", v); } catch (e) { return; }
+	reloading = true;
+	toast("MatchWatch was updated to " + v + ". Loading the new version.");
+	setTimeout(freshReload, 1500);
+}
 
 // ---------- small helpers
 function h(tag, props) {
@@ -4787,15 +4809,15 @@ function pageTools() {
 	if (!RO && tab === "data") {
 		var upOut = outBox(), upBtn = h("button", { type: "button", cls: "solid", text: "Update now" }), upAgain = h("button", { type: "button", text: "Reload this page" });
 		upBtn.style.display = "none"; upAgain.style.display = "none";
-		upAgain.addEventListener("click", function () { location.reload(); });
+		upAgain.addEventListener("click", freshReload);
 		upBtn.addEventListener("click", function () {
 			upOut.show("Downloading and installing. This takes about half a minute.");
 			job(upBtn, "update", null, "update.json", function (r) {
 				upOut.show(r.out || "");
-				if (r.ok) { upBtn.style.display = "none"; upAgain.style.display = ""; }
+				if (r.ok) { upBtn.style.display = "none"; upAgain.style.display = ""; upOut.show((r.out || "") + " This page reloads by itself in a moment."); setTimeout(function () { refresh(true); }, 2500); }
 			});
 		});
-		view.appendChild(tool("Update MatchWatch", "You have version " + (D.info.version || "?") + ". Checking asks GitHub, where MatchWatch is published, for the newest version number. If there is one, Update now downloads the installer from there, checks it arrived whole and runs it. Your history and settings are kept. It restarts MatchWatch, so do it between matches.",
+		view.appendChild(tool("Update MatchWatch", "You have version " + (D.info.version || "?") + ". Checking asks GitHub, where MatchWatch is published, for the newest version number. If there is one, Update now downloads the installer from there, checks it arrived whole and runs it. Your history and settings are kept, and this page reloads by itself when it is done. It restarts MatchWatch, so do it between matches.",
 			h("div", { cls: "actions" }, act("Check for an update", "updatecheck", null, { done: function (o) { upOut.show(o); upBtn.style.display = /is available/.test(o || "") ? "" : "none"; } }), upBtn, upAgain), upOut));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
@@ -4852,7 +4874,7 @@ function loadAll(then) {
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
 	get("blocklist.json", function (x) { D.blocks = x || []; done(); });
-	get("info.json", function (x) { D.info = x || {}; done(); });
+	get("info.json", function (x) { D.info = x || {}; versionSeen(D.info.version); done(); });
 	get("favourites.json", function (x) { setFavs(x); done(); });
 	get("regions.json", function (x) { D.regions = x || []; done(); });
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
@@ -5095,13 +5117,17 @@ var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
 var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1 };
 
+/* The dashboard's two files are asked for by MatchWatch's version, so a browser that still holds
+   an older version's copies fetches the new ones after an update instead of showing the old page. */
+var stamp = '';
+
 function loadDashboard() {
 	if (window.MatchwatchDashboard)
 		return Promise.resolve();
 
 	return new Promise(function (resolve, reject) {
 		var s = document.createElement('script');
-		s.src = L.resource('matchwatch/dashboard.js');
+		s.src = L.resource('matchwatch/dashboard.js') + stamp;
 		s.onload = resolve;
 		s.onerror = function () { reject(new Error('Could not load the MatchWatch dashboard script.')); };
 		document.head.appendChild(s);
@@ -5131,14 +5157,17 @@ return view.extend({
 	handleReset: null,
 
 	load: function () {
-		return loadDashboard();
+		return fs.read(DATA + 'info.json').then(function (text) {
+			var v = String(JSON.parse(text).version || '');
+			stamp = /^[0-9.]+$/.test(v) ? '?v=' + v : '';
+		}).catch(function () {}).then(loadDashboard);
 	},
 
 	render: function () {
 		var host = E('div', { 'class': 'matchwatch' });
 
 		window.MatchwatchDashboard(host, {
-			css: L.resource('matchwatch/dashboard.css'),
+			css: L.resource('matchwatch/dashboard.css') + stamp,
 			settings: L.url('admin/services/matchwatch/settings'),
 			dark: pageIsDark,
 			get: function (file) {

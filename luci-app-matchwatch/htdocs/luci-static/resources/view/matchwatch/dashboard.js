@@ -15,13 +15,17 @@ var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
 var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1 };
 
+/* The dashboard's two files are asked for by MatchWatch's version, so a browser that still holds
+   an older version's copies fetches the new ones after an update instead of showing the old page. */
+var stamp = '';
+
 function loadDashboard() {
 	if (window.MatchwatchDashboard)
 		return Promise.resolve();
 
 	return new Promise(function (resolve, reject) {
 		var s = document.createElement('script');
-		s.src = L.resource('matchwatch/dashboard.js');
+		s.src = L.resource('matchwatch/dashboard.js') + stamp;
 		s.onload = resolve;
 		s.onerror = function () { reject(new Error('Could not load the MatchWatch dashboard script.')); };
 		document.head.appendChild(s);
@@ -51,14 +55,17 @@ return view.extend({
 	handleReset: null,
 
 	load: function () {
-		return loadDashboard();
+		return fs.read(DATA + 'info.json').then(function (text) {
+			var v = String(JSON.parse(text).version || '');
+			stamp = /^[0-9.]+$/.test(v) ? '?v=' + v : '';
+		}).catch(function () {}).then(loadDashboard);
 	},
 
 	render: function () {
 		var host = E('div', { 'class': 'matchwatch' });
 
 		window.MatchwatchDashboard(host, {
-			css: L.resource('matchwatch/dashboard.css'),
+			css: L.resource('matchwatch/dashboard.css') + stamp,
 			settings: L.url('admin/services/matchwatch/settings'),
 			dark: pageIsDark,
 			get: function (file) {
