@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.27.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.28.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -236,7 +236,7 @@ Alerts are one short line each, with no addresses in them. The full detail is al
 
 **Match started** is for stepping away during a long queue. It fires when the steady game traffic starts, not in the lobby or on a loading screen, so it means "get back to your seat now". It waits up to about fourteen seconds for a ping; if the server does not answer, it is sent without one. It is only sent for named games, and is off by default.
 
-**The lobby check.** When the game first contacts a server it recognises as a game server (a port labelled as a game, and the same port or address block as an earlier match), MatchWatch looks up where it is, measures the ping and checks its history. The Live page shows the result, with a button to block the server before the match starts. Your phone is told when the server is noticeably further than your best datacentre or has rated badly. It needs at least one recorded match before it can recognise game servers.
+**The lobby check.** When the game first contacts a server it recognises as a game server (a port labelled as a game, and either a host that matches the game or the same port or address block as an earlier match), MatchWatch looks up where it is, measures the ping and checks its history. The Live page shows the result, with a button to block the server before the match starts. Your phone is told when the server is noticeably further than your best datacentre or has rated badly. It needs at least one recorded match before it can recognise game servers.
 
 A server turned away because you are staying somewhere else does not alert your phone, unless the lobby alert is set to "Always alert my phone". A game can try several servers in a minute.
 
@@ -310,6 +310,20 @@ Sometimes one server outside your places is worth keeping: a favourite, or one y
 - The game still decides. Allowing a server means it will not be refused, not that you will be sent to it.
 
 From the command line: `matchwatch allow`, `matchwatch allow add <ip>`, `matchwatch allow remove <ip>`.
+
+### When a server is turned away
+
+How soon staying on places acts on a game depends on how sure MatchWatch is that a server belongs to that game. The Servers page shows which applies to each game you have played, under "How each game is filtered".
+
+| The game is | A server outside your places is turned away | You need to |
+|---|---|---|
+| Known by port and by who hosts it (Call of Duty, Valorant, League of Legends, Overwatch 2, War Thunder, iRacing) | From the first one the game tries, once it has been looked up | Nothing |
+| Hosted by a company with a published address list (Call of Duty on Vultr) | Before the game even tries it | Nothing |
+| Known by port alone (Fortnite, Apex Legends, Rocket League and most others) | Only on a port or address block where you have already played a match | Play one match, or make the game strict |
+| Any named game you made strict | Before it can connect, every time | Press Make strict |
+| Not named ("Game on port N") | Never | Name it first |
+
+The middle row exists because other traffic uses the same ports. A port alone is not proof of a game, so MatchWatch waits for a match there before refusing anything, unless you tell it to be strict.
 
 ### Strict games
 

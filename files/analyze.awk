@@ -133,7 +133,7 @@ function packet(f, d, t, len,    k, gap, thr, n, avg) {
 	F_pk[f]++; F_last[f] = t
 	Q_cnt[k]++
 	S_bytes[k] += len; S_pk[k]++
-	if (F_pk[f] == 4 && !F_lobby[f]) lobby_check(f)
+	if (!F_lobby[f] && F_pk[f] >= 4 && F_pk[f] % 4 == 0) lobby_check(f)
 	if (F_pk[f] == 20 && !F_warned[f]) early_check(f)
 	if (!(k in P_last)) { P_last[k] = t; P_tick[k] = t; return }
 	gap = (t - P_last[k]) * 1000
@@ -240,6 +240,21 @@ function kindof(port, ip,    i) {
 	return ""
 }
 function isgame(port, ip) { return kindof(port, ip) == "game" }
+# is this server a game by port AND host? That is as sure as MatchWatch gets without a match having been played there
+function hostgame(port, ip,    i) {
+	for (i = 1; i <= NGP; i++) {
+		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
+		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
+		return (GP_kind[i] == "game" && GP_host[i] != "")
+	}
+	return 0
+}
+# does any game label covering this port ask for a host? Then the answer may change once the server has been looked up
+function hostpending(port, ip,    i) {
+	if (ip in HOST) return 0
+	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] == "game") return 1
+	return 0
+}
 
 # A stream left alone as voice chat is still counted, so the Tools page can show what was skipped
 # and the owner can say "that one is a game".
@@ -260,14 +275,18 @@ function write_skipped(now,    k, s, n, file) {
 }
 
 # first packets to a server that looks like a game server: tell the player where they are headed.
-# Two tests, both needed. The port must be labelled as a game, so voice chat is left alone. And the
-# port or address block must have carried an earlier match, because game port ranges are wide and
-# plenty of other traffic (calls, peer-to-peer) uses ports inside them.
+# The port must be labelled as a game, so voice chat is left alone. Then one of two things must hold,
+# because game port ranges are wide and plenty of other traffic (calls, peer-to-peer) uses ports inside
+# them: the label also names who hosts the game and this server is theirs, or the port or address block
+# has carried an earlier match. A game known by port and host is therefore judged from its first
+# server; one known by port alone needs a match there first (or to be made strict).
+# Who hosts a server takes a moment to look up, so while that is pending the check is put off, briefly.
 function lobby_check(f,    ip) {
-	F_lobby[f] = 1
 	ip = F_rip[f]
+	if (F_pk[f] < 400 && hostpending(F_rport[f], ip)) { hostinfo(ip); return }
+	F_lobby[f] = 1
 	if (!isgame(F_rport[f], ip)) return
-	if (!((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
+	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
 	print "LOBBY " ip ":" F_rport[f]

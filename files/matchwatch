@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.27.0"
+VERSION="0.28.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -353,7 +353,7 @@ export_json() {
 	[ -d "$RUN/www" ] || return 0
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	awk -v MODE=hist_json -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/history.json.tmp" && mv -f "$RUN/www/history.json.tmp" "$RUN/www/history.json"
-	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4 } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
+	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\",\"host\":%s}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4, ($6 == 1 ? "true" : "false") } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
@@ -1451,6 +1451,7 @@ hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports,
 		{ n = split($2, a, ",")
 		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } c++; L[c] = lo + 0; H[c] = hi + 0; N[c] = $1; V[c] = ($3 == "voice") }
 		  if ($3 != "voice" && !($1 in seen)) { seen[$1] = 1; order[++k] = $1 } }
+		{ if ($3 != "voice" && $4 != "") hosted[$1] = 1 }
 		END { for (j = 1; j <= k; j++) { nm = order[j]; ports = ""; held = ""; all = 0; kept = 0
 			for (x = 1; x <= c; x++) if (N[x] == nm && !V[x] && !((nm, L[x], H[x]) in dup)) {
 				dup[nm, L[x], H[x]] = 1
@@ -1465,7 +1466,7 @@ hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports,
 				for (z = 1; z <= ns; z++) if (SL[z] <= SH[z]) { held = held (held == "" ? "" : " ") (SL[z] == SH[z] ? SL[z] : SL[z] "-" SH[z]); kept += SH[z] - SL[z] + 1 }
 			}
 			# a game that keeps under half its ports after that mostly lives on voice chat ports: not offered
-			printf "%s\t%d\t%d\t%s\t%s\n", nm, (nm in on), (all > 0 && kept * 2 >= all), ports, held } }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
+			printf "%s\t%d\t%d\t%s\t%s\t%d\n", nm, (nm in on), (all > 0 && kept * 2 >= all), ports, held, (nm in hosted) } }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
 }
 hold_apply() { # make the firewall and the engine agree with the list of held games
 	local r live ip

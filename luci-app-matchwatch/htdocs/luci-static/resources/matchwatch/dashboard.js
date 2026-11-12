@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.27.0", reloading = false;
+var BUILT = "0.28.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -495,15 +495,15 @@ function strictSection() {
 	D.hist.forEach(function (m) { if (m.game) played[m.game] = 1; });
 	(D.hold || []).forEach(function (g) { if (g.on || played[g.name]) rows.push(g); });
 	if (!rows.length) return null;
-	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "Strict games"));
-	box.appendChild(h("p", { cls: "note", text: "Normally a server MatchWatch has not seen before gets its first packets through while it is being looked up, and is then turned away if it is outside your places. Make a game strict and every new server on its ports is held for a moment first, so one outside your places never connects at all. It applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
-	var t = table([["Game"], ["Server ports"], ["", ""]]);
+	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "How each game is filtered"));
+	box.appendChild(h("p", { cls: "note", text: "A game MatchWatch knows by its port and by who hosts it is filtered from the first server it tries. One it knows by port alone is only filtered on ports and address blocks where you have played a match, because other things use those ports too. Make a game strict and every new server on its ports is held for a moment and judged before it can connect, whichever kind it is. All of this applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
+	var t = table([["Game"], ["Server ports"], ["Servers outside your places"], ["", ""]]);
 	rows.forEach(function (g) {
 		var td = h("td", { cls: "act" });
 		if (g.on) { td.appendChild(h("span", { cls: "tag keep", text: staying ? "Strict" : "Strict when you stay" })); td.appendChild(act("Stop", "holdoff", null, { extra: "&name=" + g.name })); }
 		else if (!g.ok) td.appendChild(h("span", { cls: "kept", title: "Most of its ports are also used by voice chat, and holding them would hold the start of a call.", text: "Shares its ports with voice chat" }));
 		else td.appendChild(act("Make strict", "holdon", null, { extra: "&name=" + g.name }));
-		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], td]));
+		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], [g.on ? "Held, then turned away before they connect" : g.host ? "Turned away from the first one" : "Turned away once you have played a match there"], td]));
 	});
 	box.appendChild(h("div", { cls: "tablewrap" }, t));
 	return box;

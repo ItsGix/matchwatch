@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.27.0"
+VERSION="0.28.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -403,7 +403,7 @@ export_json() {
 	[ -d "$RUN/www" ] || return 0
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	awk -v MODE=hist_json -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/history.json.tmp" && mv -f "$RUN/www/history.json.tmp" "$RUN/www/history.json"
-	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4 } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
+	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\",\"host\":%s}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4, ($6 == 1 ? "true" : "false") } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
@@ -1501,6 +1501,7 @@ hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports,
 		{ n = split($2, a, ",")
 		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } c++; L[c] = lo + 0; H[c] = hi + 0; N[c] = $1; V[c] = ($3 == "voice") }
 		  if ($3 != "voice" && !($1 in seen)) { seen[$1] = 1; order[++k] = $1 } }
+		{ if ($3 != "voice" && $4 != "") hosted[$1] = 1 }
 		END { for (j = 1; j <= k; j++) { nm = order[j]; ports = ""; held = ""; all = 0; kept = 0
 			for (x = 1; x <= c; x++) if (N[x] == nm && !V[x] && !((nm, L[x], H[x]) in dup)) {
 				dup[nm, L[x], H[x]] = 1
@@ -1515,7 +1516,7 @@ hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports,
 				for (z = 1; z <= ns; z++) if (SL[z] <= SH[z]) { held = held (held == "" ? "" : " ") (SL[z] == SH[z] ? SL[z] : SL[z] "-" SH[z]); kept += SH[z] - SL[z] + 1 }
 			}
 			# a game that keeps under half its ports after that mostly lives on voice chat ports: not offered
-			printf "%s\t%d\t%d\t%s\t%s\n", nm, (nm in on), (all > 0 && kept * 2 >= all), ports, held } }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
+			printf "%s\t%d\t%d\t%s\t%s\t%d\n", nm, (nm in on), (all > 0 && kept * 2 >= all), ports, held, (nm in hosted) } }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
 }
 hold_apply() { # make the firewall and the engine agree with the list of held games
 	local r live ip
@@ -2493,7 +2494,7 @@ function packet(f, d, t, len,    k, gap, thr, n, avg) {
 	F_pk[f]++; F_last[f] = t
 	Q_cnt[k]++
 	S_bytes[k] += len; S_pk[k]++
-	if (F_pk[f] == 4 && !F_lobby[f]) lobby_check(f)
+	if (!F_lobby[f] && F_pk[f] >= 4 && F_pk[f] % 4 == 0) lobby_check(f)
 	if (F_pk[f] == 20 && !F_warned[f]) early_check(f)
 	if (!(k in P_last)) { P_last[k] = t; P_tick[k] = t; return }
 	gap = (t - P_last[k]) * 1000
@@ -2600,6 +2601,21 @@ function kindof(port, ip,    i) {
 	return ""
 }
 function isgame(port, ip) { return kindof(port, ip) == "game" }
+# is this server a game by port AND host? That is as sure as MatchWatch gets without a match having been played there
+function hostgame(port, ip,    i) {
+	for (i = 1; i <= NGP; i++) {
+		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
+		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
+		return (GP_kind[i] == "game" && GP_host[i] != "")
+	}
+	return 0
+}
+# does any game label covering this port ask for a host? Then the answer may change once the server has been looked up
+function hostpending(port, ip,    i) {
+	if (ip in HOST) return 0
+	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] == "game") return 1
+	return 0
+}
 
 # A stream left alone as voice chat is still counted, so the Tools page can show what was skipped
 # and the owner can say "that one is a game".
@@ -2620,14 +2636,18 @@ function write_skipped(now,    k, s, n, file) {
 }
 
 # first packets to a server that looks like a game server: tell the player where they are headed.
-# Two tests, both needed. The port must be labelled as a game, so voice chat is left alone. And the
-# port or address block must have carried an earlier match, because game port ranges are wide and
-# plenty of other traffic (calls, peer-to-peer) uses ports inside them.
+# The port must be labelled as a game, so voice chat is left alone. Then one of two things must hold,
+# because game port ranges are wide and plenty of other traffic (calls, peer-to-peer) uses ports inside
+# them: the label also names who hosts the game and this server is theirs, or the port or address block
+# has carried an earlier match. A game known by port and host is therefore judged from its first
+# server; one known by port alone needs a match there first (or to be made strict).
+# Who hosts a server takes a moment to look up, so while that is pending the check is put off, briefly.
 function lobby_check(f,    ip) {
-	F_lobby[f] = 1
 	ip = F_rip[f]
+	if (F_pk[f] < 400 && hostpending(F_rport[f], ip)) { hostinfo(ip); return }
+	F_lobby[f] = 1
 	if (!isgame(F_rport[f], ip)) return
-	if (!((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
+	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
 	print "LOBBY " ip ":" F_rport[f]
@@ -4081,7 +4101,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.27.0", reloading = false;
+var BUILT = "0.28.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4550,15 +4570,15 @@ function strictSection() {
 	D.hist.forEach(function (m) { if (m.game) played[m.game] = 1; });
 	(D.hold || []).forEach(function (g) { if (g.on || played[g.name]) rows.push(g); });
 	if (!rows.length) return null;
-	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "Strict games"));
-	box.appendChild(h("p", { cls: "note", text: "Normally a server MatchWatch has not seen before gets its first packets through while it is being looked up, and is then turned away if it is outside your places. Make a game strict and every new server on its ports is held for a moment first, so one outside your places never connects at all. It applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
-	var t = table([["Game"], ["Server ports"], ["", ""]]);
+	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "How each game is filtered"));
+	box.appendChild(h("p", { cls: "note", text: "A game MatchWatch knows by its port and by who hosts it is filtered from the first server it tries. One it knows by port alone is only filtered on ports and address blocks where you have played a match, because other things use those ports too. Make a game strict and every new server on its ports is held for a moment and judged before it can connect, whichever kind it is. All of this applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
+	var t = table([["Game"], ["Server ports"], ["Servers outside your places"], ["", ""]]);
 	rows.forEach(function (g) {
 		var td = h("td", { cls: "act" });
 		if (g.on) { td.appendChild(h("span", { cls: "tag keep", text: staying ? "Strict" : "Strict when you stay" })); td.appendChild(act("Stop", "holdoff", null, { extra: "&name=" + g.name })); }
 		else if (!g.ok) td.appendChild(h("span", { cls: "kept", title: "Most of its ports are also used by voice chat, and holding them would hold the start of a call.", text: "Shares its ports with voice chat" }));
 		else td.appendChild(act("Make strict", "holdon", null, { extra: "&name=" + g.name }));
-		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], td]));
+		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], [g.on ? "Held, then turned away before they connect" : g.host ? "Turned away from the first one" : "Turned away once you have played a match there"], td]));
 	});
 	box.appendChild(h("div", { cls: "tablewrap" }, t));
 	return box;
