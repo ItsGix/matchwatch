@@ -347,6 +347,31 @@ function kv(pairs) {
 	pairs.forEach(function (p) { if (!p) return; dl.appendChild(h("dt", null, p[0], p[2] ? h("small", p[2]) : null)); dl.appendChild(h("dd", p[1])); });
 	return dl;
 }
+// what QoSmate's queues did during the match: the game's own queue, and everything else on the line
+function qmBlock(m) {
+	var q = m.qm;
+	if (!q || !q.up) return null;
+	var top = m.qos !== "low", d = q.down || null, b = h("div", null, h("h2", "QoSmate in this match"));
+	var mine = function (s) { return top ? { pkts: s.pkts, drops: s.drops, peak: s.peak } : { pkts: s.rpkts, drops: s.rdrops, peak: s.rpeak }; };
+	var gu = mine(q.up), gd = d ? mine(d) : null;
+	var drops = gu.drops + (gd ? gd.drops : 0), peak = Math.max(gu.peak, gd ? gd.peak : 0);
+	var held = top ? q.up.rdrops + q.up.rmarks + (d ? d.rdrops + d.rmarks : 0) : 0;
+	var bad = drops > 0 || peak >= 10;
+	b.appendChild(h("p", { cls: "lede " + (bad ? "low" : "ok"), text: bad
+		? "QoSmate's queue held your game up: " + drops + " packet" + (drops === 1 ? "" : "s") + " dropped, longest wait " + fmt(peak, 1) + " ms. That happened on your router, not at the server."
+		: "QoSmate did its job. Your game's queue dropped nothing, and its longest wait was " + fmt(peak, 1) + " ms." }));
+	if (!top) b.appendChild(h("p", { cls: "note", text: "Your game was not in the top priority queue, so it shared a queue with everything else on your line. See QoSmate priority under Tools, Data and settings." }));
+	else b.appendChild(h("p", { cls: "note", text: held ? "Other traffic was heavy enough to be held back " + held + " time" + (held === 1 ? "" : "s") + " while your game went ahead of it." : "Nothing else on your line needed holding back." }));
+	var rows = [["Sent by your game's queue", gu.pkts + " packets", gu.drops + " dropped, longest wait " + fmt(gu.peak, 1) + " ms"]];
+	if (gd) rows.push(["Received by your game's queue", gd.pkts + " packets", gd.drops + " dropped, longest wait " + fmt(gd.peak, 1) + " ms"]);
+	if (top) {
+		rows.push(["Other traffic, sent", q.up.rpkts + " packets", (q.up.rdrops + q.up.rmarks) + " held back, longest wait " + fmt(q.up.rpeak, 1) + " ms"]);
+		if (d) rows.push(["Other traffic, received", d.rpkts + " packets", (d.rdrops + d.rmarks) + " held back, longest wait " + fmt(d.rpeak, 1) + " ms"]);
+	}
+	b.appendChild(kv(rows.map(function (r) { return [r[0], r[1], r[2]]; })));
+	b.appendChild(h("p", { cls: "note", text: "Read from QoSmate's queue counters at the start and end of the match. Longest wait is the highest of readings taken every five seconds, so a very brief spike can be missed." }));
+	return b;
+}
 function pageMatch(id) {
 	view.textContent = "";
 	if (id === "last") { if (!D.hist.length) { view.appendChild(h("h1", "No match recorded yet")); view.appendChild(h("p", { cls: "sub", text: "Play a match and its report appears here." })); return; } id = String(D.hist[0].start); }
@@ -408,6 +433,7 @@ function pageMatch(id) {
 			m.lanping != null ? ["Router to PC", fmt(m.lanping, 2) + " ms"] : ["Router to PC", "n/a", "The PC does not answer ping"]]));
 		cols.appendChild(b);
 		view.appendChild(cols);
+		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }
@@ -954,16 +980,16 @@ function pageTools() {
 		view.appendChild(tool("Your games", "Everything you have added, named or taken from a share file. These are checked before the built-in list. Removing one puts the port back to how MatchWatch treats it by default.", mine));
 		drawMine();
 		var skBox = h("div");
-		view.appendChild(tool("Skipped as voice chat", "Voice chat is not a match, so MatchWatch does not record it and can never block it. A few games use the same ports. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on.", skBox));
+		view.appendChild(tool("Skipped, not recorded", "Two kinds of stream are left out of your matches: voice chat, and anything on a port nobody has named that did not look like a game (under two minutes, or no steady update rate). If a game you play is listed here, name it and MatchWatch always records that port from then on.", skBox));
 		get("skipped.json", function (sk) {
 			if (page !== "tools") return;
 			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
 			if (!sk.length) { skBox.appendChild(h("p", { cls: "empty", text: "Nothing has been skipped in the last six hours." })); return; }
-			var t = table([["Server"], ["Port", "num"], ["Last seen"], ["If this is a game, name it"]]);
+			var t = table([["Server"], ["Port", "num"], ["Last seen"], ["Why it was skipped"], ["If this is a game, name it"]]);
 			sk.forEach(function (x) {
 				var td = h("td");
 				td.appendChild(nameForm(x.port, "This is a game", function (v) { td.textContent = "Now treated as a game: " + v; }));
-				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], td]));
+				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], [x.why === "short" ? "Under two minutes" : x.why === "unsteady" ? "No steady update rate" : "Voice chat"], td]));
 			});
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});

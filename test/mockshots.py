@@ -69,6 +69,8 @@ def build(site):
                    marks=[{"t": start + 74 + 90 * k, "k": "server", "x": "server updates stalled: one arrived 249 ms late" if code == "server" else "nothing showed on the network in the six seconds before"} for k in range(marks)],
                    trace=[" 1  198.51.100.1  3.2 ms", " 2  100.64.0.64  3.1 ms", " 3  100.64.0.74  3.7 ms", " 4  192.0.2.180  5.7 ms", " 5  192.0.2.36  5.9 ms", " 6  *", " 7  *", " 8  192.0.2.201  %.1f ms" % (p - 0.4), " 9  %s  %.1f ms" % (ip, p)])
         del det["upnom_"]
+        det["qm"] = {"scheme": "diffserv3", "up": {"pkts": dur * 95, "drops": 0, "marks": 0, "peak": 0.3, "rpkts": dur * 410, "rdrops": 37 if code == "line" else 0, "rmarks": 212 if code == "line" else 0, "rpeak": 18.4 if code == "line" else 1.1},
+                     "down": {"pkts": dur * 20, "drops": 0, "marks": 0, "peak": 0.4, "rpkts": dur * 900, "rdrops": 0, "rmarks": 0, "rpeak": 2.2}}
         json.dump(det, open(f"{data}/matches/{start}.json", "w"))
         e = srv.setdefault(ip, {"ip": ip, "cc": cc, "city": city, "org": org, "matches": 0, "counted": 0, "sum": 0, "worst": 100, "tick": 20.1, "ping": p, "last": start, "minutes": 0, "blocked": False})
         e["matches"] += 1; e["counted"] += 1; e["sum"] += m["rating"]; e["worst"] = min(e["worst"], m["rating"]); e["minutes"] += dur // 60
@@ -90,7 +92,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.17.1", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True}}
+           "info": {"version": "0.18.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["shared"] = {"undo": True, "have": {"games": 3, "regions": 0, "places": 2, "ratings": 6},

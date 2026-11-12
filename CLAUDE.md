@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.17.1.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.18.0.
 
 ## Layout
 
@@ -31,6 +31,10 @@ Favourites (0.15.0): `/etc/matchwatch/favourites` holds one server per line: the
 Dashboard look (0.15.0): colours and radii are variables at the top of `dashboard.css`; the chart reads the same variables. Buttons are a quiet fill (`--soft`), `solid` for the main action, `danger` for destructive ones. The Tools page is four tabs (`TOOLTABS`, addresses `#/tools/<tab>`) of rows built by `tool(title, description, controls...)`: say what a tool does on the left, put its control and result on the right. Check both themes after a style change (`dark:` in the mock page of `test/mockshots.py`).
 
 Removing (0.17.0): `cmd_forget match|server|dc` rewrites `sessions.tsv` without the chosen rows, deletes their `matches/<start>.json`, re-exports, and restarts the engine only when no match is in progress (its ratings live in memory). It refuses a favourite server, and a datacentre holding one. Actions `forgetmatch`, `forgetserver`, `forgetdc`.
+
+QoSmate match record (0.18.0): `qm_loop` (started by `_probe_start`) saves cake's per-queue counters from `tc -s qdisc` for the WAN port and `ifb-<wan>` at match start and tracks the peak `pk_delay` every five seconds; `qm_sum` (in `_probe_stop`) writes the differences as one line of JSON, `qm.json`, which the engine copies into the match detail as `qm`. The last column of cake's table is taken as the top queue. Read only. Proven on cake diffserv3 only; nothing is written in HFSC mode.
+
+Unnamed ports (0.18.0): a stream on a port with no label is kept only if at least 120 s were analysed and under 15% of updates were missing; otherwise it is dropped at `session_end`, logged, and listed in `skipped.json` with a reason. The 15% line comes from a single real example (a 42 s stream at 28%), so expect to tune it. No match-started alert is sent for an unnamed port.
 
 ## Rules that have bitten already
 
@@ -68,6 +72,8 @@ Capture and scoring over several real matches, the UDP probe for servers that ig
 The commands behind the dashboard buttons, each run and then undone: block and unblock (one address, a /24, until unblocked), refusal of bad and private addresses, datacentre block and unblock, stay mode with a city, a country, an area, a datacentre number and a city needing the online lookup, pool add, remove and replace, Measure now with real pings, the device picker with real DHCP leases and the service restart it triggers, the self-check. The nftables set is in its interval form.
 
 0.10.0: the installer, the one-time settings import, the rpcd backend through `ubus call` (checks, block and unblock, stay on and off, refusal of a changing action through `read`, rejection of shell characters in arguments), `file.read` of the data files, and the no-login page.
+
+Phone alerts through ntfy and the match-started alert were seen working on a real phone on 12 November 2026.
 
 ## Not yet run on a real router
 

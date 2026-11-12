@@ -214,9 +214,9 @@ function skip_note(ip, port, t,    k) {
 function write_skipped(now,    k, s, n, file) {
 	s = "["
 	for (k in SK_n) {
-		if (now - SK_last[k] > 21600) { delete SK_n[k]; delete SK_last[k]; delete SK_ip[k]; delete SK_port[k]; SKN--; continue }
+		if (now - SK_last[k] > 21600) { delete SK_n[k]; delete SK_last[k]; delete SK_ip[k]; delete SK_port[k]; delete SK_why[k]; SKN--; continue }
 		if (SK_n[k] < 300 || n >= 12) continue          # a real stream, not a few stray packets
-		s = s (n++ ? "," : "") "{\"ip\":\"" SK_ip[k] "\",\"port\":" SK_port[k] ",\"packets\":" SK_n[k] ",\"last\":" int(SK_last[k]) "}"
+		s = s (n++ ? "," : "") "{\"ip\":\"" SK_ip[k] "\",\"port\":" SK_port[k] ",\"packets\":" SK_n[k] ",\"last\":" int(SK_last[k]) ",\"why\":\"" ((k in SK_why) ? SK_why[k] : "voice") "\"}"
 	}
 	file = RUN "/www/skipped.json"
 	print s "]" > file; close(file)
@@ -460,7 +460,7 @@ function session_start(f, sec,    d, k, i, di) {
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
 	print "START " F_sid[f] " " F_lip[f] " -> " F_rip[f] ":" F_rport[f]
-	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " >/dev/null 2>&1 &")
+	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " " (kindof(F_rport[f], F_rip[f]) == "" ? "unnamed" : "named") " >/dev/null 2>&1 &")
 }
 
 function load_sum(file,    line, p) {
@@ -498,10 +498,12 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		system(SELF " _probe_stop " F_sid[f])
 		sumfile = RUN "/probe." F_sid[f] "/sum"
 		load_sum(sumfile)
+		QM = ""; if ((getline QM < (RUN "/probe." F_sid[f] "/qm.json")) <= 0) QM = ""
+		close(RUN "/probe." F_sid[f] "/qm.json")
 		TRN = 0
 		while ((getline trl < (RUN "/probe." F_sid[f] "/trace")) > 0) if (trl ~ /^ *[0-9]+ /) TR[++TRN] = clean(trl)
 		close(RUN "/probe." F_sid[f] "/trace")
-	} else { TRN = 0; if (PROBESUM != "") load_sum(PROBESUM) }
+	} else { TRN = 0; QM = ""; if (PROBESUM != "") load_sum(PROBESUM) }
 
 	if (dsec < 20 || S_ticks[kd] + 0 == 0) {
 		print "END " F_sid[f] " " ip " too short to judge (" int(dur) "s)"
@@ -516,6 +518,22 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	dlate = 100 * S_late[kd] / (S_ticks[kd] + S_lost[kd])
 	dclump = 100 * S_dly[kd] / (S_ticks[kd] + S_lost[kd])
 	dlost = 100 * S_lost[kd] / (S_ticks[kd] + S_lost[kd])
+
+	# A port nobody has named has to look like a game before it is kept: two minutes of play, and a
+	# steady stream of updates. Calls and launchers use unknown ports too; they come in short bursts,
+	# or at a rate that keeps changing, which shows here as missing updates. A game on the built-in
+	# list, or one the owner has named or added, is always kept. (NGP is 0 only in tests run without
+	# the label files.)
+	if (NGP > 0 && kindof(F_rport[f], ip) == "" && (dsec < 120 || dlost >= 15)) {
+		kk = (dsec < 120) ? "short" : "unsteady"
+		print "END " F_sid[f] " " ip " not kept: unnamed port " F_rport[f] ", " kk
+		skip_note(ip, F_rport[f], sec); SK_n[ip ":" F_rport[f]] += 300; SK_why[ip ":" F_rport[f]] = kk
+		if (!REPLAY) {
+			system("rm -rf " RUN "/probe." F_sid[f])
+			system("logger -t matchwatch 'Not recorded: a stream on unnamed port " (F_rport[f] + 0) " (" (kk == "short" ? "under two minutes" : "no steady update rate") "). If it was a game, add it under Tools, Games.'")
+		}
+		return
+	}
 	dfrz = S_frz[kd] + 0; dstut = S_stut[kd] + 0
 	dbad = 100 * S_bad[kd] / S_win[kd]
 	p10 = 600 / dsec
@@ -685,6 +703,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"wanavg\":" jn2(wan_avg) ",\"wanpeak\":" jn2(F_wpk[f] + 0) ",\"wanuppeak\":" jn2(F_wupk[f] + 0) ",\"hops\":" js(PS["hops"])
 		dj = dj ",\"s_server\":" jn2(s_srv) ",\"s_route\":" jn2(s_route) ",\"s_line\":" jn2(s_line) ",\"s_pc\":" jn2(s_pc) ",\"overall\":" overall ",\"rating\":" rating
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
+		if (QM != "") dj = dj ",\"qm\":" QM
 		dj = dj ",\"marks\":["
 		for (i = 1; i <= M_n[f] + 0; i++) dj = dj (i > 1 ? "," : "") "{\"t\":" M_t[f, i] ",\"k\":" js(M_kind[f, i]) ",\"x\":" js(M_txt[f, i]) "}"
 		dj = dj "],\"trace\":["

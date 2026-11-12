@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.17.1"
+VERSION="0.18.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -187,26 +187,86 @@ ploop() { # name ip [hop] : one probe a second, a line per attempt (ms, or x for
 start_ping() { [ -e "$PD/stop" ] && return; ploop "$1" "$2" "$3" & echo $! > "$PD/$1.pid"; }
 
 notify_start() { # server-ip : tell the phone a match has begun, for when you are away from the screen
-	local g cc country city rest p loc
+	local g cc country city rest p="" loc i=0
 	sleep 4
+	# the ping can take a few seconds to arrive, longer when the server ignores ping and is probed another way
+	while [ "$i" -lt 5 ]; do
+		[ -d "$PD" ] || return 0
+		p="$(cat "$PD/far.last" 2>/dev/null)"
+		case "$p" in ""|x) p="" ;; *) break ;; esac
+		sleep 2; i=$((i + 1))
+	done
 	[ -d "$PD" ] || return 0
 	g="$(geo_lookup "$1")"
 	IFS="$TAB" read -r cc country city rest <<EOF
 $g
 EOF
 	loc="${city:+$city, }$cc"
-	p="$(cat "$PD/far.last" 2>/dev/null)"
-	case "$p" in ""|x) p="" ;; *) p="$(echo "$p" | awk '{ printf "%.0f", $1 }')" ;; esac
-	cmd_notify "Match started${loc:+: $loc}${p:+, ping about $p ms}."
+	[ -n "$p" ] && p="$(echo "$p" | awk '{ printf "%.0f", $1 }')"
+	if [ -n "$p" ]; then cmd_notify "Match started${loc:+: $loc}. Ping $p ms."
+	else cmd_notify "Match started${loc:+: $loc}. Ping not known yet: the server does not answer ping."; fi
 }
-
+# ---- what QoSmate's shaper did during a match. Read only, and only in its cake modes.
+# cake keeps counters for each of its queues. The last column is the top priority queue, where the
+# game should be; the others are everything else on the line.
+qm_tins() { # device -> packets, drops, marks and current worst delay (microseconds) for the top queue, then for the rest together
+	tc -s qdisc show dev "$1" 2>/dev/null | awk '
+		function us(x,   v) { v = x + 0; if (x ~ /us$/) return v; if (x ~ /ms$/) return v * 1000; if (x ~ /[0-9]s$/) return v * 1000000; return v }
+		/^qdisc cake/ { c++ }
+		c != 1 { next }
+		$1 == "pkts" || $1 == "drops" || $1 == "marks" { top[$1] = $NF + 0; r = 0; for (i = 2; i < NF; i++) r += $i; rest[$1] = r; got = 1 }
+		$1 == "pk_delay" { top["d"] = us($NF); m = 0; for (i = 2; i < NF; i++) if (us($i) > m) m = us($i); rest["d"] = m }
+		END { if (got) printf "%d %d %d %d %d %d %d %d\n", top["pkts"], top["drops"], top["marks"], top["d"], rest["pkts"], rest["drops"], rest["marks"], rest["d"] }'
+}
+qm_loop() { # note where the counters stood at the start, then keep the longest delay seen: cake only shows the latest
+	local d="$PD" a b i=0
+	have tc || return 0
+	find_ifaces
+	[ -n "$WAN_IF" ] || return 0
+	a="$(qm_tins "$WAN_IF")"
+	[ -n "$a" ] || return 0
+	echo "$a" > "$d/qm.up0"
+	b="$(qm_tins "ifb-$WAN_IF")"; [ -n "$b" ] && echo "$b" > "$d/qm.dn0"
+	echo "0 0 0 0" > "$d/qm.peak"
+	while [ -d "$d" ] && [ ! -e "$d/stop" ] && [ "$i" -lt 2880 ]; do
+		sleep 5; i=$((i + 1))
+		a="$(qm_tins "$WAN_IF")"; b="$(qm_tins "ifb-$WAN_IF")"
+		[ -d "$d" ] && [ ! -e "$d/stop" ] || break
+		echo "${a:-0 0 0 0 0 0 0 0} ${b:-0 0 0 0 0 0 0 0}" | awk -v f="$d/qm.peak" '{
+			getline p < f; split(p, m, " ")
+			if ($4 > m[1]) m[1] = $4; if ($8 > m[2]) m[2] = $8; if ($12 > m[3]) m[3] = $12; if ($16 > m[4]) m[4] = $16
+			printf "%d %d %d %d\n", m[1], m[2], m[3], m[4] > (f ".tmp") }' 2>/dev/null && mv -f "$d/qm.peak.tmp" "$d/qm.peak" 2>/dev/null
+	done
+}
+qm_sum() { # the match is over: what each queue carried, dropped and slowed, as one line of JSON for the report
+	local d="$PD" a b
+	[ -f "$d/qm.up0" ] || return 0
+	find_ifaces
+	a="$(qm_tins "$WAN_IF")"; b="$(qm_tins "ifb-$WAN_IF")"
+	[ -n "$a" ] || return 0
+	awk -v a0="$(cat "$d/qm.up0")" -v a1="$a" -v b0="$(cat "$d/qm.dn0" 2>/dev/null)" -v b1="$b" -v pk="$(cat "$d/qm.peak" 2>/dev/null)" -v sch="$(qos_scheme)" '
+		function side(name, s0, s1, p1, p2,   A, B) {
+			split(s0, A, " "); split(s1, B, " ")
+			if (B[1] < A[1] || B[5] < A[5]) return ""          # the counters went backwards: QoSmate restarted during the match
+			return sprintf("\"%s\":{\"pkts\":%d,\"drops\":%d,\"marks\":%d,\"peak\":%.1f,\"rpkts\":%d,\"rdrops\":%d,\"rmarks\":%d,\"rpeak\":%.1f}", name, B[1] - A[1], B[2] - A[2], B[3] - A[3], p1 / 1000, B[5] - A[5], B[6] - A[6], B[7] - A[7], p2 / 1000)
+		}
+		BEGIN {
+			split(pk, P, " ")
+			u = side("up", a0, a1, P[1], P[2]); if (u == "") exit
+			dn = (b0 != "" && b1 != "") ? side("down", b0, b1, P[3], P[4]) : ""
+			printf "{\"scheme\":\"%s\",%s%s}\n", sch, u, (dn != "" ? "," dn : "")
+		}' > "$d/qm.json"
+	[ -s "$d/qm.json" ] || rm -f "$d/qm.json"
+}
 cmd_probe_start() {
 	local sid="$1" rip="$2" lip="$3" near last hops reached
 	is_ipv4 "$rip" || return 1
 	PD="$RUN/probe.$sid"; mkdir -p "$PD"
 	echo server > "$PD/far.kind"; echo "$rip" > "$PD/far.ip"
 	start_ping far "$rip"
-	[ "$NOTIFY_START" = 1 ] && notify_start "$rip" &
+	# no match-started alert for a port nobody has named: it may well not be a game
+	[ "$NOTIFY_START" = 1 ] && [ "$5" != unnamed ] && notify_start "$rip" &
+	qm_loop &
 	[ -n "$lip" ] && is_ipv4 "$lip" && start_ping lan "$lip"
 	( geo_lookup "$rip" > "$PD/geo.tmp" 2>/dev/null && mv "$PD/geo.tmp" "$PD/geo" ) &
 	[ -n "$4" ] && ( sleep 5; [ -d "$PD" ] && qos_probe "$rip" "$4" > "$PD/qos.tmp" 2>/dev/null && mv "$PD/qos.tmp" "$PD/qos" ) &
@@ -266,6 +326,7 @@ cmd_probe_stop() {
 	[ -d "$PD" ] || return 0
 	touch "$PD/stop"
 	for f in "$PD"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
+	qm_sum 2>/dev/null
 	{
 		pstats "$PD/far.ping" far; pstats "$PD/near.ping" near; pstats "$PD/lan.ping" lan
 		echo "far_kind=$(cat "$PD/far.kind" 2>/dev/null)"
@@ -1856,9 +1917,9 @@ function skip_note(ip, port, t,    k) {
 function write_skipped(now,    k, s, n, file) {
 	s = "["
 	for (k in SK_n) {
-		if (now - SK_last[k] > 21600) { delete SK_n[k]; delete SK_last[k]; delete SK_ip[k]; delete SK_port[k]; SKN--; continue }
+		if (now - SK_last[k] > 21600) { delete SK_n[k]; delete SK_last[k]; delete SK_ip[k]; delete SK_port[k]; delete SK_why[k]; SKN--; continue }
 		if (SK_n[k] < 300 || n >= 12) continue          # a real stream, not a few stray packets
-		s = s (n++ ? "," : "") "{\"ip\":\"" SK_ip[k] "\",\"port\":" SK_port[k] ",\"packets\":" SK_n[k] ",\"last\":" int(SK_last[k]) "}"
+		s = s (n++ ? "," : "") "{\"ip\":\"" SK_ip[k] "\",\"port\":" SK_port[k] ",\"packets\":" SK_n[k] ",\"last\":" int(SK_last[k]) ",\"why\":\"" ((k in SK_why) ? SK_why[k] : "voice") "\"}"
 	}
 	file = RUN "/www/skipped.json"
 	print s "]" > file; close(file)
@@ -2102,7 +2163,7 @@ function session_start(f, sec,    d, k, i, di) {
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
 	print "START " F_sid[f] " " F_lip[f] " -> " F_rip[f] ":" F_rport[f]
-	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " >/dev/null 2>&1 &")
+	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " " (kindof(F_rport[f], F_rip[f]) == "" ? "unnamed" : "named") " >/dev/null 2>&1 &")
 }
 
 function load_sum(file,    line, p) {
@@ -2140,10 +2201,12 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		system(SELF " _probe_stop " F_sid[f])
 		sumfile = RUN "/probe." F_sid[f] "/sum"
 		load_sum(sumfile)
+		QM = ""; if ((getline QM < (RUN "/probe." F_sid[f] "/qm.json")) <= 0) QM = ""
+		close(RUN "/probe." F_sid[f] "/qm.json")
 		TRN = 0
 		while ((getline trl < (RUN "/probe." F_sid[f] "/trace")) > 0) if (trl ~ /^ *[0-9]+ /) TR[++TRN] = clean(trl)
 		close(RUN "/probe." F_sid[f] "/trace")
-	} else { TRN = 0; if (PROBESUM != "") load_sum(PROBESUM) }
+	} else { TRN = 0; QM = ""; if (PROBESUM != "") load_sum(PROBESUM) }
 
 	if (dsec < 20 || S_ticks[kd] + 0 == 0) {
 		print "END " F_sid[f] " " ip " too short to judge (" int(dur) "s)"
@@ -2158,6 +2221,22 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	dlate = 100 * S_late[kd] / (S_ticks[kd] + S_lost[kd])
 	dclump = 100 * S_dly[kd] / (S_ticks[kd] + S_lost[kd])
 	dlost = 100 * S_lost[kd] / (S_ticks[kd] + S_lost[kd])
+
+	# A port nobody has named has to look like a game before it is kept: two minutes of play, and a
+	# steady stream of updates. Calls and launchers use unknown ports too; they come in short bursts,
+	# or at a rate that keeps changing, which shows here as missing updates. A game on the built-in
+	# list, or one the owner has named or added, is always kept. (NGP is 0 only in tests run without
+	# the label files.)
+	if (NGP > 0 && kindof(F_rport[f], ip) == "" && (dsec < 120 || dlost >= 15)) {
+		kk = (dsec < 120) ? "short" : "unsteady"
+		print "END " F_sid[f] " " ip " not kept: unnamed port " F_rport[f] ", " kk
+		skip_note(ip, F_rport[f], sec); SK_n[ip ":" F_rport[f]] += 300; SK_why[ip ":" F_rport[f]] = kk
+		if (!REPLAY) {
+			system("rm -rf " RUN "/probe." F_sid[f])
+			system("logger -t matchwatch 'Not recorded: a stream on unnamed port " (F_rport[f] + 0) " (" (kk == "short" ? "under two minutes" : "no steady update rate") "). If it was a game, add it under Tools, Games.'")
+		}
+		return
+	}
 	dfrz = S_frz[kd] + 0; dstut = S_stut[kd] + 0
 	dbad = 100 * S_bad[kd] / S_win[kd]
 	p10 = 600 / dsec
@@ -2327,6 +2406,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"wanavg\":" jn2(wan_avg) ",\"wanpeak\":" jn2(F_wpk[f] + 0) ",\"wanuppeak\":" jn2(F_wupk[f] + 0) ",\"hops\":" js(PS["hops"])
 		dj = dj ",\"s_server\":" jn2(s_srv) ",\"s_route\":" jn2(s_route) ",\"s_line\":" jn2(s_line) ",\"s_pc\":" jn2(s_pc) ",\"overall\":" overall ",\"rating\":" rating
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
+		if (QM != "") dj = dj ",\"qm\":" QM
 		dj = dj ",\"marks\":["
 		for (i = 1; i <= M_n[f] + 0; i++) dj = dj (i > 1 ? "," : "") "{\"t\":" M_t[f, i] ",\"k\":" js(M_kind[f, i]) ",\"x\":" js(M_txt[f, i]) "}"
 		dj = dj "],\"trace\":["
@@ -3458,6 +3538,31 @@ function kv(pairs) {
 	pairs.forEach(function (p) { if (!p) return; dl.appendChild(h("dt", null, p[0], p[2] ? h("small", p[2]) : null)); dl.appendChild(h("dd", p[1])); });
 	return dl;
 }
+// what QoSmate's queues did during the match: the game's own queue, and everything else on the line
+function qmBlock(m) {
+	var q = m.qm;
+	if (!q || !q.up) return null;
+	var top = m.qos !== "low", d = q.down || null, b = h("div", null, h("h2", "QoSmate in this match"));
+	var mine = function (s) { return top ? { pkts: s.pkts, drops: s.drops, peak: s.peak } : { pkts: s.rpkts, drops: s.rdrops, peak: s.rpeak }; };
+	var gu = mine(q.up), gd = d ? mine(d) : null;
+	var drops = gu.drops + (gd ? gd.drops : 0), peak = Math.max(gu.peak, gd ? gd.peak : 0);
+	var held = top ? q.up.rdrops + q.up.rmarks + (d ? d.rdrops + d.rmarks : 0) : 0;
+	var bad = drops > 0 || peak >= 10;
+	b.appendChild(h("p", { cls: "lede " + (bad ? "low" : "ok"), text: bad
+		? "QoSmate's queue held your game up: " + drops + " packet" + (drops === 1 ? "" : "s") + " dropped, longest wait " + fmt(peak, 1) + " ms. That happened on your router, not at the server."
+		: "QoSmate did its job. Your game's queue dropped nothing, and its longest wait was " + fmt(peak, 1) + " ms." }));
+	if (!top) b.appendChild(h("p", { cls: "note", text: "Your game was not in the top priority queue, so it shared a queue with everything else on your line. See QoSmate priority under Tools, Data and settings." }));
+	else b.appendChild(h("p", { cls: "note", text: held ? "Other traffic was heavy enough to be held back " + held + " time" + (held === 1 ? "" : "s") + " while your game went ahead of it." : "Nothing else on your line needed holding back." }));
+	var rows = [["Sent by your game's queue", gu.pkts + " packets", gu.drops + " dropped, longest wait " + fmt(gu.peak, 1) + " ms"]];
+	if (gd) rows.push(["Received by your game's queue", gd.pkts + " packets", gd.drops + " dropped, longest wait " + fmt(gd.peak, 1) + " ms"]);
+	if (top) {
+		rows.push(["Other traffic, sent", q.up.rpkts + " packets", (q.up.rdrops + q.up.rmarks) + " held back, longest wait " + fmt(q.up.rpeak, 1) + " ms"]);
+		if (d) rows.push(["Other traffic, received", d.rpkts + " packets", (d.rdrops + d.rmarks) + " held back, longest wait " + fmt(d.rpeak, 1) + " ms"]);
+	}
+	b.appendChild(kv(rows.map(function (r) { return [r[0], r[1], r[2]]; })));
+	b.appendChild(h("p", { cls: "note", text: "Read from QoSmate's queue counters at the start and end of the match. Longest wait is the highest of readings taken every five seconds, so a very brief spike can be missed." }));
+	return b;
+}
 function pageMatch(id) {
 	view.textContent = "";
 	if (id === "last") { if (!D.hist.length) { view.appendChild(h("h1", "No match recorded yet")); view.appendChild(h("p", { cls: "sub", text: "Play a match and its report appears here." })); return; } id = String(D.hist[0].start); }
@@ -3519,6 +3624,7 @@ function pageMatch(id) {
 			m.lanping != null ? ["Router to PC", fmt(m.lanping, 2) + " ms"] : ["Router to PC", "n/a", "The PC does not answer ping"]]));
 		cols.appendChild(b);
 		view.appendChild(cols);
+		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }
@@ -4065,16 +4171,16 @@ function pageTools() {
 		view.appendChild(tool("Your games", "Everything you have added, named or taken from a share file. These are checked before the built-in list. Removing one puts the port back to how MatchWatch treats it by default.", mine));
 		drawMine();
 		var skBox = h("div");
-		view.appendChild(tool("Skipped as voice chat", "Voice chat is not a match, so MatchWatch does not record it and can never block it. A few games use the same ports. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on.", skBox));
+		view.appendChild(tool("Skipped, not recorded", "Two kinds of stream are left out of your matches: voice chat, and anything on a port nobody has named that did not look like a game (under two minutes, or no steady update rate). If a game you play is listed here, name it and MatchWatch always records that port from then on.", skBox));
 		get("skipped.json", function (sk) {
 			if (page !== "tools") return;
 			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
 			if (!sk.length) { skBox.appendChild(h("p", { cls: "empty", text: "Nothing has been skipped in the last six hours." })); return; }
-			var t = table([["Server"], ["Port", "num"], ["Last seen"], ["If this is a game, name it"]]);
+			var t = table([["Server"], ["Port", "num"], ["Last seen"], ["Why it was skipped"], ["If this is a game, name it"]]);
 			sk.forEach(function (x) {
 				var td = h("td");
 				td.appendChild(nameForm(x.port, "This is a game", function (v) { td.textContent = "Now treated as a game: " + v; }));
-				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], td]));
+				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], [x.why === "short" ? "Under two minutes" : x.why === "unsteady" ? "No steady update rate" : "Voice chat"], td]));
 			});
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});

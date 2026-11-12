@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.17.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.18.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -153,7 +153,7 @@ The Tools page has four tabs: Checks, Games, Share, and Data and settings. Each 
 - **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it, and staying on places, the lobby alert and automatic blocking start to cover it.
 - **Add a game.** Adds a game by its server port or a range, before you have played a match on it, or marks a port as not a game. See [Games it does not recognise](#games-it-does-not-recognise).
 - **Your games.** Lists every game you have added, named or imported, each with a Remove button.
-- **Skipped as voice chat.** Lists streams MatchWatch took for voice chat in the last six hours, so you can name one as a game if it got that wrong.
+- **Skipped, not recorded.** Lists streams from the last six hours that were left out, either as voice chat or because they did not look like a game, so you can name one as a game if MatchWatch got that wrong.
 - **Share with other players.** Makes a share file from your game names, favourite servers, places, ratings, ping hosts and thresholds, or takes one in. See [Sharing with other players](#sharing-with-other-players).
 - **Match history and Clear all history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
@@ -182,7 +182,9 @@ This list cannot be complete, and it is worth knowing why:
 
 ### Games it does not recognise
 
-A game not on the list is still detected, recorded and rated, as "Game on port N". The first time that happens:
+A game not on the list is still detected and rated, as "Game on port N", provided it looks like a game: at least two minutes of play and a steady stream of updates from the server. Calls, launchers and other programs also use unknown ports; a stream that is shorter than that, or whose rate keeps changing, is not recorded. It is listed under **Skipped, not recorded** on the Tools page, Games tab, where you can name it if it was a game after all. A game on the list, or one you have named or added, is always recorded.
+
+The first time an unknown game is recorded:
 
 - a banner appears on the Live and Matches pages with a box to name it, a **Not a game** button for calls and other traffic (MatchWatch then stops recording that port), and a cross to hide the notice, and
 - with phone alerts set up, your phone is told ("Alert when a new game is seen" in Settings, on by default).
@@ -199,7 +201,7 @@ Voice chat is not a match. MatchWatch does not record it, does not show "In a ma
 
 Discord's voice servers use the high ports from 50000 upwards, and Roblox uses the same ones. MatchWatch tells them apart by host: a stream on those ports is treated as a game when its server belongs to Roblox, and as voice chat otherwise. This check needs "Look up where servers are" switched on.
 
-If a game you play is wrongly taken for voice chat, the Tools page lists what was "Skipped as voice chat" in the last six hours, each with a box to name it as a game.
+If a game you play is wrongly taken for voice chat, the Tools page lists what was skipped in the last six hours, each with a box to name it as a game.
 
 A block you add by hand applies to whatever address you give it. If you use the QoSmate fix, voice chat from your gaming device is prioritised along with the game, because those rules cover all of that device's UDP.
 
@@ -291,7 +293,7 @@ Press the button on the Live page (or the M key with the page focused) when some
 
 > Match started: Frankfurt, DE, ping about 6 ms.
 
-It fires when the steady game traffic starts, not while you are still in the lobby or on a loading screen, so it means "get back to your seat now". It needs phone alerts set up (see [Phone alerts](#phone-alerts)), and is off by default.
+It fires when the steady game traffic starts, not while you are still in the lobby or on a loading screen, so it means "get back to your seat now". It gives the place and the ping; when the server does not answer ping within about fourteen seconds, it says so and sends anyway. It is only sent for named games, not for a stream on an unknown port. It needs phone alerts set up (see [Phone alerts](#phone-alerts)), and is off by default.
 
 **New-game alert.** The first time a match is played on a game MatchWatch does not recognise, your phone is told to name it. See [Games it does not recognise](#games-it-does-not-recognise).
 
@@ -359,6 +361,10 @@ What to expect:
 The table on the Servers page, or `matchwatch regions`, shows the ping from your router to about thirty datacentre regions worldwide. It pings the public test server that Vultr, the host of every Call of Duty server seen so far, runs in each of its datacentres. It refreshes every six hours and on "Measure now". It is not a complete list of where the game has servers.
 
 ## QoSmate check and fix
+
+### Did QoSmate do its job in this match?
+
+When QoSmate is running in one of its cake modes, each match report has a **QoSmate in this match** section. MatchWatch reads QoSmate's queue counters when the match starts and ends, and the longest wait every five seconds in between. It says in a sentence whether the game's own queue dropped or delayed anything, and whether other traffic on your line had to be held back while the game went ahead. It only reads; it changes nothing in QoSmate. In QoSmate's HFSC mode the section is left out.
 
 This part needs [QoSmate](https://github.com/hudra0/qosmate), a separate package that prioritises traffic on OpenWrt. Without it the two QoSmate tools say so and link to it; everything else in MatchWatch works the same.
 
