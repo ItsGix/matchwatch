@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.28.1", reloading = false;
+var BUILT = "0.28.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -670,6 +670,14 @@ function pageMatch(id) {
 			h("div", null, h("h1", where), h("p", { cls: "sub", text: (sum && sum.game ? sum.game + ". " : "") + (m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + "." })),
 			h("div", { cls: "score" }, h("b", { cls: sc }, String(m.overall), h("small", "/100")), h("span", { cls: sc, text: grade(m.overall) }))));
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
+		if (m.outside) {
+			// this match was played on a server outside the places being stayed on: say so, and why it was not turned away
+			var og = m.game || "this game", why = m.outside === "allowed" ? "You added this server to the pool yourself, so it is always let through."
+				: m.outside === "port" ? og + " is known by its port alone, and no match had been played on this port or address block before, so MatchWatch could not be sure it was the game. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to stop the first one too."
+				: m.outside === "host" ? "It connected in the moment before it could be looked up, or your places changed while you were playing. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to hold new servers until they have been placed."
+				: "The game on this port has no name yet, and MatchWatch never turns an unnamed game away. Name it under Tools, Games.";
+			view.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "Played outside your places. "), "This server is in " + (place(m) || "a place") + ", outside the places you stay on. " + why)));
+		}
 		view.appendChild(chain(m));
 		if (full && m.tl_d && m.tl_d.length) {
 			var cv = h("canvas", { role: "img", "aria-label": "Ping and update timing across the whole match" });

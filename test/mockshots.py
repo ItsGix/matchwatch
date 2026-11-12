@@ -53,7 +53,7 @@ def build(site):
         s = {"server": 100, "route": 100, "line": 100, "pc": 100}
         if code in s: s[code] = max(2, overall - 20)
         p = round(ping + random.uniform(-0.4, 0.4), 1)
-        m = {"game": "Example Arena" if cc == "SE" else "Example Shooter", "start": start, "dur": dur, "analysed": dur - 6, "device": "192.168.1.50", "ip": ip, "port": 30120, "cc": cc, "city": city, "org": org, "asn": "AS64500",
+        m = {"game": "Fortnite" if cc == "SE" else "Call of Duty", "start": start, "dur": dur, "analysed": dur - 6, "device": "192.168.1.50", "ip": ip, "port": 30120, "cc": cc, "city": city, "org": org, "asn": "AS64500",
              "tick": 20.1, "jit": 2.68 if code == "server" else round(random.uniform(0.2, 0.6), 2), "late": 2.78 if code == "server" else 0.03, "lost": 2.4 if code == "server" else round(random.uniform(0, 0.1), 2),
              "clump": 3.1 if code == "route" else 0.0, "freeze": 3 if code == "server" else 0, "rough": 51.0 if code == "server" else (18.0 if bad else 0.0), "uprate": 95.2, "upjit": 0.2,
              "hitch": 4 if code == "pc" else 0, "farkind": "server", "ping": p, "pingjit": 3.9 if code == "route" else 0.3, "pingloss": 1.5 if code == "route" else 0.0, "nearping": 3.7, "nearjit": 0.3, "nearloss": 0,
@@ -75,6 +75,7 @@ def build(site):
             for x in hs[3:]: x["jit"], x["loss"] = round(random.uniform(5.5, 8.0), 2), random.choice([6, 7, 9])
             det["hopnote"] = "Trouble on the way starts at stop %d (%s): jitter %.1f ms, %d%% of pings lost, and it is still there at every stop after it. The 3 stops before it were steady." % (hs[3]["n"], hs[3]["ip"], hs[3]["jit"], hs[3]["loss"])
         det["hopstats"] = hs
+        if cc == "ES": det["outside"] = "host"   # Madrid is outside the invented pool
         det["qm"] = {"scheme": "diffserv3", "up": {"pkts": dur * 95, "drops": 0, "marks": 0, "peak": 0.3, "rpkts": dur * 410, "rdrops": 37 if code == "line" else 0, "rmarks": 212 if code == "line" else 0, "rpeak": 18.4 if code == "line" else 1.1},
                      "down": {"pkts": dur * 20, "drops": 0, "marks": 0, "peak": 0.4, "rpkts": dur * 900, "rdrops": 0, "rmarks": 0, "rpeak": 2.2}}
         json.dump(det, open(f"{data}/matches/{start}.json", "w"))
@@ -99,17 +100,17 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.28.1", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.28.2", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
-    out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
+    out["mygames"] = [{"name": "Fortnite", "ports": "9000-9100", "kind": "", "hosts": ""}, {"name": "Call of Duty", "ports": "3074,30000-45000", "kind": "", "hosts": "vultr,as20473"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
-        {"game": "Example Shooter", "city": "Frankfurt", "cc": "DE", "org": "Example Hosting Frankfurt", "networks": 3, "nets": ["203.0.113.0/24"], "matches": 7, "rating": 75, "mine": True, "in": True},
-        {"game": "Example Shooter", "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "networks": 2, "nets": ["192.0.2.0/24"], "matches": 2, "rating": 100, "mine": True, "in": False},
-        {"game": "Example Arena", "city": "Stockholm", "cc": "SE", "org": "Example Hosting Stockholm", "networks": 2, "nets": ["198.51.100.0/24"], "matches": 3, "rating": 100, "mine": True, "in": True},
-        {"game": "Example Shooter", "city": "Paris", "cc": "FR", "org": "Example Hosting Paris", "networks": 1, "nets": ["198.51.100.0/24"], "matches": 0, "rating": None, "mine": True, "in": False},
-        {"game": "Example Shooter", "city": "Tokyo", "cc": "JP", "org": "Example Hosting Tokyo", "networks": 6, "nets": ["203.0.113.0/24"], "matches": 41, "rating": 88, "mine": False, "in": False},
-        {"game": "Example Arena", "city": "Sydney", "cc": "AU", "org": "Example Hosting Sydney", "networks": 4, "nets": ["192.0.2.0/24"], "matches": 17, "rating": 92, "mine": False, "in": False}]
-    out["hold"] = [{"name": "Example Shooter", "on": False, "ok": True, "ports": "20000-29000", "host": True}, {"name": "Example Arena", "on": True, "ok": True, "ports": "7777-7800", "host": False}, {"name": "Example Blocks", "on": False, "ok": False, "ports": "49152-65535", "host": True}]
+        {"game": "Call of Duty", "city": "Frankfurt", "cc": "DE", "org": "Example Hosting Frankfurt", "networks": 3, "nets": ["203.0.113.0/24"], "matches": 7, "rating": 75, "mine": True, "in": True},
+        {"game": "Call of Duty", "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "networks": 2, "nets": ["192.0.2.0/24"], "matches": 2, "rating": 100, "mine": True, "in": False},
+        {"game": "Fortnite", "city": "Stockholm", "cc": "SE", "org": "Example Hosting Stockholm", "networks": 2, "nets": ["198.51.100.0/24"], "matches": 3, "rating": 100, "mine": True, "in": True},
+        {"game": "Call of Duty", "city": "Paris", "cc": "FR", "org": "Example Hosting Paris", "networks": 1, "nets": ["198.51.100.0/24"], "matches": 0, "rating": None, "mine": True, "in": False},
+        {"game": "Call of Duty", "city": "Tokyo", "cc": "JP", "org": "Example Hosting Tokyo", "networks": 6, "nets": ["203.0.113.0/24"], "matches": 41, "rating": 88, "mine": False, "in": False},
+        {"game": "Fortnite", "city": "Sydney", "cc": "AU", "org": "Example Hosting Sydney", "networks": 4, "nets": ["192.0.2.0/24"], "matches": 17, "rating": 92, "mine": False, "in": False}]
+    out["hold"] = [{"name": "Call of Duty", "on": False, "ok": True, "ports": "3074 30000-45000", "host": True}, {"name": "Fortnite", "on": True, "ok": True, "ports": "9000-9100", "host": False}, {"name": "Roblox", "on": False, "ok": False, "ports": "49152-65535", "host": True}]
     out["coverage"] = {"hosts": "Vultr (Call of Duty)", "known": 441, "refusing": True, "refused": 412, "places": [{"name": "Germany", "ranges": 26}, {"name": "Sweden", "ranges": 2}], "suggest": []}
     out["shared"] = {"undo": True, "have": {"games": 3, "regions": 0, "places": 2, "ratings": 6},
                      "ratings": [{"p": "203.0.113.0/24", "n": 14, "avg": 38, "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "blocked": True},
@@ -140,9 +141,9 @@ matchwatch-share 1
 
 [games]
 # name|server ports|kind (empty = a game, voice = voice chat)|words in the name of the company hosting the servers
-Example Arena|7777-7800||
-Example Shooter|20000-29000||examplehost,as64500
-Example Racing|8211||
+Fortnite|9000-9100||
+Call of Duty|3074,30000-45000||vultr,as20473
+Palworld|8211||
 
 [places]
 # name|latitude|longitude|reach in km|country codes
@@ -159,11 +160,11 @@ Stockholm, SE|59.33|18.07|150|-
 
 [favourites]
 # server|game|city|country code|host|rating out of 100|matches|latitude|longitude
-198.51.100.12|Example Arena|Stockholm|SE|Example Hosting Stockholm|100|2|59.33|18.07|1
-198.51.100.90|Example Arena|Stockholm|SE|Example Hosting Stockholm|100|1|59.33|18.07|1
-192.0.2.150|Example Shooter|Madrid|ES|Example Hosting Madrid|100|1|40.42|-3.70|1
-203.0.113.21|Example Shooter|Frankfurt|DE|Example Hosting Frankfurt|100|3|50.11|8.68|0
-203.0.113.77|Example Shooter|Frankfurt|DE|Example Hosting Frankfurt|12|2|50.11|8.68|0
+198.51.100.12|Fortnite|Stockholm|SE|Example Hosting Stockholm|100|2|59.33|18.07|1
+198.51.100.90|Fortnite|Stockholm|SE|Example Hosting Stockholm|100|1|59.33|18.07|1
+192.0.2.150|Call of Duty|Madrid|ES|Example Hosting Madrid|100|1|40.42|-3.70|1
+203.0.113.21|Call of Duty|Frankfurt|DE|Example Hosting Frankfurt|100|3|50.11|8.68|0
+203.0.113.77|Call of Duty|Frankfurt|DE|Example Hosting Frankfurt|12|2|50.11|8.68|0
 
 [settings]
 # the thresholds this copy of MatchWatch runs with
@@ -175,8 +176,8 @@ autoblock_matches=2
 lobby_margin_ms=4
 stay_km=150
 block_days=14`;
-		if (p.action === "sharecheck") out = `games: 2 game label(s): Example Game, Another Game. They go below the names you have given yourself, which always win.
-favourites: 3 favourite server(s) for Example Arena (2), Example Shooter (1). They join your favourites under those games: never blocked automatically, and the lobby alert tells you when you land on one.
+		if (p.action === "sharecheck") out = `games: 2 game label(s): Fortnite, Palworld. They go below the names you have given yourself, which always win.
+favourites: 3 favourite server(s) for Fortnite (2), Call of Duty (1). They join your favourites under those games: never blocked automatically, and the lobby alert tells you when you land on one.
 favplaces: Stay near those servers: adds Stockholm, SE, Madrid, ES to the places you stay on and turns staying on, so game servers elsewhere are blocked.
 places: 1 place(s) to stay on: UK and Ireland. Importing these turns staying on, so game servers elsewhere are blocked.
 ratings: 3 server rating(s) from someone else. They are shown to you and mentioned by the lobby alert, and never block anything by themselves.
@@ -185,12 +186,14 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace") out = "1";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.28.1.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.28.2.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the Tools screenshots: press what a visitor would, so each picture shows a result
 setTimeout(function () { Array.prototype.forEach.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { if (["Choose what to share", "Test my line", "Trace the route now", "Check for an update"].indexOf(x.textContent) >= 0) x.click(); }); }, 3000);
 </script></body></html>""" % (RES, RES))
+    global OUTSIDE
+    OUTSIDE = [m for m in hist if m["cc"] == "ES"][0]["start"]
     return [m for m in hist if m["code"] == "server"][0]["start"]
 
 
@@ -223,6 +226,9 @@ if __name__ == "__main__":
     os.makedirs(ROOT + "/docs", exist_ok=True)
     for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 5200), ("#/tools", "tools", 2600), ("#/tools/share", "share", 4200), ("#/tools/data", "update", 2200)):
         shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
+    # a match that was played outside the pool: just the top of its report, where that is said
+    shoot(browser, f"#/match/{OUTSIDE}", f"{ROOT}/docs/outside.png", 2600)
+    Image.open(f"{ROOT}/docs/outside.png").crop((0, 0, 1180, 420)).save(f"{ROOT}/docs/outside.png", optimize=True)
     # the map and the filter table on their own, large enough to read in the README (they sit a long way down the Servers page)
     Image.open(f"{ROOT}/docs/servers-pool.png").crop((0, 570, 1180, 1750)).save(f"{ROOT}/docs/map.png", optimize=True)
     assert os.path.getsize(f"{ROOT}/docs/match-report.png") > 60000, "the match report picture is nearly empty: the match was not found"

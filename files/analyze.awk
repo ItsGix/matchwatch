@@ -791,6 +791,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
 		if (QM != "") dj = dj ",\"qm\":" QM
+		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
 		if (PS["hop_note"] != "") dj = dj ",\"hopnote\":" js(PS["hop_note"])
 		dj = dj ",\"marks\":["

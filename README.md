@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.28.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.28.2 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -66,6 +66,10 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 | --- |
 | ![Map](docs/map.png) |
 
+| A match that got through, and why |
+| --- |
+| ![Played outside your places](docs/outside.png) |
+
 | Live | Match report |
 | --- | --- |
 | ![Live](docs/live.png) | ![Match report](docs/match-report.png) |
@@ -82,7 +86,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 | --- |
 | ![Update](docs/update.png) |
 
-The screenshots are made from invented data (`test/mockshots.py`). The addresses, games and matches in them are not real.
+The screenshots are made from invented data (`test/mockshots.py`). The game titles are real ones MatchWatch recognises; the addresses, hosts and matches are invented.
 
 ## Install, update, remove
 
@@ -327,7 +331,7 @@ How soon staying on places acts on a game depends on how sure MatchWatch is that
 | Any named game you made strict | Before it can connect, every time | Press Make strict |
 | Not named ("Game on port N") | Never | Name it first |
 
-The table on the Servers page lists the games you have played; **Show all games** lists every game MatchWatch recognises, so you can check a new one, and make it strict, before your first match. And when a server outside your places is let through because its game is known by port alone, the Live page says so, with a button to make that game strict.
+The table on the Servers page lists the games you have played; **Show all games** lists every game MatchWatch recognises, so you can check a new one, and make it strict, before your first match. And when a server outside your places is let through because its game is known by port alone, the Live page says so, with a button to make that game strict. If you then play the match there, its report opens with "Played outside your places" and the reason it was not turned away.
 
 The middle row exists because other traffic uses the same ports. A port alone is not proof of a game, so MatchWatch waits for a match there before refusing anything, unless you tell it to be strict.
 

@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.28.1"
+VERSION="0.28.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -311,6 +311,7 @@ cmd_probe_start() {
 	is_ipv4 "$rip" || return 1
 	PD="$RUN/probe.$sid"; mkdir -p "$PD"
 	echo server > "$PD/far.kind"; echo "$rip" > "$PD/far.ip"
+	echo "$rip $4" > "$PD/server"
 	start_ping far "$rip"
 	# no match-started alert for a port nobody has named: it may well not be a game
 	[ "$NOTIFY_START" = 1 ] && [ "$5" != unnamed ] && notify_start "$rip" &
@@ -389,6 +390,12 @@ cmd_probe_stop() {
 		if [ -f "$PD/geo" ]; then
 			IFS="$TAB" read -r cc country city lat lon isp org asn < "$PD/geo"
 			printf 'cc=%s\ncountry=%s\ncity=%s\nlat=%s\nlon=%s\nisp=%s\norg=%s\nasn=%s\n' "$cc" "$country" "$city" "$lat" "$lon" "$isp" "$org" "$asn"
+			# played on a server outside the places being stayed on? Note it, and why it was not turned away
+			if [ -s "$DATA/stay" ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && outside_stay "$lat" "$lon" "$cc"; then
+				read -r f country < "$PD/server" 2>/dev/null
+				if is_allowed "$f"; then echo "outside=allowed"
+				else f="$(label_kind "${country:-0}" "$isp $org $asn" how)"; echo "outside=${f:-unnamed}"; fi
+			fi
 		fi
 	} > "$PD/sum"
 }
@@ -1491,7 +1498,7 @@ label_kind() { # server-port "isp org asn" [name] -> game | voice | nothing (or 
 		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } if (p + 0 >= lo + 0 && p + 0 <= hi + 0) hit = 1 }
 		  if (!hit) next
 		  if ($4 != "") { m = 0; k = split(tolower($4), w, ","); for (i = 1; i <= k; i++) if (w[i] != "" && index(info, w[i]) > 0) m = 1; if (!m) next }
-		  if (want == "name") { if ($3 != "voice") print $1 } else print ($3 == "voice" ? "voice" : "game")
+		  if (want == "name") { if ($3 != "voice") print $1 } else if (want == "how") { if ($3 != "voice") print ($4 != "" ? "host" : "port") } else print ($3 == "voice" ? "voice" : "game")
 		  exit }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
 }
 hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports, the ports that would be held
@@ -3180,6 +3187,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
 		if (QM != "") dj = dj ",\"qm\":" QM
+		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
 		if (PS["hop_note"] != "") dj = dj ",\"hopnote\":" js(PS["hop_note"])
 		dj = dj ",\"marks\":["
@@ -4136,7 +4144,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.28.1", reloading = false;
+var BUILT = "0.28.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4780,6 +4788,14 @@ function pageMatch(id) {
 			h("div", null, h("h1", where), h("p", { cls: "sub", text: (sum && sum.game ? sum.game + ". " : "") + (m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + "." })),
 			h("div", { cls: "score" }, h("b", { cls: sc }, String(m.overall), h("small", "/100")), h("span", { cls: sc, text: grade(m.overall) }))));
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
+		if (m.outside) {
+			// this match was played on a server outside the places being stayed on: say so, and why it was not turned away
+			var og = m.game || "this game", why = m.outside === "allowed" ? "You added this server to the pool yourself, so it is always let through."
+				: m.outside === "port" ? og + " is known by its port alone, and no match had been played on this port or address block before, so MatchWatch could not be sure it was the game. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to stop the first one too."
+				: m.outside === "host" ? "It connected in the moment before it could be looked up, or your places changed while you were playing. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to hold new servers until they have been placed."
+				: "The game on this port has no name yet, and MatchWatch never turns an unnamed game away. Name it under Tools, Games.";
+			view.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "Played outside your places. "), "This server is in " + (place(m) || "a place") + ", outside the places you stay on. " + why)));
+		}
 		view.appendChild(chain(m));
 		if (full && m.tl_d && m.tl_d.length) {
 			var cv = h("canvas", { role: "img", "aria-label": "Ping and update timing across the whole match" });
