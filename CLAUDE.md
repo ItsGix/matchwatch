@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.19.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.19.1.
 
 ## Layout
 
@@ -40,6 +40,7 @@ Unnamed ports (0.18.0): a stream on a port with no label is kept only if at leas
 
 - Phone alerts are one short line with no addresses or host names; the full sentence goes to the log and the dashboard. The owner found five long turn-away alerts in a minute too much: a stay-mode turn-away only reaches the phone on `lobby_alert` 2, and lobby alerts are limited to one a minute.
 - In `cmd_lobby` the stay decision comes before any ping or traceroute. Measuring first let the game join the server and then threw the player out.
+- `stay_apply` keeps the stay blocks that are still outside the pool (placed by `geo.cache`). It once rebuilt them from the match history alone, which dropped every block made as the game tried a server never played on; changing the pool then let the game straight onto one of those.
 - `stay_apply` never blocks the address block of a match in progress (read from `status.json`); `cmd_after` applies it once the match has ended.
 
 - BusyBox awk only. No `cos`, `sqrt` or other maths functions (some builds lack them), no gawk extensions. Distances are compared squared with a cosine series.
@@ -81,7 +82,7 @@ Phone alerts through ntfy and the match-started alert were seen working on a rea
 
 ## Not yet run on a real router
 
-The Settings page's Save & Apply restarting the service. The lobby alert's message reaching the Live page or the phone (it only goes to the phone when the server is far or badly rated), the QoSmate check during a match on this version. From 0.18.0: the ping in the match-started alert, the unnamed-port filter and the "QoSmate in this match" report section on a real match.
+The Settings page's Save & Apply restarting the service. The lobby alert's message reaching the Live page or the phone (it only goes to the phone when the server is far or badly rated), the QoSmate check during a match on this version. From 0.18.0: the unnamed-port filter on a real stream, and the "QoSmate in this match" section as drawn in a browser (the match of 12 November 2026 has its `qm` record, and its alert read "Match started: United Kingdom, 4 ms.").
 
 The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbound` and `Game_Inbound` (made from commands an older version printed) by renaming them, so unfix afterwards deletes them and leaves the game unprioritised.
 

@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.19.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.19.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 

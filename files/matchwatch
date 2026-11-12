@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.19.0"
+VERSION="0.19.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -619,16 +619,29 @@ add_places() { # comma separated list -> appended to the pool (skipping ones alr
 		grep -q "^$(echo "$line" | cut -f1)$TAB" "$DATA/stay" 2>/dev/null || echo "$line" >> "$DATA/stay"
 	done
 }
-stay_apply() { # make the blocks match the pool: clear the old ones, then block every address block played on outside it
-	local ip p n=0 live
-	touch "$DATA/blocklist"
-	awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist" | while read -r ip; do nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null; done
-	awk -F'\t' '$4 != "stay"' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
+stay_apply() { # make the blocks match the pool. Prints how many address blocks are now turned away
+	local ip p g cc lat lon live n=0
+	touch "$DATA/blocklist" "$DATA/geo.cache"
 	live="$(grep -o '"ip":"[0-9.]*"' "$RUN/www/status.json" 2>/dev/null | sed 's/"ip":"\([0-9]*\.[0-9]*\.[0-9]*\)\..*/ \1.0\/24 /' | tr -d '\n')"
 	rm -f "$RUN/stay.spared"
+	# Blocks already made for staying: keep each one that is still outside the pool. Many were made as the
+	# game tried a server you have never played on, so the match history alone would not bring them back,
+	# and dropping them lets the game straight in. Where a block's place is not known, it is let go.
+	for ip in $(awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist"); do
+		p="${ip%.*}"
+		g="$(awk -F'\t' -v p="$p." 'index($1, p) == 1 { l = $2 "\t" $5 "\t" $6 } END { print l }' "$DATA/geo.cache")"
+		cc="$(echo "$g" | cut -f1)"; lat="$(echo "$g" | cut -f2)"; lon="$(echo "$g" | cut -f3)"
+		if [ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && outside_stay "$lat" "$lon" "$cc"; then
+			case "$live" in *" $ip "*) ;; *) n=$((n + 1)); continue ;; esac
+		fi
+		nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null
+		awk -F'\t' -v ip="$ip" '!($1 == ip && $4 == "stay")' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
+	done
+	# and every address block played on outside the pool
 	for p in $(awk -v MODE=area_others $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv"); do
 		# the match being played right now is never cut off: its server is dealt with once the match has ended
 		case "$live" in *" $p "*) echo "$p" > "$RUN/stay.spared"; continue ;; esac
+		grep -q "^$p$TAB" "$DATA/blocklist" && continue
 		MW_QUIET=1 cmd_block "$p" 0 stay; n=$((n + 1))
 	done
 	export_json
@@ -637,7 +650,7 @@ stay_apply() { # make the blocks match the pool: clear the old ones, then block 
 stay_report() {
 	echo "Staying on: $(stay_names)"
 	[ -f "$RUN/stay.spared" ] && echo "The match you are in now is on a server outside these places. It is left alone until the match ends."
-	echo "Any server in any of these places is allowed, whoever hosts it. Blocked $1 address block(s) you have played on elsewhere; others are turned away as the game tries them."
+	echo "Any server in any of these places is allowed, whoever hosts it. $1 address block(s) elsewhere are turned away now; others are turned away as the game tries them."
 	echo "The game still decides which of them to offer you. A place is dropped from the pool if its last three matches average under $WARN_SCORE."
 }
 cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
