@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.23.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.24.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -140,7 +140,7 @@ keeps your history and settings. Use `purge` instead of `remove` to delete those
 | **Live** | The match in progress: ping, update rate, jitter, late and missing updates, freezes, your PC's send rate and pauses, a two-minute chart, and the "I felt that" button. When the game starts connecting you somewhere, a banner says where, how far, and how that server has rated |
 | **Last match** | The full report for one match: verdict, the four scores with the reason for each, a chart of the whole match, every figure, the route trace, what QoSmate's queues did, and your marks |
 | **Matches** | Every recorded match, your latest session in a sentence, and ratings by hour of the day. Flags is how many moments you marked with "I felt that" |
-| **Servers** | Your favourites by game, where each game plays, the places you stay on, datacentres, regions and servers with their ratings, and buttons to favourite, block, remove or stay |
+| **Servers** | A map of your places and servers, your favourites by game, where each game plays, the places you stay on, datacentres, regions and servers with their ratings, and buttons to favourite, block, remove or stay |
 | **Tools** | Checks, games, sharing, updating and data. See [Tools](#tools) |
 
 The dashboard fetches fresh data every fifteen seconds and redraws only when something has changed.
@@ -278,6 +278,18 @@ What to expect:
 - It applies only to servers MatchWatch recognises as game servers. If a game shows as "Game on port N", name it first: unnamed games are left alone.
 - Server locations come from a public lookup and are occasionally wrong.
 - A place is dropped from the pool, and you are told, if its last three counted matches average under the warning rating. When the pool is empty, staying ends.
+
+### The map
+
+The Servers page has a map of everything MatchWatch knows, beside the box where you type places.
+
+- **Your places** are green circles. Press **Draw a circle**, press where the middle should be, drag outwards and let go; MatchWatch says how many of the servers you have played on are inside before you confirm. Press an existing circle to move it by its middle, resize it by its edge, or remove it.
+- **Servers you have played on** are round markers coloured by how they rated: green, amber or red. A number means several in one city, and a faded marker is outside your places. Press one for its servers, with the favourite, Add to pool and Block buttons.
+- **Datacentre regions** are small hollow dots; hover for the ping and its grade. Places learned from share files are small solid dots.
+- **Set home** marks roughly where you are, and during a match a dashed line runs from home to the server. Home is remembered only by your browser; it is not stored on the router.
+- A drawn circle is an ordinary place in the pool, named after the nearest datacentre city ("Near Frankfurt 450 km"), between 25 and 3000 km across. Whole countries and areas are still typed in the box; they are listed under the map, since they are not circles.
+
+The map pictures are tiles from OpenStreetMap, fetched by your browser while the map is on screen. The map library, Leaflet, is installed on the router with MatchWatch, so nothing else is loaded from outside.
 
 ### Single servers in the pool
 
@@ -514,6 +526,7 @@ What leaves your router, and when:
 | A city name | Open-Meteo, to place it on the map | When you stay on a city not in the regions table, and for cities in a hosting company's list |
 | A request for a hosting company's address list | That company (Vultr) | When you start staying, then weekly |
 | A request for one small version file, then the installer | This repository on GitHub | Only when you press Check for an update or Update now |
+| Requests for map pictures, from your browser and not the router | OpenStreetMap's tile servers | While the map on the Servers page is on screen. They show which part of the world you are looking at |
 | Your alerts | The ntfy address you set | Only if you set up phone alerts |
 
 Nothing about you or your matches is in any of those except the alerts you asked for. Share files are only made when you ask, are shown to you in full, and are never uploaded.
@@ -541,7 +554,7 @@ Updating downloads the installer and runs it as root, exactly as installing by h
 | `files/matchwatch.config` | Default settings, installed as `/etc/config/matchwatch` |
 | `files/public.html` | Shell page for the dashboard without login |
 | `files/*.list` | Region probes, places, country centres, hosting companies' address lists and game-port labels |
-| `luci-app-matchwatch/htdocs/` | The dashboard, and the LuCI Dashboard and Settings pages |
+| `luci-app-matchwatch/htdocs/` | The dashboard, and the LuCI Dashboard and Settings pages. `leaflet.js` and `leaflet.css` there are Leaflet 1.9.4, unchanged, under its BSD 2-Clause licence |
 | `luci-app-matchwatch/root/` | LuCI menu entry, permissions and the rpcd backend the buttons call |
 | `packs/` | Community game packs and their format |
 | `build.py` | Builds the one-file installer and `dist/version` |

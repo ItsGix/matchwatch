@@ -158,9 +158,9 @@ END {
 		printf "["
 		for (i = 1; i <= ngg; i++) {
 			gk = ggo[i]; pl = (nsp > 0) ? place_of(((gk in Gla) ? Gla[gk] : "-"), ((gk in Glo) ? Glo[gk] : "-"), Gcc[gk]) : ""
-			printf "%s{\"game\":%s,\"city\":%s,\"cc\":%s,\"org\":%s,\"networks\":%d,\"nets\":[%s],\"matches\":%d,\"rating\":%s,\"mine\":%s,\"in\":%s}", (i > 1 ? "," : ""),
+			printf "%s{\"game\":%s,\"city\":%s,\"cc\":%s,\"org\":%s,\"networks\":%d,\"nets\":[%s],\"matches\":%d,\"rating\":%s,\"mine\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""),
 				q(Gg[gk]), q(Gcity[gk] == "-" ? "" : Gcity[gk]), q(Gcc[gk] == "-" ? "" : Gcc[gk]), q(Gorg[gk] == "-" ? "" : Gorg[gk]), Gnet[gk], Gnets[gk], Gn[gk],
-				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl > 0 ? "true" : "false"))
+				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl > 0 ? "true" : "false")), ((gk in Gla) ? Gla[gk] + 0 : "null"), ((gk in Glo) ? Glo[gk] + 0 : "null")
 		}
 		print "]"
 		exit
@@ -256,7 +256,7 @@ END {
 		}
 		printf "["
 		for (i = 1; i <= nreg; i++) { r = ri[i]; c = RG[r, 1]
-			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (inside(RG[r, 5], RG[r, 6], RG[r, 3]) == 1 ? "true" : "false")
+			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (inside(RG[r, 5], RG[r, 6], RG[r, 3]) == 1 ? "true" : "false")
 		}
 		print "]"
 		exit
@@ -332,7 +332,7 @@ END {
 		printf "["
 		for (i = 1; i <= ns; i++) {
 			ip = idx[i]
-			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = inside(S_lat[ip], S_lon[ip], S_cc[ip])) == "" ? "null" : (w ? "true" : "false"))
+			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = inside(S_lat[ip], S_lon[ip], S_cc[ip])) == "" ? "null" : (w ? "true" : "false")), ((ip in S_lat) ? S_lat[ip] + 0 : "null"), ((ip in S_lon) ? S_lon[ip] + 0 : "null")
 		}
 		print "]"
 		exit

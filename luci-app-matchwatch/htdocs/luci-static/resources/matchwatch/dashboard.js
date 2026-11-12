@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.23.1", reloading = false;
+var BUILT = "0.24.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -317,6 +317,175 @@ function allowBtn(ip) {
 	return b;
 }
 function addIf(parent, el) { if (el) parent.appendChild(el); }
+// ---------- the map: the places you stay on as circles you can draw and move, and every server by how it rated
+// The map is built once and kept: a page redraw puts the same element back, so it keeps its zoom and does not flicker.
+var MAP = { box: null, lf: null, map: null, layers: null, circles: {}, busy: false, loading: false, fitted: false, edit: [] };
+function cssVar(n) { return getComputedStyle(wrap).getPropertyValue(n).trim() || "#888"; }
+function getHome() { try { var v = (localStorage.getItem("mw-home") || "").split(","); if (v.length === 2 && !isNaN(+v[0]) && !isNaN(+v[1])) return [+v[0], +v[1]]; } catch (e) {} return null; }
+function leaflet(then) {
+	if (MAP.lf) { then(); return; }
+	if (MAP.loading) return;
+	MAP.loading = true;
+	var base = String(T.css || ""), link = document.createElement("link");
+	link.rel = "stylesheet"; link.href = base.replace("dashboard.css", "leaflet.css"); shadow.insertBefore(link, sheet);
+	fetch(base.replace("dashboard.css", "leaflet.js"), { credentials: "same-origin" }).then(function (r) { if (!r.ok) throw 0; return r.text(); }).then(function (src) {
+		// LuCI keeps its own code in a global called L, and Leaflet claims the same name. Run Leaflet, take what it made, and put LuCI's back at once.
+		var had = Object.prototype.hasOwnProperty.call(window, "L"), keep = window.L, made = null;
+		try { (new Function(src)).call(window); made = window.L; } finally { if (had) window.L = keep; else { try { delete window.L; } catch (e) { window.L = undefined; } } }
+		if (!made || made === keep || !made.map || !made.tileLayer) throw 0;
+		MAP.lf = made; MAP.loading = false; then();
+	}).then(null, function () { MAP.loading = false; if (MAP.legend) MAP.legend.textContent = "The map could not be loaded. Everything on it is also in the tables below."; });
+}
+function mapSection() {
+	if (!MAP.box) {
+		MAP.el = h("div", { cls: "map" });
+		MAP.tools = h("div", { cls: "maptools" });
+		MAP.bar = h("div", { cls: "mapbar" }); MAP.bar.style.display = "none";
+		MAP.legend = h("p", { cls: "note", text: "Loading the map..." });
+		MAP.box = h("div", { cls: "mapbox" }, MAP.tools, MAP.el, MAP.bar, MAP.legend);
+	}
+	leaflet(function () { setTimeout(mapSync, 0); });
+	return MAP.box;
+}
+function mapBar(text, buttons) {
+	MAP.bar.textContent = "";
+	if (!text) { MAP.bar.style.display = "none"; return; }
+	MAP.bar.style.display = "";
+	MAP.barText = h("p", text); MAP.bar.appendChild(MAP.barText);
+	(buttons || []).forEach(function (b) { var el = h("button", { type: "button", cls: b[1] || "", text: b[0] }); el.addEventListener("click", b[2]); MAP.bar.appendChild(el); });
+}
+function mapDone(again) {
+	MAP.edit.forEach(function (l) { try { MAP.map.removeLayer(l); } catch (e) {} }); MAP.edit = [];
+	MAP.map.dragging.enable(); MAP.el.classList.remove("drawing");
+	MAP.busy = false; mapBar(null);
+	if (again) refresh(true); else mapSync();
+}
+function mapSend(action, arg) {
+	Array.prototype.forEach.call(MAP.bar.querySelectorAll("button"), function (b) { b.disabled = true; });
+	api(action, arg).then(function (j) {
+		toast(j.out || j.error || "That did not work.", !j.ok);
+		mapDone(j.ok);
+	});
+}
+function insideCount(c, km) { var n = 0, t = 0; D.servers.forEach(function (s) { if (s.lat == null) return; t++; if (c.distanceTo([s.lat, s.lon]) <= km * 1000) n++; }); return t ? n + " of the " + t + " server" + (t === 1 ? "" : "s") + " you have played on " + (n === 1 ? "is" : "are") + " inside." : ""; }
+function geoArg(c, km) { c = c.wrap(); return c.lat.toFixed(3) + "/" + c.lng.toFixed(3) + "/" + km; }
+function mapDraw() {
+	var LF = MAP.lf, map = MAP.map, c0 = null, circ = null, pen = cssVar("--pen");
+	if (MAP.busy) return;
+	MAP.busy = true; map.dragging.disable(); map.closePopup(); MAP.el.classList.add("drawing");
+	mapBar("Press where the middle of the circle should be, drag outwards, and let go.", [["Cancel", "", function () { off(); mapDone(); }]]);
+	function down(e) { c0 = e.latlng; circ = LF.circle(c0, { radius: 25000, color: pen, weight: 2, dashArray: "6 6", fillColor: pen, fillOpacity: 0.15, interactive: false }).addTo(map); MAP.edit.push(circ); }
+	function move(e) { if (circ) circ.setRadius(Math.max(25000, c0.distanceTo(e.latlng))); }
+	function up() {
+		if (!circ) return;
+		off();
+		var km = Math.min(3000, Math.max(25, Math.round(circ.getRadius() / 1000)));
+		circ.setRadius(km * 1000); MAP.el.classList.remove("drawing"); map.dragging.enable();
+		var some = (D.info.stays || []).length;
+		mapBar("A circle of " + km + " km. " + insideCount(c0, km) + (some ? "" : " Staying inside it turns away game servers everywhere else."),
+			[[some ? "Add to the pool" : "Stay inside this circle", "solid", function () { mapSend("staycircle", geoArg(c0, km)); }], ["Cancel", "", function () { mapDone(); }]]);
+	}
+	function off() { map.off("mousedown", down); map.off("mousemove", move); map.off("mouseup", up); document.removeEventListener("mouseup", up); }
+	map.on("mousedown", down); map.on("mousemove", move); map.on("mouseup", up); document.addEventListener("mouseup", up);
+}
+// move or resize one circle of the pool: a grip in the middle and one on the edge
+function mapEdit(p) {
+	var LF = MAP.lf, map = MAP.map, pen = cssVar("--pen");
+	if (MAP.busy || RO) return;
+	MAP.busy = true; map.closePopup();
+	if (MAP.circles[p.n]) MAP.layers.removeLayer(MAP.circles[p.n]);
+	var c = LF.latLng(p.lat, p.lon), km = p.km;
+	var edgeOf = function () { return LF.latLng(c.lat, c.lng + km / (111.32 * Math.max(0.2, Math.cos(c.lat * Math.PI / 180)))); };
+	var circ = LF.circle(c, { radius: km * 1000, color: pen, weight: 2, dashArray: "6 6", fillColor: pen, fillOpacity: 0.15, interactive: false }).addTo(map);
+	var grip = function (title) { return LF.divIcon({ className: "", html: '<span class="pin grip"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }); };
+	var mid = LF.marker(c, { icon: grip(), draggable: true, title: "Drag to move the circle", zIndexOffset: 1000 }).addTo(map);
+	var edge = LF.marker(edgeOf(), { icon: grip(), draggable: true, title: "Drag to make the circle larger or smaller", zIndexOffset: 1000 }).addTo(map);
+	MAP.edit.push(circ, mid, edge);
+	var say = function () { if (MAP.barText) MAP.barText.textContent = p.name + ": now " + km + " km. " + insideCount(c, km) + " Drag the middle to move it, or the edge to resize it."; };
+	mid.on("drag", function () { c = mid.getLatLng(); circ.setLatLng(c); edge.setLatLng(edgeOf()); say(); });
+	edge.on("drag", function () { km = Math.min(3000, Math.max(25, Math.round(c.distanceTo(edge.getLatLng()) / 1000))); circ.setRadius(km * 1000); say(); });
+	edge.on("dragend", function () { edge.setLatLng(edgeOf()); });
+	mapBar(p.name, [["Save", "solid", function () { mapSend("stayset", p.n + "/" + geoArg(c, km)); }], ["Remove from the pool", "danger", function () { mapSend("stayrm", p.n); }], ["Cancel", "", function () { mapDone(); }]]);
+	say();
+}
+function spotPopup(list) {
+	var s0 = list[0], box = h("div", { cls: "spot" }, h("b", place(s0) || "Unknown place"), s0.org && s0.org !== "-" ? h("small", s0.org) : null);
+	list.slice().sort(function (a, b) { return b.rating - a.rating; }).slice(0, 8).forEach(function (s) {
+		var a = h("div", { cls: "actions" });
+		a.appendChild(star(s.ip));
+		if (s.blocked) a.appendChild(h("span", { cls: "tag", text: "Blocked" })); else { addIf(a, allowBtn(s.ip)); a.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + (D.info.block_days || 14) + " days" })); }
+		box.appendChild(h("div", { cls: "spotrow" }, h("span", null, h("b", { cls: "s " + cls(s.rating), text: String(s.rating) }), " " + s.ip, h("small", s.matches + " match" + (s.matches === 1 ? "" : "es") + (s.ping == null ? "" : ", " + fmt(s.ping, 0) + " ms"))), a));
+	});
+	if (list.length > 8) box.appendChild(h("small", "And " + (list.length - 8) + " more, in the table below."));
+	return box;
+}
+function mapSync() {
+	var LF = MAP.lf;
+	if (!LF || !MAP.box || !MAP.box.isConnected) return;
+	if (!MAP.map) {
+		MAP.map = LF.map(MAP.el, { worldCopyJump: true, minZoom: 2, zoomSnap: 0.5 });
+		LF.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 12, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors' }).addTo(MAP.map);
+		MAP.map.setView([35, 5], 2);
+		MAP.layers = LF.layerGroup().addTo(MAP.map);
+		var fit = h("button", { type: "button", text: "Show everything" });
+		fit.addEventListener("click", function () { MAP.fitted = false; mapSync(); });
+		if (!RO) {
+			var draw = h("button", { type: "button", cls: "solid", text: "Draw a circle" });
+			draw.addEventListener("click", mapDraw);
+			var home = h("button", { type: "button", text: "Set home" });
+			home.addEventListener("click", function () {
+				if (MAP.busy) return;
+				MAP.busy = true; MAP.el.classList.add("drawing");
+				var pick = function (e) { var c = e.latlng.wrap(); try { localStorage.setItem("mw-home", c.lat.toFixed(2) + "," + c.lng.toFixed(2)); } catch (x) {} mapDone(); };
+				MAP.map.once("click", pick);
+				mapBar("Press roughly where you are. It is only remembered by this browser, to draw you on the map.", [["Cancel", "", function () { MAP.map.off("click", pick); mapDone(); }]]);
+			});
+			MAP.tools.appendChild(draw); MAP.tools.appendChild(home);
+		}
+		MAP.tools.appendChild(fit);
+	}
+	MAP.map.invalidateSize();
+	if (MAP.busy) return;
+	var g = MAP.layers, ok = cssVar("--ok"), muted = cssVar("--muted"), pen = cssVar("--pen"), b = LF.latLngBounds([]), pool = D.info.pool || [], whole = [];
+	g.clearLayers(); MAP.circles = {};
+	pool.forEach(function (p) {
+		if (p.lat == null) { whole.push(p.name); return; }
+		var c = LF.circle([p.lat, p.lon], { radius: p.km * 1000, color: ok, weight: 2, fillColor: ok, fillOpacity: 0.16 }).addTo(g);
+		c.bindTooltip(p.name + (RO ? "" : ". Press to move or resize"), { sticky: true });
+		if (!RO) c.on("click", function (e) { LF.DomEvent.stop(e); mapEdit(p); });
+		MAP.circles[p.n] = c; b.extend(c.getBounds());
+	});
+	(D.regions || []).forEach(function (r) {
+		if (r.lat == null) return;
+		LF.circleMarker([r.lat, r.lon], { radius: 4, color: muted, weight: 1.5, fillColor: muted, fillOpacity: 0.15 }).addTo(g)
+			.bindTooltip(r.city + ", " + r.cc + (r.ping == null ? ": no reply" : ": " + fmt(r.ping, 0) + " ms, grade " + pingLetter(r.ping)));
+	});
+	(D.gp || []).forEach(function (x) {
+		if (x.lat == null || x.mine) return;
+		LF.circleMarker([x.lat, x.lon], { radius: 3, color: pen, weight: 1, fillColor: pen, fillOpacity: 0.7 }).addTo(g).bindTooltip("Shared with you: " + x.game + ", " + place(x));
+	});
+	var spots = {};
+	D.servers.forEach(function (s) { if (s.lat == null || s.lon == null) return; var k = s.lat.toFixed(1) + "," + s.lon.toFixed(1); (spots[k] = spots[k] || []).push(s); });
+	Object.keys(spots).forEach(function (k) {
+		var list = spots[k], n = list.length, sum = 0, out = 0;
+		list.forEach(function (s) { sum += s.rating; if (s["in"] === false && !isAllowed(s.ip)) out++; });
+		var avg = Math.round(sum / n);
+		var m = LF.marker([list[0].lat, list[0].lon], { title: (place(list[0]) || "Server") + ": rated " + avg + (n > 1 ? " over " + n + " servers" : ""),
+			icon: LF.divIcon({ className: "", html: '<span class="pin ' + cls(avg) + (out === n ? " out" : "") + '">' + (n > 1 ? n : "") + "</span>", iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(g);
+		m.bindPopup(function () { return spotPopup(list); }, { maxWidth: 360, minWidth: 250 });
+		b.extend(m.getLatLng());
+	});
+	var hm = getHome(), live = D.st && D.st.sessions && D.st.sessions[0];
+	if (hm) {
+		LF.marker(hm, { title: "Home", interactive: false, icon: LF.divIcon({ className: "", html: '<span class="pin home">⌂</span>', iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(g);
+		b.extend(hm);
+		var ls = live && D.servers.filter(function (s) { return s.ip === live.ip && s.lat != null; })[0];
+		if (ls) LF.polyline([hm, [ls.lat, ls.lon]], { color: pen, weight: 2, dashArray: "4 6" }).addTo(g).bindTooltip("The match in progress");
+	}
+	if (!MAP.fitted && b.isValid() && MAP.map.getSize().x > 50) { MAP.map.fitBounds(b.pad(0.2), { maxZoom: 6, animate: false }); MAP.fitted = true; }
+	MAP.legend.textContent = "Green circles are the places you stay on" + (RO ? "" : "; press one to move, resize or remove it") + ". Round markers are servers you have played on, coloured by how they rated; a number means several in one city, and a faded one is outside your places. Small hollow dots are datacentre regions with their ping."
+		+ (whole.length ? " Also in the pool, but not drawn because they are whole countries or areas: " + whole.join(", ") + "." : "") + " The map pictures come from OpenStreetMap, fetched by your browser.";
+}
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
 	box.appendChild(h("h2", "Favourites"));
@@ -638,6 +807,8 @@ function pageServers() {
 		view.appendChild(lr);
 		view.appendChild(h("p", { cls: "note", text: (stays.length ? "These servers are let through even though they are outside the places you stay on. " : "These will be let through when you stay on places. ") + "Only the exact address is allowed, so its neighbours in the same datacentre are still turned away. The game still decides whether to offer one to you." }));
 	} else if (stays.length && !RO) view.appendChild(h("p", { cls: "note", text: "To let one server through from outside these places, press Add to pool beside it in your favourites or the server list below, or on a match report." }));
+	view.appendChild(h("h2", "Map"));
+	view.appendChild(mapSection());
 	// stay anywhere: cities, countries or wider areas, as one pool
 	if (!RO) {
 	view.appendChild(h("h2", stays.length ? "Change where you stay" : "Stay in one or more places"));

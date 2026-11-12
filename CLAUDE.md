@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.23.1.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.24.0.
 
 ## Layout
 
@@ -46,6 +46,8 @@ Updating (0.22.0): `matchwatch update` reads `dist/version` from the raw GitHub 
 Reasons and grades (0.22.1): the engine notes every deduction as it scores (`why_add`) and writes the largest one or two per part into the match detail as `why` (`server`, `route`, `line`, `pc`); the dashboard prints them under the four scores. Matches from before 0.22.1 have none. Change a scoring formula and its `why_add` line together, and the table in the README. Tests get letters in the dashboard only: `letter(score)` for the line test (`score` in `linetest.json`), `pingLetter(ms)` for a trace and the region table.
 
 Single servers in the pool (0.23.0): `/etc/matchwatch/allow` holds exact addresses (`matchwatch allow add|remove`, actions `allow`/`unallow`, at most 100). The nftables set `allowed` is accepted at the top of the chain, before `blocked` and `away`, so the region lock itself is unchanged and an allowed server passes it. `cmd_lobby` skips the stay decision for one, an automatic block skips it, and blocking one by hand takes it out of the list. `nft_ready` rebuilds a table that has no `allowed` set. The owner chose exact addresses over /24s so nothing unvetted gets in; expect to revisit if games rarely offer the same address twice. Not yet seen on a real match. `servers.json` carries `in` (true, false, or null when the server cannot be placed or nothing is being stayed on); the dashboard shows "In your places" in place of Add to pool when it is true.
+
+The map (0.24.0): `mapSection` on the Servers page. Leaflet 1.9.4 ships in the installer (`leaflet.js`, `leaflet.css`, unchanged; SHA-256 checked against the published integrity values when it was added). LuCI's own code lives in `window.L` and Leaflet claims the same name, so the dashboard fetches Leaflet's text, runs it, takes `window.L` and puts LuCI's back in the same breath (`leaflet()`); never load it with a script tag. The map element is built once and re-attached on every page redraw (`MAP.box`), and nothing is redrawn while a circle is being drawn or edited (`MAP.busy`). A circle is an ordinary line in `stay` (`matchwatch stay circle <lat> <lon> <km>`, `stay set <n> ...`; actions `staycircle` with `lat/lon/km` and `stayset` with `n/lat/lon/km`, because action arguments allow only digits, dots, slashes and hyphens). `info.json` carries `pool` with each place's geometry, and `servers.json`, `regions.json` and `gameplaces.json` carry `lat` and `lon`. Tiles come from OpenStreetMap, fetched by the browser. Leaflet's dragging throws on synthetic mouse events sent to `document`; test with real pointer input. Seen on the owner's router through the no-login page; drawing and editing were tested against invented data only.
 
 ## Rules that have bitten already
 

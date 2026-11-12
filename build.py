@@ -26,6 +26,9 @@ items = [
     (f"{LUCI_ROOT}/usr/share/rpcd/acl.d/luci-app-matchwatch.json", "/usr/share/rpcd/acl.d/luci-app-matchwatch.json", "644"),
     (f"{LUCI_WWW}/luci-static/resources/matchwatch/dashboard.js", f"{RES}/matchwatch/dashboard.js", "644"),
     (f"{LUCI_WWW}/luci-static/resources/matchwatch/dashboard.css", f"{RES}/matchwatch/dashboard.css", "644"),
+    # Leaflet 1.9.4, the map library (BSD 2-Clause, (c) Volodymyr Agafonkin and CloudMade), unchanged
+    (f"{LUCI_WWW}/luci-static/resources/matchwatch/leaflet.js", f"{RES}/matchwatch/leaflet.js", "644"),
+    (f"{LUCI_WWW}/luci-static/resources/matchwatch/leaflet.css", f"{RES}/matchwatch/leaflet.css", "644"),
     (f"{LUCI_WWW}/luci-static/resources/view/matchwatch/dashboard.js", f"{RES}/view/matchwatch/dashboard.js", "644"),
     (f"{LUCI_WWW}/luci-static/resources/view/matchwatch/settings.js", f"{RES}/view/matchwatch/settings.js", "644"),
 ]

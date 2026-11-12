@@ -43,7 +43,7 @@ def timeline(n, kind):
 def build(site):
     data = site + "/matchwatch/data"
     os.makedirs(data + "/matches"); os.makedirs(site + "/" + RES)
-    for f in ("dashboard.js", "dashboard.css"):
+    for f in ("dashboard.js", "dashboard.css", "leaflet.js", "leaflet.css"):
         shutil.copy(f"{ROOT}/luci-app-matchwatch/htdocs/{RES}/{f}", f"{site}/{RES}/{f}")
     hist, srv, dcs = [], {}, {}
     for hrs, key, si, code, overall, marks in PLAN:
@@ -86,14 +86,15 @@ def build(site):
                ("waw-pl", "Warsaw", "PL", "Europe", 19.5, None), ("lon-gb", "London", "GB", "Europe", 16.2, None), ("mad-es", "Madrid", "ES", "Europe", 27.4, "mad"), ("nyc-us", "New York", "US", "North America", 84.0, None),
                ("sgp-sg", "Singapore", "SG", "Asia", 168.3, None), ("syd-au", "Sydney", "AU", "Oceania", 251.7, None)]
     rj = []
+    LL = {"fra-de": (50.11, 8.68), "ams-nl": (52.37, 4.90), "par-fr": (48.86, 2.35), "sto-se": (59.33, 18.07), "waw-pl": (52.23, 21.01), "lon-gb": (51.51, -0.13), "mad-es": (40.42, -3.70), "nyc-us": (40.71, -74.01), "sgp-sg": (1.35, 103.82), "syd-au": (-33.87, 151.21)}
     for code, city, cc, area, ping, key in sorted(regions, key=lambda r: r[4]):
         g = dcs.get(key)
         rj.append({"code": code, "city": city, "cc": cc, "area": area, "ping": ping, "jit": round(random.uniform(0.1, 0.9), 1), "ts": NOW - 1800, "matches": g["matches"] if g else 0,
-                   "rating": round(g["sum"] / g["matches"]) if g else None, "matchping": g["ping"] if g else None, "stay": bool(g and g["stay"])})
+                   "rating": round(g["sum"] / g["matches"]) if g else None, "matchping": g["ping"] if g else None, "stay": bool(g and g["stay"]), "lat": LL[code][0], "lon": LL[code][1]})
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
-    for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE")
+    for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.23.1", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"]}}
+           "info": {"version": "0.24.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -178,7 +179,7 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace") out = "1";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.23.1.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.24.0.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the Tools screenshots: press what a visitor would, so each picture shows a result

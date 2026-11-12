@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.23.1"
+VERSION="0.24.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -305,7 +305,7 @@ export_json() {
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -878,7 +878,40 @@ stay_report() {
 	else echo "Whole regions outside these places are also being turned away ahead of time for your gaming device. This covers games hosted by: $(feed_list | awk -F'|' '{ printf "%s%s%s", (NR > 1 ? ", " : ""), $1, ($3 != "" ? " (" $3 ")" : "") }'). Other games are turned away one server at a time. The Servers page will say within a minute whether your places have servers at all."; fi
 	echo "The game still decides which of them to offer you. A place is dropped from the pool if its last three matches average under $WARN_SCORE."
 }
-cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
+# ---- circles drawn on the dashboard's map. A circle is an ordinary pool entry (name, lat, lon, km, -),
+# the same as a city; only its name is made up here, from the nearest city in the regions table.
+circle_name() { # lat lon km [line-to-ignore] : a name not already in the pool
+	local base n=1 name
+	base="$(awk -F'|' -v a="$1" -v b="$2" -v k="$3" '
+		/^#/ || NF < 6 { next }
+		{ x = (a + $5) / 2 * 0.0174533; x2 = x * x; cs = 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720
+		  dy = (a - $5) * 111.2; dx = (b - $6) * 111.2 * cs; d = dx * dx + dy * dy
+		  if (best == "" || d < bd) { bd = d; best = $2 } }
+		END { if (best != "" && bd < 1000000) printf "Near %s %d km", best, k; else printf "Circle %d %d %d km", a, b, k }' "$LIB/regions.list" 2>/dev/null)"
+	name="$base"
+	while awk -F'\t' -v nm="$name" -v skip="${4:-0}" 'NR != skip && $1 == nm { f = 1 } END { exit !f }' "$DATA/stay" 2>/dev/null; do n=$((n + 1)); name="$base $n"; done
+	echo "$name"
+}
+stay_circle() { # [n] lat lon km : add a circle to the pool, or move and resize circle n
+	local n="" lat lon km name
+	[ $# -ge 4 ] && { n="$1"; shift; }
+	echo "$1 $2 $3" | awk '{ if ($1 !~ /^-?[0-9]+(\.[0-9]+)?$/ || $2 !~ /^-?[0-9]+(\.[0-9]+)?$/ || $3 !~ /^[0-9]+(\.[0-9]+)?$/) exit 1
+		exit !($1 >= -85 && $1 <= 85 && $2 >= -180 && $2 <= 180 && $3 >= 25 && $3 <= 3000) }' || die "a circle needs a latitude, a longitude and a radius between 25 and 3000 km"
+	lat="$(echo "$1" | awk '{ printf "%.3f", $1 }')"; lon="$(echo "$2" | awk '{ printf "%.3f", $1 }')"; km="$(echo "$3" | awk '{ printf "%d", $1 + 0.5 }')"
+	touch "$DATA/stay"
+	if [ -n "$n" ]; then
+		case "$n" in *[!0-9]*) die "no such place in the pool" ;; esac
+		awk -F'\t' -v n="$n" 'NR == n && NF >= 4 && $2 != "-" && ($5 == "-" || $5 == "") { f = 1 } END { exit !f }' "$DATA/stay" || die "place $n is a country or an area, which has no circle to move"
+		name="$(circle_name "$lat" "$lon" "$km" "$n")"
+		awk -F'\t' -v n="$n" -v l="$name$TAB$lat$TAB$lon$TAB$km$TAB-" 'NR == n { print l; next } { print }' "$DATA/stay" > "$DATA/stay.tmp" && mv -f "$DATA/stay.tmp" "$DATA/stay"
+	else
+		[ "$(wc -l < "$DATA/stay")" -lt 30 ] || die "the pool has 30 places already. Remove one first."
+		name="$(circle_name "$lat" "$lon" "$km")"
+		printf '%s\t%s\t%s\t%s\t-\n' "$name" "$lat" "$lon" "$km" >> "$DATA/stay"
+	fi
+	stay_report "$(stay_apply)"
+}
+cmd_stay() { # <places> | add <places> | remove <n> | circle <lat> <lon> <km> | set <n> <lat> <lon> <km> | off | (nothing = status)
 	local n
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	case "$1" in
@@ -886,6 +919,8 @@ cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
 		""|status)
 			if [ -s "$DATA/stay" ]; then echo "Staying on:"; awk -F'\t' '{ printf "  %d  %s  (%s)\n", NR, $1, ($5 != "" && $5 != "-" ? "anywhere in it" : "within " $4 " km") }' "$DATA/stay"
 			else echo "Stay mode is off. Turn it on with: matchwatch stay <places, separated by commas>"; fi ;;
+		circle) stay_circle "$2" "$3" "$4" ;;
+		set) [ -n "$5" ] || die "usage: matchwatch stay set <number from 'matchwatch stay'> <lat> <lon> <km>"; stay_circle "$2" "$3" "$4" "$5" ;;
 		add) [ -n "$2" ] || die "usage: matchwatch stay add <places, separated by commas>"
 			cp "$DATA/stay" "$DATA/stay.bak" 2>/dev/null || : > "$DATA/stay.bak"
 			if add_places "$2"; then rm -f "$DATA/stay.bak"; stay_report "$(stay_apply)"; else mv -f "$DATA/stay.bak" "$DATA/stay"; [ -s "$DATA/stay" ] || rm -f "$DATA/stay"; exit 1; fi ;;
@@ -1569,6 +1604,9 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		stayoff) cmd_stay off ;;
 		stayadd) cmd_stay add "$region" ;;
 		stayrm) cmd_stay remove "$arg" ;;
+		# from the map: the numbers arrive as lat/lon/km, or n/lat/lon/km to move a circle
+		staycircle) set -- $(echo "$arg" | tr '/' ' '); [ $# = 3 ] || die "that is not a circle"; cmd_stay circle "$1" "$2" "$3" ;;
+		stayset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || die "that is not a circle"; cmd_stay set "$1" "$2" "$3" "$4" ;;
 		staysuggest) cmd_stay_suggest "$arg" ;;
 		qos) cmd_qos ;;
 		qosfix) cmd_qos_fix ;;
@@ -2021,7 +2059,7 @@ case "$1" in
 	datacentres|datacenters|dcs) touch "$DATA/sessions.tsv" "$DATA/blocklist" 2>/dev/null; awk -v MODE=dc_txt -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
 	block-dc) cmd_block_dc "$2" "$3" ;;
 	unblock-dc) cmd_unblock_dc "$2" ;;
-	stay) shift; case "$1" in add|remove) c="$1"; shift; cmd_stay "$c" "$*" ;; *) cmd_stay "$*" ;; esac ;;
+	stay) shift; case "$1" in add|remove) c="$1"; shift; cmd_stay "$c" "$*" ;; circle|set) cmd_stay "$@" ;; *) cmd_stay "$*" ;; esac ;;
 	hours) touch "$DATA/sessions.tsv"; awk -v MODE=hours_txt -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
 	recap) touch "$DATA/sessions.tsv"; awk -v MODE=recap_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
 	games) touch "$DATA/sessions.tsv"; awk -v MODE=games_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
