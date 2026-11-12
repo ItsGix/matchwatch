@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.20.1"
+VERSION="0.21.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -309,6 +309,7 @@ export_json() {
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
+	gameplaces json > "$RUN/www/gameplaces.json.tmp" 2>/dev/null && mv -f "$RUN/www/gameplaces.json.tmp" "$RUN/www/gameplaces.json"
 	share_json > "$RUN/www/shared.json.tmp" && mv -f "$RUN/www/shared.json.tmp" "$RUN/www/shared.json"
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -336,6 +337,7 @@ cmd_after() { # note overall
 		if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; else stay_off; cmd_notify "Stay mode is off: every place in the pool had gone bad."; fi
 	fi
 	export_json
+	[ "$(cnt "$DATA/sessions.tsv")" -gt 5200 ] && tail -n 5000 "$DATA/sessions.tsv" > "$DATA/sessions.tsv.tmp" && mv -f "$DATA/sessions.tsv.tmp" "$DATA/sessions.tsv"
 	logger -t matchwatch "$1" 2>/dev/null
 	if [ "$NOTIFY_EVERY_MATCH" = 1 ] || [ "${2:-100}" -lt "$WARN_SCORE" ]; then [ -n "$NTFY_URL" ] && fetch "$NTFY_URL" "Match ended: $(echo "$1" | sed 's/^Match on [^:]*: //; s/^\([0-9]*\/100 [A-Za-z]*\)\..*/\1/')." >/dev/null; fi
 	return 0
@@ -465,6 +467,7 @@ cmd_lobby() { # server-ip port device-ip
 $g
 EOF
 	key="$asn|$city|$cc"
+	tried_note "$ip" "${port:-0}" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
 	# Staying somewhere? Decide first. Every second spent measuring is a second the game spends joining
 	# this server, and turning it away late throws the player out of a lobby they had already reached.
 	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ]; then
@@ -749,6 +752,23 @@ cmd_ranges() { # (nothing) = what is known | refresh
 	echo "Add a list of your own in $DATA/geofeeds.local, one per line: name|address of the list. Then: matchwatch ranges refresh"
 }
 
+# ---- where each game plays. Matches already say where you played; this adds the servers a game
+# reached for without your playing on them. One line per server network and port, updated in place.
+tried_note() { # ip port cc city org asn lat lon
+	local f="$DATA/tried"
+	[ -n "$3" ] || return 0
+	touch "$f"
+	awk -F'\t' -v OFS='\t' -v p="${1%.*}" -v port="$2" -v cc="$3" -v city="$4" -v org="$5" -v asn="$6" -v lat="$7" -v lon="$8" -v now="$(date +%s)" '
+		$1 == p && $2 == port { $9 = $9 + 1; $10 = now; hit = 1 }
+		{ L[++n] = $0 }
+		END { if (!hit) L[++n] = p OFS port OFS city OFS cc OFS org OFS asn OFS (lat == "" ? "-" : lat) OFS (lon == "" ? "-" : lon) OFS 1 OFS now
+			for (i = (n > 2000 ? n - 1999 : 1); i <= n; i++) print L[i] }' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+gameplaces() { # share | json
+	touch "$DATA/sessions.tsv"
+	awk -v MODE=gameplaces -v ARG="$1" -v TRIED="$DATA/tried" -v SHARED="$DATA/gameplaces.shared" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" $( [ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay" ) -f "$LIB/report.awk" "$DATA/sessions.tsv"
+}
+
 # ---- stay on one datacentre
 stay_off() {
 	local ip
@@ -918,10 +938,10 @@ cmd_unblock_dc() { # number
 # Export leaves out everything about this home: no device, LAN or ISP address, and no match times.
 # Import trusts nothing: every line is checked and bad ones are dropped. Ratings from someone else are
 # shown and mentioned by the lobby alert, and never block anything by themselves.
-SHARE_ALL="games regions places ratings settings favourites"
+SHARE_ALL="games regions places ratings settings favourites gameservers"
 cnt() { [ -f "$1" ] || { echo 0; return; }; awk '!/^#/ && NF { n++ } END { print n + 0 }' "$1"; }
 joined() { awk '{ s = s (NR > 1 ? ", " : "") $0 } END { printf "%s", s }'; }
-share_sections() { # "all", nothing, names, or digits (1 games 2 regions 3 places 4 ratings 5 settings 6 favourites 7 favplaces 8 allservers) -> names
+share_sections() { # "all", nothing, names, or digits (1 games 2 regions 3 places 4 ratings 5 settings 6 favourites 7 favplaces 8 allservers 9 gameservers) -> names
 	local s="$*" out="" c
 	case "$s" in
 		""|all) echo "$SHARE_ALL" ;;
@@ -939,6 +959,7 @@ share_sections() { # "all", nothing, names, or digits (1 games 2 regions 3 place
 			case "$s" in *6*) out="$out favourites" ;; esac
 			case "$s" in *7*) out="$out favplaces" ;; esac
 			case "$s" in *8*) out="$out allservers" ;; esac
+			case "$s" in *9*) out="$out gameservers" ;; esac
 			[ -n "$out" ] || { echo "matchwatch: choose at least one thing to share" >&2; return 1; }
 			echo $out ;;
 	esac
@@ -977,6 +998,9 @@ cmd_share_export() { # [sections] -> the share file, on standard output
 			ratings) echo "# server network|matches|average rating out of 100|city|country code|host"
 				echo "# These are one home's experience. They mean most to people nearby on a similar connection."
 				share_ratings ;;
+			gameservers) echo "# game|server network|city|country code|host|latitude|longitude|matches played there|rating out of 100"
+				echo "# Where each game has put you, or tried to. Public game servers only."
+				gameplaces share ;;
 			favourites|allservers) echo "# server|game|city|country code|host|rating out of 100|matches|latitude|longitude"
 				share_servers "$sec" ;;
 			settings) echo "# the thresholds this copy of MatchWatch runs with"
@@ -1015,7 +1039,7 @@ share_load() { # file dir : check every line. The good ones land in dir/<section
 	}
 	function keep(sec, line, max) { if (N[sec] >= max) { bad("more " sec " than one file may hold"); return } N[sec]++; print line > (OUT "/" sec) }
 	BEGIN {
-		ALL = " games regions places ratings settings favourites "
+		ALL = " games regions places ratings settings favourites gameservers "
 		R["min_down_pps"] = "1 1000"; R["min_up_pps"] = "1 1000"; R["warn_score"] = "0 100"; R["autoblock_score"] = "0 100"
 		R["autoblock_matches"] = "1 50"; R["lobby_margin_ms"] = "0 500"; R["stay_km"] = "10 2000"; R["block_days"] = "1 365"
 	}
@@ -1057,6 +1081,15 @@ share_load() { # file dir : check every line. The good ones land in dir/<section
 			|| !whole(f[2], 1, 9999) || !whole(f[3], 0, 100) || f[4] !~ /^[A-Za-z0-9 .,()&-]*$/ || f[5] !~ /^([A-Z][A-Z]|-)$/ || f[6] !~ /^[A-Za-z0-9 .,()&-]*$/) { bad("a rating line that cannot be read"); next }
 		keep("ratings", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t" f[5] "\t" f[6], 500); next
 	}
+	sec == "gameservers" {
+		n = split($0, f, "|"); k = split(f[2], o, ".")
+		if (n != 9 || f[1] !~ /^[A-Za-z0-9 .:,()&+-]+$/ || length(f[1]) > 80 || f[2] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.0\/24$/ || k != 4 || !whole(o[1], 1, 223) || !whole(o[2], 0, 255) || !whole(o[3], 0, 255) \
+			|| o[1] == 10 || o[1] == 127 || (o[1] == 172 && o[2] >= 16 && o[2] <= 31) || (o[1] == 192 && o[2] == 168) || (o[1] == 169 && o[2] == 254) \
+			|| f[3] !~ /^[A-Za-z0-9 .,()&-]*$/ || f[4] !~ /^([A-Z][A-Z]|-)$/ || f[5] !~ /^[A-Za-z0-9 .:,()&+-]*$/ \
+			|| !whole(f[8], 0, 99999) || (f[9] != "" && !whole(f[9], 0, 100))) { bad("a game server line that cannot be read"); next }
+		la = (num(f[6]) && f[6] >= -90 && f[6] <= 90 && num(f[7]) && f[7] >= -180 && f[7] <= 180) ? f[6] "\t" f[7] : "-\t-"
+		keep("gameservers", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t" f[5] "\t" la "\t" f[8] "\t" f[9], 3000); next
+	}
 	sec == "favourites" {
 		n = split($0, f, "|"); k = split(f[1], o, ".")
 		if (n != 9 || f[1] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || k != 4 || !whole(o[1], 1, 223) || !whole(o[2], 0, 255) || !whole(o[3], 0, 255) || !whole(o[4], 0, 255) \
@@ -1092,6 +1125,7 @@ share_describe() { # dir -> what the file holds and what importing each part wou
 			regions) echo "regions: $n ping host(s) for the regions table: $(cut -d'|' -f2 "$d/regions" | head -n 8 | joined)$more." ;;
 			places) echo "places: $n place(s) to stay on: $(cut -f1 "$d/places" | head -n 8 | joined)$more. Importing these turns staying on, so game servers elsewhere are blocked." ;;
 			ratings) echo "ratings: $n server rating(s) from someone else. They are shown to you and mentioned by the lobby alert, and never block anything by themselves." ;;
+			gameservers) echo "gameservers: $n server network(s) for $(cut -f1 "$d/gameservers" | awk '{ if (!($0 in c)) o[++k] = $0; c[$0]++ } END { for (i = 1; i <= k && i <= 6; i++) printf "%s%s (%d)", (i > 1 ? ", " : ""), o[i], c[o[i]]; if (k > 6) printf " and %d more games", k - 6 }'). Countries covered: $(cut -f4 "$d/gameservers" | sort -u | grep -c '[A-Z]'). They add to what MatchWatch knows about where each game plays. They are shown to you; nothing is blocked or allowed because of them." ;;
 			favourites) echo "favourites: $n favourite server(s) for $(cut -f2 "$d/favourites" | awk '{ g = ($0 == "" ? "other games" : $0); if (!(g in c)) o[++k] = g; c[g]++ } END { for (i = 1; i <= k; i++) printf "%s%s (%d)", (i > 1 ? ", " : ""), o[i], c[o[i]] }'). They join your favourites under those games: never blocked automatically, and the lobby alert tells you when you land on one."
 				p="$(share_favplaces "$d" | cut -f1 | head -n 8 | joined)"
 				[ -n "$p" ] && echo "favplaces: Stay near those servers: adds $p to the places you stay on and turns staying on, so game servers elsewhere are blocked." ;;
@@ -1160,6 +1194,10 @@ cmd_share_import() { # file [sections] : take in the chosen sections of a share 
 				n="$(cnt "$d/ratings")"
 				awk -F'\t' 'NR == FNR { seen[$1] = 1; print; next } !($1 in seen)' "$d/ratings" "$DATA/ratings.shared" | head -n 1000 > "$DATA/ratings.shared.tmp" && mv -f "$DATA/ratings.shared.tmp" "$DATA/ratings.shared"
 				echo "Took in $n server rating(s). They are listed on the Tools page." ;;
+			gameservers) share_keep gameplaces.shared; touch "$DATA/gameplaces.shared"
+				n="$(cnt "$d/gameservers")"
+				awk -F'\t' 'FILENAME == ARGV[1] { seen[$1 FS $2] = 1; print; next } !(($1 FS $2) in seen)' "$d/gameservers" "$DATA/gameplaces.shared" | head -n 5000 > "$DATA/gameplaces.shared.tmp" && mv -f "$DATA/gameplaces.shared.tmp" "$DATA/gameplaces.shared"
+				echo "Took in $n game server network(s). They are under Where each game plays, on the Servers page." ;;
 			favourites) share_keep favourites; touch "$DATA/favourites"
 				n="$(awk -F'\t' -v OFS='\t' 'FILENAME == ARGV[1] { have[$1] = 1; c++; next } !($1 in have) && c < 200 { have[$1] = 1; c++; print $1, $2, $3, $4, $5 }' "$DATA/favourites" "$d/favourites" | tee -a "$DATA/favourites" | awk 'END { print NR + 0 }')"
 				echo "Added $n favourite server(s). They are on the Servers page, grouped by game." ;;
@@ -1187,7 +1225,7 @@ cmd_share_import() { # file [sections] : take in the chosen sections of a share 
 cmd_share_undo() { # put back what the last import changed
 	local u="$DATA/share.undo" f
 	[ -d "$u" ] || { echo "matchwatch: there is no import to undo" >&2; return 1; }
-	for f in games.local regions.local stay ratings.shared favourites; do
+	for f in games.local regions.local stay ratings.shared favourites gameplaces.shared; do
 		if [ -f "$u/$f" ]; then cp "$u/$f" "$DATA/$f"
 		elif [ -f "$u/$f.none" ]; then rm -f "$DATA/$f"
 		else continue; fi
@@ -1438,6 +1476,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		unfav) cmd_fav remove "$arg" ;;
 		shareundo) cmd_share_undo ;;
 		shareforget) cmd_share_forget "$arg" ;;
+		shareforgetgs) rm -f "$DATA/gameplaces.shared"; export_json; echo "Removed the game servers other people shared with you. What your own router has learned is kept." ;;
 		forgetmatch) cmd_forget match "$arg" ;;
 		forgetserver) cmd_forget server "$arg" ;;
 		forgetdc) cmd_forget dc "$arg" ;;

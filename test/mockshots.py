@@ -92,9 +92,16 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.20.1", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True, "away": 412}}
+           "info": {"version": "0.21.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True, "away": 412}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
+    out["gameplaces"] = [
+        {"game": "Example Shooter", "city": "Frankfurt", "cc": "DE", "org": "Example Hosting Frankfurt", "networks": 3, "nets": ["203.0.113.0/24"], "matches": 7, "rating": 75, "mine": True, "in": True},
+        {"game": "Example Shooter", "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "networks": 2, "nets": ["192.0.2.0/24"], "matches": 2, "rating": 100, "mine": True, "in": False},
+        {"game": "Example Arena", "city": "Stockholm", "cc": "SE", "org": "Example Hosting Stockholm", "networks": 2, "nets": ["198.51.100.0/24"], "matches": 3, "rating": 100, "mine": True, "in": True},
+        {"game": "Example Shooter", "city": "Paris", "cc": "FR", "org": "Example Hosting Paris", "networks": 1, "nets": ["198.51.100.0/24"], "matches": 0, "rating": None, "mine": True, "in": False},
+        {"game": "Example Shooter", "city": "Tokyo", "cc": "JP", "org": "Example Hosting Tokyo", "networks": 6, "nets": ["203.0.113.0/24"], "matches": 41, "rating": 88, "mine": False, "in": False},
+        {"game": "Example Arena", "city": "Sydney", "cc": "AU", "org": "Example Hosting Sydney", "networks": 4, "nets": ["192.0.2.0/24"], "matches": 17, "rating": 92, "mine": False, "in": False}]
     out["coverage"] = {"hosts": "Vultr (Call of Duty)", "known": 441, "refusing": True, "refused": 412, "places": [{"name": "Germany", "ranges": 26}, {"name": "Sweden", "ranges": 2}], "suggest": []}
     out["shared"] = {"undo": True, "have": {"games": 3, "regions": 0, "places": 2, "ratings": 6},
                      "ratings": [{"p": "203.0.113.0/24", "n": 14, "avg": 38, "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "blocked": True},
@@ -193,7 +200,7 @@ if __name__ == "__main__":
         print(f"http://127.0.0.1:{PORT}/matchwatch/"); srv.serve_forever()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     os.makedirs(ROOT + "/docs", exist_ok=True)
-    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 4600), ("#/tools", "tools", 2200), ("#/tools/share", "share", 4200)):
+    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 5200), ("#/tools", "tools", 2200), ("#/tools/share", "share", 4200)):
         shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
     srv.shutdown()
     shutil.rmtree(site, ignore_errors=True)

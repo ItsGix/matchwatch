@@ -18,7 +18,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.20.1"
+VERSION="0.21.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -359,6 +359,7 @@ export_json() {
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
+	gameplaces json > "$RUN/www/gameplaces.json.tmp" 2>/dev/null && mv -f "$RUN/www/gameplaces.json.tmp" "$RUN/www/gameplaces.json"
 	share_json > "$RUN/www/shared.json.tmp" && mv -f "$RUN/www/shared.json.tmp" "$RUN/www/shared.json"
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -386,6 +387,7 @@ cmd_after() { # note overall
 		if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; else stay_off; cmd_notify "Stay mode is off: every place in the pool had gone bad."; fi
 	fi
 	export_json
+	[ "$(cnt "$DATA/sessions.tsv")" -gt 5200 ] && tail -n 5000 "$DATA/sessions.tsv" > "$DATA/sessions.tsv.tmp" && mv -f "$DATA/sessions.tsv.tmp" "$DATA/sessions.tsv"
 	logger -t matchwatch "$1" 2>/dev/null
 	if [ "$NOTIFY_EVERY_MATCH" = 1 ] || [ "${2:-100}" -lt "$WARN_SCORE" ]; then [ -n "$NTFY_URL" ] && fetch "$NTFY_URL" "Match ended: $(echo "$1" | sed 's/^Match on [^:]*: //; s/^\([0-9]*\/100 [A-Za-z]*\)\..*/\1/')." >/dev/null; fi
 	return 0
@@ -515,6 +517,7 @@ cmd_lobby() { # server-ip port device-ip
 $g
 EOF
 	key="$asn|$city|$cc"
+	tried_note "$ip" "${port:-0}" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
 	# Staying somewhere? Decide first. Every second spent measuring is a second the game spends joining
 	# this server, and turning it away late throws the player out of a lobby they had already reached.
 	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ]; then
@@ -799,6 +802,23 @@ cmd_ranges() { # (nothing) = what is known | refresh
 	echo "Add a list of your own in $DATA/geofeeds.local, one per line: name|address of the list. Then: matchwatch ranges refresh"
 }
 
+# ---- where each game plays. Matches already say where you played; this adds the servers a game
+# reached for without your playing on them. One line per server network and port, updated in place.
+tried_note() { # ip port cc city org asn lat lon
+	local f="$DATA/tried"
+	[ -n "$3" ] || return 0
+	touch "$f"
+	awk -F'\t' -v OFS='\t' -v p="${1%.*}" -v port="$2" -v cc="$3" -v city="$4" -v org="$5" -v asn="$6" -v lat="$7" -v lon="$8" -v now="$(date +%s)" '
+		$1 == p && $2 == port { $9 = $9 + 1; $10 = now; hit = 1 }
+		{ L[++n] = $0 }
+		END { if (!hit) L[++n] = p OFS port OFS city OFS cc OFS org OFS asn OFS (lat == "" ? "-" : lat) OFS (lon == "" ? "-" : lon) OFS 1 OFS now
+			for (i = (n > 2000 ? n - 1999 : 1); i <= n; i++) print L[i] }' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+gameplaces() { # share | json
+	touch "$DATA/sessions.tsv"
+	awk -v MODE=gameplaces -v ARG="$1" -v TRIED="$DATA/tried" -v SHARED="$DATA/gameplaces.shared" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" $( [ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay" ) -f "$LIB/report.awk" "$DATA/sessions.tsv"
+}
+
 # ---- stay on one datacentre
 stay_off() {
 	local ip
@@ -968,10 +988,10 @@ cmd_unblock_dc() { # number
 # Export leaves out everything about this home: no device, LAN or ISP address, and no match times.
 # Import trusts nothing: every line is checked and bad ones are dropped. Ratings from someone else are
 # shown and mentioned by the lobby alert, and never block anything by themselves.
-SHARE_ALL="games regions places ratings settings favourites"
+SHARE_ALL="games regions places ratings settings favourites gameservers"
 cnt() { [ -f "$1" ] || { echo 0; return; }; awk '!/^#/ && NF { n++ } END { print n + 0 }' "$1"; }
 joined() { awk '{ s = s (NR > 1 ? ", " : "") $0 } END { printf "%s", s }'; }
-share_sections() { # "all", nothing, names, or digits (1 games 2 regions 3 places 4 ratings 5 settings 6 favourites 7 favplaces 8 allservers) -> names
+share_sections() { # "all", nothing, names, or digits (1 games 2 regions 3 places 4 ratings 5 settings 6 favourites 7 favplaces 8 allservers 9 gameservers) -> names
 	local s="$*" out="" c
 	case "$s" in
 		""|all) echo "$SHARE_ALL" ;;
@@ -989,6 +1009,7 @@ share_sections() { # "all", nothing, names, or digits (1 games 2 regions 3 place
 			case "$s" in *6*) out="$out favourites" ;; esac
 			case "$s" in *7*) out="$out favplaces" ;; esac
 			case "$s" in *8*) out="$out allservers" ;; esac
+			case "$s" in *9*) out="$out gameservers" ;; esac
 			[ -n "$out" ] || { echo "matchwatch: choose at least one thing to share" >&2; return 1; }
 			echo $out ;;
 	esac
@@ -1027,6 +1048,9 @@ cmd_share_export() { # [sections] -> the share file, on standard output
 			ratings) echo "# server network|matches|average rating out of 100|city|country code|host"
 				echo "# These are one home's experience. They mean most to people nearby on a similar connection."
 				share_ratings ;;
+			gameservers) echo "# game|server network|city|country code|host|latitude|longitude|matches played there|rating out of 100"
+				echo "# Where each game has put you, or tried to. Public game servers only."
+				gameplaces share ;;
 			favourites|allservers) echo "# server|game|city|country code|host|rating out of 100|matches|latitude|longitude"
 				share_servers "$sec" ;;
 			settings) echo "# the thresholds this copy of MatchWatch runs with"
@@ -1065,7 +1089,7 @@ share_load() { # file dir : check every line. The good ones land in dir/<section
 	}
 	function keep(sec, line, max) { if (N[sec] >= max) { bad("more " sec " than one file may hold"); return } N[sec]++; print line > (OUT "/" sec) }
 	BEGIN {
-		ALL = " games regions places ratings settings favourites "
+		ALL = " games regions places ratings settings favourites gameservers "
 		R["min_down_pps"] = "1 1000"; R["min_up_pps"] = "1 1000"; R["warn_score"] = "0 100"; R["autoblock_score"] = "0 100"
 		R["autoblock_matches"] = "1 50"; R["lobby_margin_ms"] = "0 500"; R["stay_km"] = "10 2000"; R["block_days"] = "1 365"
 	}
@@ -1107,6 +1131,15 @@ share_load() { # file dir : check every line. The good ones land in dir/<section
 			|| !whole(f[2], 1, 9999) || !whole(f[3], 0, 100) || f[4] !~ /^[A-Za-z0-9 .,()&-]*$/ || f[5] !~ /^([A-Z][A-Z]|-)$/ || f[6] !~ /^[A-Za-z0-9 .,()&-]*$/) { bad("a rating line that cannot be read"); next }
 		keep("ratings", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t" f[5] "\t" f[6], 500); next
 	}
+	sec == "gameservers" {
+		n = split($0, f, "|"); k = split(f[2], o, ".")
+		if (n != 9 || f[1] !~ /^[A-Za-z0-9 .:,()&+-]+$/ || length(f[1]) > 80 || f[2] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.0\/24$/ || k != 4 || !whole(o[1], 1, 223) || !whole(o[2], 0, 255) || !whole(o[3], 0, 255) \
+			|| o[1] == 10 || o[1] == 127 || (o[1] == 172 && o[2] >= 16 && o[2] <= 31) || (o[1] == 192 && o[2] == 168) || (o[1] == 169 && o[2] == 254) \
+			|| f[3] !~ /^[A-Za-z0-9 .,()&-]*$/ || f[4] !~ /^([A-Z][A-Z]|-)$/ || f[5] !~ /^[A-Za-z0-9 .:,()&+-]*$/ \
+			|| !whole(f[8], 0, 99999) || (f[9] != "" && !whole(f[9], 0, 100))) { bad("a game server line that cannot be read"); next }
+		la = (num(f[6]) && f[6] >= -90 && f[6] <= 90 && num(f[7]) && f[7] >= -180 && f[7] <= 180) ? f[6] "\t" f[7] : "-\t-"
+		keep("gameservers", f[1] "\t" f[2] "\t" f[3] "\t" f[4] "\t" f[5] "\t" la "\t" f[8] "\t" f[9], 3000); next
+	}
 	sec == "favourites" {
 		n = split($0, f, "|"); k = split(f[1], o, ".")
 		if (n != 9 || f[1] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || k != 4 || !whole(o[1], 1, 223) || !whole(o[2], 0, 255) || !whole(o[3], 0, 255) || !whole(o[4], 0, 255) \
@@ -1142,6 +1175,7 @@ share_describe() { # dir -> what the file holds and what importing each part wou
 			regions) echo "regions: $n ping host(s) for the regions table: $(cut -d'|' -f2 "$d/regions" | head -n 8 | joined)$more." ;;
 			places) echo "places: $n place(s) to stay on: $(cut -f1 "$d/places" | head -n 8 | joined)$more. Importing these turns staying on, so game servers elsewhere are blocked." ;;
 			ratings) echo "ratings: $n server rating(s) from someone else. They are shown to you and mentioned by the lobby alert, and never block anything by themselves." ;;
+			gameservers) echo "gameservers: $n server network(s) for $(cut -f1 "$d/gameservers" | awk '{ if (!($0 in c)) o[++k] = $0; c[$0]++ } END { for (i = 1; i <= k && i <= 6; i++) printf "%s%s (%d)", (i > 1 ? ", " : ""), o[i], c[o[i]]; if (k > 6) printf " and %d more games", k - 6 }'). Countries covered: $(cut -f4 "$d/gameservers" | sort -u | grep -c '[A-Z]'). They add to what MatchWatch knows about where each game plays. They are shown to you; nothing is blocked or allowed because of them." ;;
 			favourites) echo "favourites: $n favourite server(s) for $(cut -f2 "$d/favourites" | awk '{ g = ($0 == "" ? "other games" : $0); if (!(g in c)) o[++k] = g; c[g]++ } END { for (i = 1; i <= k; i++) printf "%s%s (%d)", (i > 1 ? ", " : ""), o[i], c[o[i]] }'). They join your favourites under those games: never blocked automatically, and the lobby alert tells you when you land on one."
 				p="$(share_favplaces "$d" | cut -f1 | head -n 8 | joined)"
 				[ -n "$p" ] && echo "favplaces: Stay near those servers: adds $p to the places you stay on and turns staying on, so game servers elsewhere are blocked." ;;
@@ -1210,6 +1244,10 @@ cmd_share_import() { # file [sections] : take in the chosen sections of a share 
 				n="$(cnt "$d/ratings")"
 				awk -F'\t' 'NR == FNR { seen[$1] = 1; print; next } !($1 in seen)' "$d/ratings" "$DATA/ratings.shared" | head -n 1000 > "$DATA/ratings.shared.tmp" && mv -f "$DATA/ratings.shared.tmp" "$DATA/ratings.shared"
 				echo "Took in $n server rating(s). They are listed on the Tools page." ;;
+			gameservers) share_keep gameplaces.shared; touch "$DATA/gameplaces.shared"
+				n="$(cnt "$d/gameservers")"
+				awk -F'\t' 'FILENAME == ARGV[1] { seen[$1 FS $2] = 1; print; next } !(($1 FS $2) in seen)' "$d/gameservers" "$DATA/gameplaces.shared" | head -n 5000 > "$DATA/gameplaces.shared.tmp" && mv -f "$DATA/gameplaces.shared.tmp" "$DATA/gameplaces.shared"
+				echo "Took in $n game server network(s). They are under Where each game plays, on the Servers page." ;;
 			favourites) share_keep favourites; touch "$DATA/favourites"
 				n="$(awk -F'\t' -v OFS='\t' 'FILENAME == ARGV[1] { have[$1] = 1; c++; next } !($1 in have) && c < 200 { have[$1] = 1; c++; print $1, $2, $3, $4, $5 }' "$DATA/favourites" "$d/favourites" | tee -a "$DATA/favourites" | awk 'END { print NR + 0 }')"
 				echo "Added $n favourite server(s). They are on the Servers page, grouped by game." ;;
@@ -1237,7 +1275,7 @@ cmd_share_import() { # file [sections] : take in the chosen sections of a share 
 cmd_share_undo() { # put back what the last import changed
 	local u="$DATA/share.undo" f
 	[ -d "$u" ] || { echo "matchwatch: there is no import to undo" >&2; return 1; }
-	for f in games.local regions.local stay ratings.shared favourites; do
+	for f in games.local regions.local stay ratings.shared favourites gameplaces.shared; do
 		if [ -f "$u/$f" ]; then cp "$u/$f" "$DATA/$f"
 		elif [ -f "$u/$f.none" ]; then rm -f "$DATA/$f"
 		else continue; fi
@@ -1488,6 +1526,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		unfav) cmd_fav remove "$arg" ;;
 		shareundo) cmd_share_undo ;;
 		shareforget) cmd_share_forget "$arg" ;;
+		shareforgetgs) rm -f "$DATA/gameplaces.shared"; export_json; echo "Removed the game servers other people shared with you. What your own router has learned is kept." ;;
 		forgetmatch) cmd_forget match "$arg" ;;
 		forgetserver) cmd_forget server "$arg" ;;
 		forgetdc) cmd_forget dc "$arg" ;;
@@ -2872,6 +2911,55 @@ function region_of(lat, lon,   i, best, bd, d) {
 function srating(ip) { return (S_rn[ip] > 0) ? int(S_rsum[ip] / S_rn[ip] + 0.5) : int(S_all[ip] / S_n[ip] + 0.5) }
 
 END {
+	# Where each game plays: one entry per game and server network (a /24), from your matches, from the
+	# servers the game tried without your playing on them (TRIED), and from what others shared (SHARED).
+	#   ARG = share : game|network|city|country|host|lat|lon|matches|rating   (your own only, for a share file)
+	#   ARG = json  : grouped by game and place, for the dashboard; "in" says whether the place is in the stay pool
+	if (MODE == "gameplaces") {
+		for (i = 1; i <= n; i++) {
+			if (!is_game_port(R[i, 6], R[i, 9] " " R[i, 10])) continue
+			g = game_of(R[i, 6], R[i, 9] " " R[i, 10]); k = g SUBSEP p24(R[i, 5])
+			if (!(k in GPs)) { GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 1 }
+			GPcity[k] = R[i, 8]; GPcc[k] = R[i, 7]; GPorg[k] = R[i, 9]; if (known(R[i, 40]) && known(R[i, 41])) { GPla[k] = R[i, 40]; GPlo[k] = R[i, 41] }
+			GPn[k]++; if (R[i, 37] == 1) { GPrn[k]++; GPrs[k] += R[i, 36] }
+		}
+		if (TRIED != "") { while ((getline l < TRIED) > 0) {
+			if (split(l, t, "\t") < 8 || !is_game_port(t[2], t[5] " " t[6])) continue
+			g = game_of(t[2], t[5] " " t[6]); k = g SUBSEP t[1]
+			if (!(k in GPs)) { GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 1; GPcity[k] = t[3]; GPcc[k] = t[4]; GPorg[k] = t[5]; if (known(t[7]) && known(t[8])) { GPla[k] = t[7]; GPlo[k] = t[8] } }
+		} close(TRIED) }
+		if (ARG == "share") {
+			for (i = 1; i <= ngp; i++) { k = gpo[i]; split(k, a, SUBSEP)
+				printf "%s|%s.0/24|%s|%s|%s|%s|%s|%d|%s\n", sc(a[1]), a[2], sc(GPcity[k]), (GPcc[k] ~ /^[A-Z][A-Z]$/ ? GPcc[k] : "-"), sc(GPorg[k]), ((k in GPla) ? GPla[k] : "-"), ((k in GPlo) ? GPlo[k] : "-"), GPn[k], (GPrn[k] ? sprintf("%.0f", GPrs[k] / GPrn[k]) : "")
+			}
+			exit
+		}
+		if (SHARED != "") { while ((getline l < SHARED) > 0) {
+			if (split(l, t, "\t") < 9) continue
+			k = t[1] SUBSEP substr(t[2], 1, length(t[2]) - 5)
+			if (k in GPs) continue
+			GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 0; GPcity[k] = t[3]; GPcc[k] = t[4]; GPorg[k] = t[5]; if (known(t[6]) && known(t[7])) { GPla[k] = t[6]; GPlo[k] = t[7] }
+			GPn[k] = t[8] + 0; if (t[9] != "") { GPrn[k] = 1; GPrs[k] = t[9] + 0 }
+		} close(SHARED) }
+		# group the networks by game, city, country and who shared them
+		for (i = 1; i <= ngp; i++) {
+			k = gpo[i]; split(k, a, SUBSEP)
+			gk = a[1] SUBSEP GPcity[k] SUBSEP GPcc[k] SUBSEP GPm[k]
+			if (!(gk in GG)) { GG[gk] = 1; ggo[++ngg] = gk; Gg[gk] = a[1]; Gcity[gk] = GPcity[k]; Gcc[gk] = GPcc[k]; Gorg[gk] = GPorg[k]; Gm[gk] = GPm[k] }
+			Gnet[gk]++; if (Gnet[gk] <= 12) Gnets[gk] = Gnets[gk] (Gnet[gk] > 1 ? "," : "") "\"" a[2] ".0/24\""
+			Gn[gk] += GPn[k]; if (GPrn[k]) { Grn[gk] += GPrn[k]; Grs[gk] += GPrs[k] }
+			if (k in GPla) { Gla[gk] = GPla[k]; Glo[gk] = GPlo[k] }
+		}
+		printf "["
+		for (i = 1; i <= ngg; i++) {
+			gk = ggo[i]; pl = (nsp > 0) ? place_of(((gk in Gla) ? Gla[gk] : "-"), ((gk in Glo) ? Glo[gk] : "-"), Gcc[gk]) : ""
+			printf "%s{\"game\":%s,\"city\":%s,\"cc\":%s,\"org\":%s,\"networks\":%d,\"nets\":[%s],\"matches\":%d,\"rating\":%s,\"mine\":%s,\"in\":%s}", (i > 1 ? "," : ""),
+				q(Gg[gk]), q(Gcity[gk] == "-" ? "" : Gcity[gk]), q(Gcc[gk] == "-" ? "" : Gcc[gk]), q(Gorg[gk] == "-" ? "" : Gorg[gk]), Gnet[gk], Gnets[gk], Gn[gk],
+				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl > 0 ? "true" : "false"))
+		}
+		print "]"
+		exit
+	}
 	# servers for a share file: server|game|city|country|host|rating|matches|latitude|longitude, favourites only
 	# (ARG = favourites) or every server with a tenth field saying whether it is a favourite (ARG = allservers)
 	if (MODE == "share_servers") {
@@ -3407,7 +3495,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget fav unfav forgetmatch forgetserver forgetdc"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc"
 
 reply() { # ok(0|1) text
 	json_init
@@ -3529,7 +3617,7 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {} };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [] };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 
 // ---------- small helpers
@@ -3725,6 +3813,48 @@ function namePrompt(redraw) {
 		box.appendChild(bn);
 	});
 	return box;
+}
+
+// ---------- where each game plays: learned from your matches, from servers the game tried, and from share files
+var gpGame = "", gpAll = false;
+function gamePlacesSection() {
+	var box = h("div");
+	box.appendChild(h("h2", "Where each game plays"));
+	var rows = D.gp || [];
+	if (!rows.length) { box.appendChild(h("p", { cls: "empty", text: "Nothing learned yet. Each match, and each server a game tries, adds to this. Share files from other players add the rest of the world." })); return box; }
+	var games = []; rows.forEach(function (r) { if (games.indexOf(r.game) < 0) games.push(r.game); }); games.sort();
+	if (games.indexOf(gpGame) < 0) gpGame = "";
+	var staying = (D.info.stays || []).length > 0;
+	if (games.length > 1) {
+		var sel = h("select", { "aria-label": "Show one game" }); sel.appendChild(h("option", { value: "", text: "Every game" }));
+		games.forEach(function (g) { var o = h("option", { value: g, text: g }); if (g === gpGame) o.selected = true; sel.appendChild(o); });
+		sel.addEventListener("change", function () { var y = window.scrollY; gpGame = sel.value; gpAll = false; pageServers(); window.scrollTo(0, y); });
+		box.appendChild(h("div", { cls: "stayform" }, sel));
+	}
+	var list = rows.filter(function (r) { return !gpGame || r.game === gpGame; }).sort(function (a, b) { return a.game < b.game ? -1 : a.game > b.game ? 1 : (b.matches - a.matches) || (b.networks - a.networks); });
+	var heads = [["Game"], ["Where"], ["Hosted by"], ["Server networks", "num"], ["Matches", "num"], ["Rating", "num"], ["Known from"]];
+	if (staying) heads.push(["In your places"]);
+	var t = table(heads);
+	(gpAll ? list : list.slice(0, 12)).forEach(function (r) {
+		var net = h("td", { cls: "num", text: String(r.networks) }); net.title = (r.nets || []).join(", ") + (r.networks > (r.nets || []).length ? " and more" : "");
+		var cells = [[r.game], [place(r) || "Place not known"], [r.org || ""], net, [r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.mine ? (r.matches ? "Your matches" : "Tried by the game") : "Shared with you"]];
+		if (staying) cells.push([r.in == null ? "Not known" : r.in ? "Yes" : "No"]);
+		t.lastChild.appendChild(row(cells));
+	});
+	box.appendChild(h("div", { cls: "tablewrap" }, t));
+	var btns = h("div", { cls: "actions" });
+	if (list.length > 12) { var more = h("button", { type: "button", text: gpAll ? "Show fewer" : "Show all " + list.length }); more.addEventListener("click", function () { var y = window.scrollY; gpAll = !gpAll; pageServers(); window.scrollTo(0, y); }); btns.appendChild(more); }
+	if (rows.some(function (r) { return !r.mine; })) btns.appendChild(act("Remove what others shared", "shareforgetgs", null, { danger: true, confirm: "Confirm: remove shared game servers" }));
+	if (btns.childNodes.length) box.appendChild(btns);
+	box.appendChild(h("p", { cls: "note", text: "One row per game and place. A server network is a block of 256 addresses; hover the number to see them. Your own router only learns the places a game offers you, which are mostly near home. To learn the rest of the world, take in share files from players elsewhere, and pass yours on from Tools, Share." }));
+	return box;
+}
+// for a game with no published host list: is anything known for it inside the places being stayed on?
+function gameCoverNotes() {
+	var by = {}, out = [];
+	(D.gp || []).forEach(function (r) { var g = by[r.game] || (by[r.game] = { inn: 0, places: [] }); if (r.in) g.inn++; else { var p = place(r); if (p && g.places.indexOf(p) < 0) g.places.push(p); } });
+	Object.keys(by).sort().forEach(function (g) { if (!by[g].inn && by[g].places.length) out.push(g + ": no server known in your places. Known in " + by[g].places.slice(0, 5).join("; ") + (by[g].places.length > 5 ? " and " + (by[g].places.length - 5) + " more" : "") + "."); });
+	return out;
 }
 
 // ---------- favourites: servers you want to find again, grouped by the game played on them
@@ -4046,6 +4176,7 @@ function pageServers() {
 				(c.suggest || []).forEach(function (s) { w.appendChild(act("Add " + s.name + " (about " + s.km + " km)", "staysuggest", s.n, { solid: true })); });
 				cov.appendChild(w);
 			}
+			gameCoverNotes().forEach(function (s) { cov.appendChild(h("p", { cls: "note low", text: s })); });
 			cov.appendChild(h("p", { cls: "note", text: (c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places." }));
 		});
 		if (stays.length > 1) {
@@ -4077,6 +4208,7 @@ function pageServers() {
 	view.appendChild(h("p", { cls: "note", text: "Type one place or several, separated by commas: cities, countries, or these areas: uk-ireland, western-europe, southern-europe, northern-europe, eastern-europe, europe, north-america, south-america, middle-east, asia, oceania. A city allows servers within about 150 km of it; a country or area allows any server located there. Several places make one pool, and the game picks among them, which keeps queues shorter than a single place." }));
 	}
 	view.appendChild(favSection());
+	view.appendChild(gamePlacesSection());
 	view.appendChild(h("h2", "Datacentres, worst first"));
 	if (!D.dcs.length) view.appendChild(h("p", { cls: "empty", text: "No datacentres seen yet." }));
 	else {
@@ -4164,7 +4296,7 @@ function downloadHistory() {
 	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
 }
 // ---------- share files: game names, places, ratings, ping hosts and thresholds as a text file to pass on
-var SHARE = [["games", "1", "Game names"], ["favourites", "6", "Favourite servers"], ["places", "3", "Places you stay on"], ["ratings", "4", "Network ratings"], ["regions", "2", "Ping hosts for the regions table"], ["settings", "5", "Thresholds"], ["favplaces", "7", "Stay near those servers"]];
+var SHARE = [["games", "1", "Game names"], ["favourites", "6", "Favourite servers"], ["places", "3", "Places you stay on"], ["gameservers", "9", "Game servers by place"], ["ratings", "4", "Network ratings"], ["regions", "2", "Ping hosts for the regions table"], ["settings", "5", "Thresholds"], ["favplaces", "7", "Stay near those servers"]];
 function saveText(name, text) {
 	var a = document.createElement("a");
 	a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
@@ -4199,11 +4331,15 @@ function shareItem(sec, line) {
 		o.text = (o.fav ? "\u2605 " : "") + o.game + ": " + f[0] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[4] && f[4].trim() ? ", " + f[4].trim() : "") + (o.avg == null ? "" : ": rated " + o.avg + " over " + o.n + " match" + (o.n === 1 ? "" : "es"));
 		o.on = o.fav;
 	}
+	else if (sec === "gameservers") {
+		o.game = f[0]; o.city = f[2] || ""; o.cc = f[3] && f[3] !== "-" ? f[3] : ""; o.n = +f[7] || 0; o.avg = f[8] === "" || f[8] == null ? null : +f[8];
+		o.text = o.game + ": " + f[1] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[4] && f[4].trim() ? ", " + f[4].trim() : "") + (o.n ? ": " + o.n + " match" + (o.n === 1 ? "" : "es") + (o.avg == null ? "" : ", rated " + o.avg) : ": tried by the game, not played on");
+	}
 	else if (sec === "settings") { o.text = (SETNAME[f[0]] || f[0]) + ": " + f[1]; o.on = false; }
 	return o;
 }
 // the picker: one block per section, a tick per item, quick picks, a note, and a preview that is exactly the file
-var ONE = { games: "game name", favourites: "favourite server", regions: "ping host", places: "place", ratings: "network rating", settings: "threshold" };
+var ONE = { games: "game name", gameservers: "game server network", favourites: "favourite server", regions: "ping host", places: "place", ratings: "network rating", settings: "threshold" };
 function sharePicker(text, pickBox, made) {
 	var head = [], notes = {}, items = {}, sec = "", total = 0;
 	text.split("\n").forEach(function (l) {
@@ -4247,16 +4383,16 @@ function sharePicker(text, pickBox, made) {
 		counts[x[0]] = h("span", { cls: "pickcount" });
 		var inner = h("div"), blk = h("details", { cls: "pick" }, h("summary", { cls: "pickhead" }, h("b", x[2]), counts[x[0]]), inner);
 		inner.appendChild(h("div", { cls: "quick" }, all, none));
-		if ((x[0] === "ratings" || x[0] === "favourites") && its.length > 1) {
+		if ((x[0] === "ratings" || x[0] === "favourites" || x[0] === "gameservers") && its.length > 1) {
 			// quick picks: tick by several things at once; single ticks can still be changed after
-			var isFavs = x[0] === "favourites", sels = [];
+			var isFavs = x[0] === "favourites", byGame = isFavs || x[0] === "gameservers", sels = [];
 			var mk = function (label, opts, val) { var s = h("select", { "aria-label": label }); opts.forEach(function (o) { s.appendChild(h("option", { value: o[0], text: o[1] })); }); s.value = val; sels.push(s); return s; };
 			var uniq = function (key, pre, word) { var seen = []; its.forEach(function (i) { if (i[key] && seen.indexOf(i[key]) < 0) seen.push(i[key]); }); return seen.sort().map(function (v) { return [pre + v, word + v]; }); };
 			var qf = isFavs ? mk("Pick favourites or every server", [["fav", "My favourites"], ["", "Every server I have played on"]], its.some(function (i) { return i.fav; }) ? "fav" : "") : null;
-			var qg = isFavs ? mk("Pick by game", [["", "Any game"]].concat(uniq("game", "", "")), "") : null;
+			var qg = byGame ? mk("Pick by game", [["", "Any game"]].concat(uniq("game", "", "")), "") : null;
 			var qr = mk("Pick by rating", [["", "Any rating"], ["poor", "Poor: under 50"], ["fair", "Fair or worse: under 70"], ["good", "Good: 70 or more"], ["great", "Excellent: 85 or more"]], "");
 			var qp = mk("Pick by place", [["", "Anywhere"]].concat(uniq("cc", "c:", "Country: "), uniq("city", "t:", "City: ")), "");
-			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], isFavs ? "0" : "2");
+			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["1", "Played on at least once"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], byGame ? "0" : "2");
 			var hid = h("p", { cls: "note" });
 			var apply = function () {
 				var out = 0, some = 0;
@@ -4287,7 +4423,7 @@ function sharePicker(text, pickBox, made) {
 }
 function shareSection() {
 	var box = h("div");
-	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, your favourite servers for each game, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. You pick what goes in, item by item. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
+	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, where each game has servers, your favourite servers for each game, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. You pick what goes in, item by item. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
 
 	// ---- make a file: the router lists everything that could be shared, and every item gets its own tick
 	box.appendChild(h("h3", "Make a share file"));
@@ -4296,7 +4432,7 @@ function shareSection() {
 	box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(pickBox); box.appendChild(made);
 	mk.addEventListener("click", function () {
 		mk.disabled = true;
-		send({ action: "shareexport", arg: "123458" }).then(function (j) {
+		send({ action: "shareexport", arg: "1234589" }).then(function (j) {
 			mk.disabled = false;
 			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
 			mk.textContent = "Start again";
@@ -4568,6 +4704,7 @@ function tick() { get("status.json", function (st) { D.st = st; setState(); upda
 function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep, textarea.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
+	get("gameplaces.json", function (x) { D.gp = x || []; });
 	var left = 6, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
@@ -4578,6 +4715,7 @@ function refresh(force) {
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", function () { updateLive(); if (page === "match" && pageMatch.repaint) pageMatch.repaint(); });
+get("gameplaces.json", function (x) { D.gp = x || []; });
 var first = 6, boot = function () { if (--first === 0) route(); };
 get("history.json", function (x) { D.hist = x || []; boot(); }); get("servers.json", function (x) { D.servers = x || []; boot(); }); get("datacentres.json", function (x) { D.dcs = x || []; boot(); });
 get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.json", function (x) { D.info = x || {}; boot(); }); get("favourites.json", function (x) { setFavs(x); boot(); });

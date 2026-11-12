@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.20.1.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.21.0.
 
 ## Layout
 
@@ -38,6 +38,8 @@ QoSmate match record (0.18.0): `qm_loop` (started by `_probe_start`) saves cake'
 Unnamed ports (0.18.0): a stream on a port with no label is kept only if at least 120 s were analysed and under 15% of updates were missing; otherwise it is dropped at `session_end`, logged, and listed in `skipped.json` with a reason. The 15% line comes from a single real example (a 42 s stream at 28%), so expect to tune it. No match-started alert is sent for an unnamed port.
 
 Whole ranges (0.20.0): with stay mode on, `stay_ranges` (always started in the background; the first run does about forty city lookups) downloads the lists in `geofeeds.list` and `geofeeds.local` into `ranges.cache`, places each city with Open-Meteo (`cities.cache`), and loads every range outside the pool into the nftables set `away`. Two rules refuse UDP between `device_ip` and that set; `nft_ready` rebuilds the table when the device changes. `cmd_lobby` returns early for a server already in `away`. Seen on the router: the Vultr list downloads, the city lookup takes a country code, and an interval set with `auto-merge` accepts overlapping ranges. `ranges_cover` writes `coverage.json`: how many known ranges each place in the pool holds, and for a place with none the three nearest cities that have servers (`coverage.sug`, added with the `staysuggest` action; country centres come from `countries.list`). The owner chose a country with no servers and had no way to know. Not yet seen: whether the game then finds a match faster.
+
+Where each game plays (0.21.0): `report.awk` MODE `gameplaces` groups game and /24 from `sessions.tsv`, from `tried` (written by `tried_note` in `cmd_lobby`: network, port, city, country, host, AS, position, count, last seen; 2,000 lines at most) and, for the dashboard only, from `gameplaces.shared` (imported, 5,000 lines at most). `ARG=share` prints your own for the `[gameservers]` share section; `ARG=json` writes `gameplaces.json` with an `in` flag when a stay pool is set. Shared entries never reach the `blocked` or `away` sets. `sessions.tsv` is trimmed to its newest 5,000 lines in `cmd_after`; the owner wants total storage well under 20 to 30 MB for small routers.
 
 ## Rules that have bitten already
 

@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.20.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.21.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -218,6 +218,7 @@ Make one, or use one, under **Share with other players** on the Tools page.
 |---|---|---|
 | Game names | The games you have named, with their server ports and, where needed, who hosts them | Adds them to your own names, so those games are recognised. A name you gave yourself always wins |
 | Places you stay on | Your pool of cities, countries and areas | Adds them to your pool and turns staying on |
+| Game servers by place | Where each game has put you or tried to: the game, the server network, its city, country and host, your matches there and their rating | Adds them to **Where each game plays** on the Servers page, marked "Shared with you". Nothing is blocked or allowed because of them |
 | Favourite servers | Servers you have starred, each with its game, where it is and how it has rated for you. You can also include servers you have not starred, picked by game, rating, place or number of matches | Adds them to the other person's favourites under the same games. They can also choose **Stay near those servers**, which adds the servers' cities to the places they stay on |
 | Network ratings | How each server network has rated for you: number of matches and average rating | Shows them in a table on the Tools page, and the lobby alert mentions one when you land on that network for the first time |
 | Ping hosts | Extra test hosts for the regions table, for hosting companies other than Vultr | Adds them to the regions table and measures them |
@@ -324,6 +325,18 @@ Ratings, the regions table, the hour chart and the recap are rebuilt without wha
 A favourite cannot be removed by accident. A favourite server shows **Kept** where Remove would be, and removing its datacentre is refused. Take the star off first.
 
 From the command line: `matchwatch forget match <start time>`, `forget server <ip>`, `forget dc <number>`.
+
+## Where each game plays
+
+MatchWatch keeps a list of where every game has servers. It builds it from your matches and from the servers a game reaches for without your playing on them, and it shows on the Servers page: one row per game and place, with the host, how many server networks are known there, your matches and rating, and, when you are staying on places, whether that place is in your pool.
+
+Your own router only learns the places a game offers you, which are mostly near home. The rest of the world comes from other players: the **Game servers by place** section of a share file carries the game, the server network, its city, country and host, and how it rated. Take in a file from someone in another region and their places appear in your list, marked "Shared with you". Pass yours on and they learn yours. See [Sharing with other players](#sharing-with-other-players).
+
+- When you stay on places, a game with nothing known inside them is called out, with where it is known to have servers.
+- Shared entries are information. Nothing is blocked or allowed because of them.
+- A share file holds public game server networks only, and nothing about you.
+
+Storage stays small. The list needs no log of its own: it is worked out from the match history, plus one short line per server network a game tried (at most 2,000) and what you have imported (at most 5,000 networks, about 400 KB). The match history itself is kept to the newest 5,000 matches, under 2 MB.
 
 ## Favourites
 

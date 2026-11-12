@@ -20,7 +20,7 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {} };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [] };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 
 // ---------- small helpers
@@ -216,6 +216,48 @@ function namePrompt(redraw) {
 		box.appendChild(bn);
 	});
 	return box;
+}
+
+// ---------- where each game plays: learned from your matches, from servers the game tried, and from share files
+var gpGame = "", gpAll = false;
+function gamePlacesSection() {
+	var box = h("div");
+	box.appendChild(h("h2", "Where each game plays"));
+	var rows = D.gp || [];
+	if (!rows.length) { box.appendChild(h("p", { cls: "empty", text: "Nothing learned yet. Each match, and each server a game tries, adds to this. Share files from other players add the rest of the world." })); return box; }
+	var games = []; rows.forEach(function (r) { if (games.indexOf(r.game) < 0) games.push(r.game); }); games.sort();
+	if (games.indexOf(gpGame) < 0) gpGame = "";
+	var staying = (D.info.stays || []).length > 0;
+	if (games.length > 1) {
+		var sel = h("select", { "aria-label": "Show one game" }); sel.appendChild(h("option", { value: "", text: "Every game" }));
+		games.forEach(function (g) { var o = h("option", { value: g, text: g }); if (g === gpGame) o.selected = true; sel.appendChild(o); });
+		sel.addEventListener("change", function () { var y = window.scrollY; gpGame = sel.value; gpAll = false; pageServers(); window.scrollTo(0, y); });
+		box.appendChild(h("div", { cls: "stayform" }, sel));
+	}
+	var list = rows.filter(function (r) { return !gpGame || r.game === gpGame; }).sort(function (a, b) { return a.game < b.game ? -1 : a.game > b.game ? 1 : (b.matches - a.matches) || (b.networks - a.networks); });
+	var heads = [["Game"], ["Where"], ["Hosted by"], ["Server networks", "num"], ["Matches", "num"], ["Rating", "num"], ["Known from"]];
+	if (staying) heads.push(["In your places"]);
+	var t = table(heads);
+	(gpAll ? list : list.slice(0, 12)).forEach(function (r) {
+		var net = h("td", { cls: "num", text: String(r.networks) }); net.title = (r.nets || []).join(", ") + (r.networks > (r.nets || []).length ? " and more" : "");
+		var cells = [[r.game], [place(r) || "Place not known"], [r.org || ""], net, [r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.mine ? (r.matches ? "Your matches" : "Tried by the game") : "Shared with you"]];
+		if (staying) cells.push([r.in == null ? "Not known" : r.in ? "Yes" : "No"]);
+		t.lastChild.appendChild(row(cells));
+	});
+	box.appendChild(h("div", { cls: "tablewrap" }, t));
+	var btns = h("div", { cls: "actions" });
+	if (list.length > 12) { var more = h("button", { type: "button", text: gpAll ? "Show fewer" : "Show all " + list.length }); more.addEventListener("click", function () { var y = window.scrollY; gpAll = !gpAll; pageServers(); window.scrollTo(0, y); }); btns.appendChild(more); }
+	if (rows.some(function (r) { return !r.mine; })) btns.appendChild(act("Remove what others shared", "shareforgetgs", null, { danger: true, confirm: "Confirm: remove shared game servers" }));
+	if (btns.childNodes.length) box.appendChild(btns);
+	box.appendChild(h("p", { cls: "note", text: "One row per game and place. A server network is a block of 256 addresses; hover the number to see them. Your own router only learns the places a game offers you, which are mostly near home. To learn the rest of the world, take in share files from players elsewhere, and pass yours on from Tools, Share." }));
+	return box;
+}
+// for a game with no published host list: is anything known for it inside the places being stayed on?
+function gameCoverNotes() {
+	var by = {}, out = [];
+	(D.gp || []).forEach(function (r) { var g = by[r.game] || (by[r.game] = { inn: 0, places: [] }); if (r.in) g.inn++; else { var p = place(r); if (p && g.places.indexOf(p) < 0) g.places.push(p); } });
+	Object.keys(by).sort().forEach(function (g) { if (!by[g].inn && by[g].places.length) out.push(g + ": no server known in your places. Known in " + by[g].places.slice(0, 5).join("; ") + (by[g].places.length > 5 ? " and " + (by[g].places.length - 5) + " more" : "") + "."); });
+	return out;
 }
 
 // ---------- favourites: servers you want to find again, grouped by the game played on them
@@ -537,6 +579,7 @@ function pageServers() {
 				(c.suggest || []).forEach(function (s) { w.appendChild(act("Add " + s.name + " (about " + s.km + " km)", "staysuggest", s.n, { solid: true })); });
 				cov.appendChild(w);
 			}
+			gameCoverNotes().forEach(function (s) { cov.appendChild(h("p", { cls: "note low", text: s })); });
 			cov.appendChild(h("p", { cls: "note", text: (c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places." }));
 		});
 		if (stays.length > 1) {
@@ -568,6 +611,7 @@ function pageServers() {
 	view.appendChild(h("p", { cls: "note", text: "Type one place or several, separated by commas: cities, countries, or these areas: uk-ireland, western-europe, southern-europe, northern-europe, eastern-europe, europe, north-america, south-america, middle-east, asia, oceania. A city allows servers within about 150 km of it; a country or area allows any server located there. Several places make one pool, and the game picks among them, which keeps queues shorter than a single place." }));
 	}
 	view.appendChild(favSection());
+	view.appendChild(gamePlacesSection());
 	view.appendChild(h("h2", "Datacentres, worst first"));
 	if (!D.dcs.length) view.appendChild(h("p", { cls: "empty", text: "No datacentres seen yet." }));
 	else {
@@ -655,7 +699,7 @@ function downloadHistory() {
 	setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
 }
 // ---------- share files: game names, places, ratings, ping hosts and thresholds as a text file to pass on
-var SHARE = [["games", "1", "Game names"], ["favourites", "6", "Favourite servers"], ["places", "3", "Places you stay on"], ["ratings", "4", "Network ratings"], ["regions", "2", "Ping hosts for the regions table"], ["settings", "5", "Thresholds"], ["favplaces", "7", "Stay near those servers"]];
+var SHARE = [["games", "1", "Game names"], ["favourites", "6", "Favourite servers"], ["places", "3", "Places you stay on"], ["gameservers", "9", "Game servers by place"], ["ratings", "4", "Network ratings"], ["regions", "2", "Ping hosts for the regions table"], ["settings", "5", "Thresholds"], ["favplaces", "7", "Stay near those servers"]];
 function saveText(name, text) {
 	var a = document.createElement("a");
 	a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
@@ -690,11 +734,15 @@ function shareItem(sec, line) {
 		o.text = (o.fav ? "\u2605 " : "") + o.game + ": " + f[0] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[4] && f[4].trim() ? ", " + f[4].trim() : "") + (o.avg == null ? "" : ": rated " + o.avg + " over " + o.n + " match" + (o.n === 1 ? "" : "es"));
 		o.on = o.fav;
 	}
+	else if (sec === "gameservers") {
+		o.game = f[0]; o.city = f[2] || ""; o.cc = f[3] && f[3] !== "-" ? f[3] : ""; o.n = +f[7] || 0; o.avg = f[8] === "" || f[8] == null ? null : +f[8];
+		o.text = o.game + ": " + f[1] + (o.city || o.cc ? ", " + [o.city, o.cc].filter(Boolean).join(", ") : "") + (f[4] && f[4].trim() ? ", " + f[4].trim() : "") + (o.n ? ": " + o.n + " match" + (o.n === 1 ? "" : "es") + (o.avg == null ? "" : ", rated " + o.avg) : ": tried by the game, not played on");
+	}
 	else if (sec === "settings") { o.text = (SETNAME[f[0]] || f[0]) + ": " + f[1]; o.on = false; }
 	return o;
 }
 // the picker: one block per section, a tick per item, quick picks, a note, and a preview that is exactly the file
-var ONE = { games: "game name", favourites: "favourite server", regions: "ping host", places: "place", ratings: "network rating", settings: "threshold" };
+var ONE = { games: "game name", gameservers: "game server network", favourites: "favourite server", regions: "ping host", places: "place", ratings: "network rating", settings: "threshold" };
 function sharePicker(text, pickBox, made) {
 	var head = [], notes = {}, items = {}, sec = "", total = 0;
 	text.split("\n").forEach(function (l) {
@@ -738,16 +786,16 @@ function sharePicker(text, pickBox, made) {
 		counts[x[0]] = h("span", { cls: "pickcount" });
 		var inner = h("div"), blk = h("details", { cls: "pick" }, h("summary", { cls: "pickhead" }, h("b", x[2]), counts[x[0]]), inner);
 		inner.appendChild(h("div", { cls: "quick" }, all, none));
-		if ((x[0] === "ratings" || x[0] === "favourites") && its.length > 1) {
+		if ((x[0] === "ratings" || x[0] === "favourites" || x[0] === "gameservers") && its.length > 1) {
 			// quick picks: tick by several things at once; single ticks can still be changed after
-			var isFavs = x[0] === "favourites", sels = [];
+			var isFavs = x[0] === "favourites", byGame = isFavs || x[0] === "gameservers", sels = [];
 			var mk = function (label, opts, val) { var s = h("select", { "aria-label": label }); opts.forEach(function (o) { s.appendChild(h("option", { value: o[0], text: o[1] })); }); s.value = val; sels.push(s); return s; };
 			var uniq = function (key, pre, word) { var seen = []; its.forEach(function (i) { if (i[key] && seen.indexOf(i[key]) < 0) seen.push(i[key]); }); return seen.sort().map(function (v) { return [pre + v, word + v]; }); };
 			var qf = isFavs ? mk("Pick favourites or every server", [["fav", "My favourites"], ["", "Every server I have played on"]], its.some(function (i) { return i.fav; }) ? "fav" : "") : null;
-			var qg = isFavs ? mk("Pick by game", [["", "Any game"]].concat(uniq("game", "", "")), "") : null;
+			var qg = byGame ? mk("Pick by game", [["", "Any game"]].concat(uniq("game", "", "")), "") : null;
 			var qr = mk("Pick by rating", [["", "Any rating"], ["poor", "Poor: under 50"], ["fair", "Fair or worse: under 70"], ["good", "Good: 70 or more"], ["great", "Excellent: 85 or more"]], "");
 			var qp = mk("Pick by place", [["", "Anywhere"]].concat(uniq("cc", "c:", "Country: "), uniq("city", "t:", "City: ")), "");
-			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], isFavs ? "0" : "2");
+			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["1", "Played on at least once"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], byGame ? "0" : "2");
 			var hid = h("p", { cls: "note" });
 			var apply = function () {
 				var out = 0, some = 0;
@@ -778,7 +826,7 @@ function sharePicker(text, pickBox, made) {
 }
 function shareSection() {
 	var box = h("div");
-	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, your favourite servers for each game, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. You pick what goes in, item by item. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
+	box.appendChild(h("p", { cls: "note", text: "A share file is a small text file holding things another MatchWatch user can use: the games you have named, where each game has servers, your favourite servers for each game, the places you stay on, how servers have rated for you, extra ping hosts, and your thresholds. You pick what goes in, item by item. Nothing is ever sent anywhere: you make the file, and you choose who gets it. It never holds your device, your addresses or when you played." }));
 
 	// ---- make a file: the router lists everything that could be shared, and every item gets its own tick
 	box.appendChild(h("h3", "Make a share file"));
@@ -787,7 +835,7 @@ function shareSection() {
 	box.appendChild(h("div", { cls: "actions" }, mk)); box.appendChild(pickBox); box.appendChild(made);
 	mk.addEventListener("click", function () {
 		mk.disabled = true;
-		send({ action: "shareexport", arg: "123458" }).then(function (j) {
+		send({ action: "shareexport", arg: "1234589" }).then(function (j) {
 			mk.disabled = false;
 			if (!j.ok) { toast(j.out || "That did not work.", true); return; }
 			mk.textContent = "Start again";
@@ -1059,6 +1107,7 @@ function tick() { get("status.json", function (st) { D.st = st; setState(); upda
 function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep, textarea.keep"), function (i) { return !!i.value; }); }
 function refresh(force) {
 	get("regions.json", function (x) { D.regions = x || []; });
+	get("gameplaces.json", function (x) { D.gp = x || []; });
 	var left = 6, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
@@ -1069,6 +1118,7 @@ function refresh(force) {
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", function () { updateLive(); if (page === "match" && pageMatch.repaint) pageMatch.repaint(); });
+get("gameplaces.json", function (x) { D.gp = x || []; });
 var first = 6, boot = function () { if (--first === 0) route(); };
 get("history.json", function (x) { D.hist = x || []; boot(); }); get("servers.json", function (x) { D.servers = x || []; boot(); }); get("datacentres.json", function (x) { D.dcs = x || []; boot(); });
 get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.json", function (x) { D.info = x || {}; boot(); }); get("favourites.json", function (x) { setFavs(x); boot(); });

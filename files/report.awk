@@ -116,6 +116,55 @@ function region_of(lat, lon,   i, best, bd, d) {
 function srating(ip) { return (S_rn[ip] > 0) ? int(S_rsum[ip] / S_rn[ip] + 0.5) : int(S_all[ip] / S_n[ip] + 0.5) }
 
 END {
+	# Where each game plays: one entry per game and server network (a /24), from your matches, from the
+	# servers the game tried without your playing on them (TRIED), and from what others shared (SHARED).
+	#   ARG = share : game|network|city|country|host|lat|lon|matches|rating   (your own only, for a share file)
+	#   ARG = json  : grouped by game and place, for the dashboard; "in" says whether the place is in the stay pool
+	if (MODE == "gameplaces") {
+		for (i = 1; i <= n; i++) {
+			if (!is_game_port(R[i, 6], R[i, 9] " " R[i, 10])) continue
+			g = game_of(R[i, 6], R[i, 9] " " R[i, 10]); k = g SUBSEP p24(R[i, 5])
+			if (!(k in GPs)) { GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 1 }
+			GPcity[k] = R[i, 8]; GPcc[k] = R[i, 7]; GPorg[k] = R[i, 9]; if (known(R[i, 40]) && known(R[i, 41])) { GPla[k] = R[i, 40]; GPlo[k] = R[i, 41] }
+			GPn[k]++; if (R[i, 37] == 1) { GPrn[k]++; GPrs[k] += R[i, 36] }
+		}
+		if (TRIED != "") { while ((getline l < TRIED) > 0) {
+			if (split(l, t, "\t") < 8 || !is_game_port(t[2], t[5] " " t[6])) continue
+			g = game_of(t[2], t[5] " " t[6]); k = g SUBSEP t[1]
+			if (!(k in GPs)) { GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 1; GPcity[k] = t[3]; GPcc[k] = t[4]; GPorg[k] = t[5]; if (known(t[7]) && known(t[8])) { GPla[k] = t[7]; GPlo[k] = t[8] } }
+		} close(TRIED) }
+		if (ARG == "share") {
+			for (i = 1; i <= ngp; i++) { k = gpo[i]; split(k, a, SUBSEP)
+				printf "%s|%s.0/24|%s|%s|%s|%s|%s|%d|%s\n", sc(a[1]), a[2], sc(GPcity[k]), (GPcc[k] ~ /^[A-Z][A-Z]$/ ? GPcc[k] : "-"), sc(GPorg[k]), ((k in GPla) ? GPla[k] : "-"), ((k in GPlo) ? GPlo[k] : "-"), GPn[k], (GPrn[k] ? sprintf("%.0f", GPrs[k] / GPrn[k]) : "")
+			}
+			exit
+		}
+		if (SHARED != "") { while ((getline l < SHARED) > 0) {
+			if (split(l, t, "\t") < 9) continue
+			k = t[1] SUBSEP substr(t[2], 1, length(t[2]) - 5)
+			if (k in GPs) continue
+			GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 0; GPcity[k] = t[3]; GPcc[k] = t[4]; GPorg[k] = t[5]; if (known(t[6]) && known(t[7])) { GPla[k] = t[6]; GPlo[k] = t[7] }
+			GPn[k] = t[8] + 0; if (t[9] != "") { GPrn[k] = 1; GPrs[k] = t[9] + 0 }
+		} close(SHARED) }
+		# group the networks by game, city, country and who shared them
+		for (i = 1; i <= ngp; i++) {
+			k = gpo[i]; split(k, a, SUBSEP)
+			gk = a[1] SUBSEP GPcity[k] SUBSEP GPcc[k] SUBSEP GPm[k]
+			if (!(gk in GG)) { GG[gk] = 1; ggo[++ngg] = gk; Gg[gk] = a[1]; Gcity[gk] = GPcity[k]; Gcc[gk] = GPcc[k]; Gorg[gk] = GPorg[k]; Gm[gk] = GPm[k] }
+			Gnet[gk]++; if (Gnet[gk] <= 12) Gnets[gk] = Gnets[gk] (Gnet[gk] > 1 ? "," : "") "\"" a[2] ".0/24\""
+			Gn[gk] += GPn[k]; if (GPrn[k]) { Grn[gk] += GPrn[k]; Grs[gk] += GPrs[k] }
+			if (k in GPla) { Gla[gk] = GPla[k]; Glo[gk] = GPlo[k] }
+		}
+		printf "["
+		for (i = 1; i <= ngg; i++) {
+			gk = ggo[i]; pl = (nsp > 0) ? place_of(((gk in Gla) ? Gla[gk] : "-"), ((gk in Glo) ? Glo[gk] : "-"), Gcc[gk]) : ""
+			printf "%s{\"game\":%s,\"city\":%s,\"cc\":%s,\"org\":%s,\"networks\":%d,\"nets\":[%s],\"matches\":%d,\"rating\":%s,\"mine\":%s,\"in\":%s}", (i > 1 ? "," : ""),
+				q(Gg[gk]), q(Gcity[gk] == "-" ? "" : Gcity[gk]), q(Gcc[gk] == "-" ? "" : Gcc[gk]), q(Gorg[gk] == "-" ? "" : Gorg[gk]), Gnet[gk], Gnets[gk], Gn[gk],
+				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl > 0 ? "true" : "false"))
+		}
+		print "]"
+		exit
+	}
 	# servers for a share file: server|game|city|country|host|rating|matches|latitude|longitude, favourites only
 	# (ARG = favourites) or every server with a tenth field saying whether it is a favourite (ARG = allservers)
 	if (MODE == "share_servers") {
