@@ -91,25 +91,21 @@ If your router runs its maker's own firmware, check whether OpenWrt supports it 
 
 ### Install
 
-1. SSH to the router and download the installer:
+SSH to the router and run one command:
 
-   ```sh
-   uclient-fetch -O /tmp/matchwatch-install.sh https://raw.githubusercontent.com/ItsGix/matchwatch/main/dist/matchwatch-install.sh
-   ```
+```sh
+uclient-fetch -O /tmp/matchwatch-install.sh https://raw.githubusercontent.com/ItsGix/matchwatch/main/dist/matchwatch-install.sh && sh /tmp/matchwatch-install.sh
+```
 
-2. Run it with your gaming PC's or console's IP address:
+That downloads the installer and runs it. It installs what is missing, starts MatchWatch and checks it can see traffic. Then, in LuCI:
 
-   ```sh
-   sh /tmp/matchwatch-install.sh 192.168.1.50
-   ```
-
-   Leave the address off to watch every device, or choose the device later in LuCI.
-
-3. Log out of LuCI and back in, then open **Services → MatchWatch**. The menu entry only appears after a fresh login.
-
-4. Give your gaming device a fixed address in LuCI under Network → DHCP and DNS → Static Leases, so MatchWatch does not lose track of it.
+1. Log out and back in, and open **Services → MatchWatch**. The menu entry only appears after a fresh login.
+2. On the **Settings** tab, set **Device to watch** to your gaming PC or console. Until you do, MatchWatch watches every device.
+3. Give that device a fixed address under Network → DHCP and DNS → Static Leases, so MatchWatch does not lose track of it.
 
 Then play a match. It shows up on the Live page within about ten seconds.
+
+To choose the device at install time instead, add its address to the end of the command: `... && sh /tmp/matchwatch-install.sh 192.168.1.50`.
 
 If the router cannot download the file, fetch [`dist/matchwatch-install.sh`](dist/matchwatch-install.sh) on a computer and copy it over with `scp matchwatch-install.sh root@192.168.1.1:/tmp/`.
 
