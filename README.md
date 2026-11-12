@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.17.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.17.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -21,7 +21,10 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Keeps a history with a full report and chart for each match, and ratings per server and datacentre.
 - Has an "I felt that" button: press it when something feels off and it shows what the network was doing.
 - Can block bad servers or datacentres, or keep you to a pool of places you choose.
-- Recognises around thirty popular games, and asks you to name any it does not know.
+- Keeps your favourite servers, grouped by game, and never blocks one automatically.
+- Recognises around thirty popular games, asks you to name any it does not know, and lets you add your own by port.
+- Lets you remove any match, server or datacentre from its records, with favourites protected.
+- Makes share files you can pass to other players: game names, favourite servers, places, ratings and thresholds, picked item by item. Nothing is ever uploaded.
 - Leaves voice chat alone: Discord and other calls are not recorded and can never be blocked.
 - Can alert your phone through ntfy, including the moment a match starts, for when you have stepped away during a queue.
 - Can test your line before you queue, and check that QoSmate is prioritising your game.
@@ -95,8 +98,8 @@ keeps your history and settings. Use `purge` instead of `remove` to delete those
 
 - **Live**: the match in progress, with ping, update rate, jitter, late and missing updates, freezes, your PC's send rate and pauses, a two-minute chart, and the "I felt that" button. When the game starts connecting you somewhere, a banner says where, how far, and how that server has rated.
 - **Last match**: the full report for one match: verdict, the four links in the chain, a chart of the whole match, every figure, the route trace and your marks.
-- **Matches**: every recorded match, your latest session in a sentence, and ratings by hour of the day.
-- **Servers**: your favourites by game, then datacentres, regions and servers with their ratings, and buttons to favourite, block, unblock or stay on them.
+- **Matches**: every recorded match, your latest session in a sentence, and ratings by hour of the day. Flags is how many moments you marked with "I felt that" in that match; the report lists them. Each row has a Remove button.
+- **Servers**: your favourites by game, then datacentres, regions and servers with their ratings, and buttons to favourite, block, unblock, remove or stay on them.
 - **Tools**: checks and utilities, listed under [Tools](#tools) below.
 
 ### Settings
@@ -148,8 +151,10 @@ The Tools page has four tabs: Checks, Games, Share, and Data and settings. Each 
 - **Send a test alert.** Sends one message to your phone to prove the alerts address works.
 - **Route to a server.** Traces the route to any server in your history, to compare with the route in a match report.
 - **Name a game.** Gives an unrecognised game a name. Every match on that server port, past and future, then shows it, and staying on places, the lobby alert and automatic blocking start to cover it.
+- **Add a game.** Adds a game by its server port or a range, before you have played a match on it, or marks a port as not a game. See [Games it does not recognise](#games-it-does-not-recognise).
+- **Your games.** Lists every game you have added, named or imported, each with a Remove button.
 - **Skipped as voice chat.** Lists streams MatchWatch took for voice chat in the last six hours, so you can name one as a game if it got that wrong.
-- **Share with other players.** Makes a share file from your game names, places, server ratings, ping hosts and thresholds, or takes one in. See [Sharing with other players](#sharing-with-other-players).
+- **Share with other players.** Makes a share file from your game names, favourite servers, places, ratings, ping hosts and thresholds, or takes one in. See [Sharing with other players](#sharing-with-other-players).
 - **Match history and Clear all history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
 - **QoSmate priority.** Needs [QoSmate](https://github.com/hudra0/qosmate) installed; without it the tool says so and links to it. See [QoSmate check and fix](#qosmate-check-and-fix).

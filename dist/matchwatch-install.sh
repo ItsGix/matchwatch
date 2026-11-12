@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.17.0"
+VERSION="0.17.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -3585,14 +3585,14 @@ function pageMatches() {
 		sel.addEventListener("change", function () { gameFilter = sel.value; pageMatches(); });
 		view.appendChild(h("div", { cls: "stayform" }, sel));
 	} else gameFilter = "";
-	view.appendChild(h("p", { cls: "sub", text: "Select a match for its full report." }));
-	var heads = [["When"], ["Where"], ["Server"], ["Length"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Missing %", "num"], ["Overall", "num"], ["Finding"], ["You flagged"], ["", ""]];
+	view.appendChild(h("p", { cls: "sub", text: "Select a match for its full report. Flags is how many moments you marked with \"I felt that\"." }));
+	var heads = [["When"], ["Where"], ["Server"], ["Length"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Missing %", "num"], ["Overall", "num"], ["Finding"], ["Flags", "num"], ["", ""]];
 	heads.splice(1, 0, ["Game"]);
 	var t = table(heads);
 	D.hist.forEach(function (m) {
 		if (gameFilter && m.game !== gameFilter) return;
 		if (hourFilter >= 0 && hourOf(m) !== hourFilter) return;
-		var cells = [[when(m.start)], [place(m)], [m.ip], [mins(m.dur)], [m.ping == null ? "n/a" : fmt(m.ping, 1), "num"], [fmt(m.jit, 2), "num"], [fmt(m.lost, 2), "num"], [String(m.overall), "num s " + cls(m.overall)], [FINDING[m.code] || m.code], [m.marks ? m.marksum : ""]];
+		var cells = [[when(m.start)], [place(m)], [m.ip], [mins(m.dur)], [m.ping == null ? "n/a" : fmt(m.ping, 1), "num"], [fmt(m.jit, 2), "num"], [fmt(m.lost, 2), "num"], [String(m.overall), "num s " + cls(m.overall)], [FINDING[m.code] || m.code], (function () { var td = h("td", { cls: "num", text: m.marks ? String(m.marks) : "" }); if (m.marks) td.title = "Moments you flagged: " + m.marksum + ". The match report has the detail."; return td; })()];
 		cells.splice(1, 0, [m.game || ""]);
 		var rm = h("td", { cls: "act" }); rm.appendChild(act("Remove", "forgetmatch", m.start, { confirm: "Confirm: remove this match" })); cells.push(rm);
 		var tr = row(cells);
