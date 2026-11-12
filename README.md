@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.25.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.26.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -115,7 +115,7 @@ If the router cannot download the file, fetch [`dist/matchwatch-install.sh`](dis
 
 Open **Tools → Data and settings** and press **Check for an update**. If there is a newer version, **Update now** downloads the installer from this repository, checks it arrived whole against a published checksum, and runs it. The page then reloads itself with the new dashboard. History and settings are kept.
 
-- Nothing is checked or downloaded until you press the button.
+- Nothing is checked or downloaded until you press the button, unless you switch on **Tell me when a new version is out** under Alerts in Settings. Then the router looks once a day, the dashboard shows "Update available" at the top of every page, and your phone is told once per version. It never installs anything by itself.
 - It refuses during a match, because updating restarts MatchWatch.
 - Over SSH: `matchwatch update` checks, `matchwatch update now` installs.
 - Versions before 0.22.0 have no update button: run the new installer the same way you installed.
@@ -540,7 +540,7 @@ What leaves your router, and when:
 | A game server's IP address | ip-api.com, to find where the server is | Each new server. "Look up where servers are" in Settings turns it off (staying and the lobby check need it on) |
 | A city name | Open-Meteo, to place it on the map | When you stay on a city not in the regions table, and for cities in a hosting company's list |
 | A request for a hosting company's address list | That company (Vultr) | When you start staying, then weekly |
-| A request for one small version file, then the installer | This repository on GitHub | Only when you press Check for an update or Update now |
+| A request for one small version file, then the installer | This repository on GitHub | When you press Check for an update or Update now. Once a day too, if you switched on the update notice |
 | Requests for map pictures, from your browser and not the router | OpenStreetMap's tile servers | While the map on the Servers page is on screen. They show which part of the world you are looking at |
 | Your alerts | The ntfy address you set | Only if you set up phone alerts |
 

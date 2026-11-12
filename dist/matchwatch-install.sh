@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.25.0"
+VERSION="0.26.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -83,6 +83,7 @@ LOBBY_MARGIN_MS=4
 STAY_STRICT=1
 STAY_KM=150
 STAY_RANGES=1
+UPDATE_CHECK=0
 DATA_DIR="/etc/matchwatch"
 WEB=0
 if [ -n "$CONF" ]; then
@@ -113,6 +114,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get STAY_STRICT main stay_strict "$STAY_STRICT"
 	config_get STAY_KM main stay_km "$STAY_KM"
 	config_get STAY_RANGES main stay_ranges "$STAY_RANGES"
+	config_get UPDATE_CHECK main update_check "$UPDATE_CHECK"
 	config_get DATA_DIR main data_dir "$DATA_DIR"
 	config_get WEB main web "$WEB"
 fi
@@ -356,7 +358,7 @@ export_json() {
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s"}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -1710,6 +1712,34 @@ fetch_file() { # url file : a download that may take a while
 	elif have wget; then wget -q -T 30 -O "$2" "$1" 2>/dev/null
 	else return 1; fi
 }
+# ---- the update notice. update.seen holds the newest published version and when it was last looked for.
+# The daily look only happens when the owner switched it on (update_check); pressing Check for an update
+# records the answer too, so the notice shows either way.
+update_due() {
+	[ "$UPDATE_CHECK" = 1 ] || return 1
+	local t
+	t="$(awk '{ print $2 + 0 }' "$DATA/update.seen" 2>/dev/null)"
+	[ $(( $(date +%s) - ${t:-0} )) -gt 86400 ]
+}
+update_note() { # [latest] : remember the newest version, and tell the phone once for each new one
+	local l="$1" old
+	old="$(awk '{ print $1 }' "$DATA/update.seen" 2>/dev/null)"
+	if [ -z "$l" ]; then l="$(update_latest)" && l="${l% *}" || l="$old"; fi
+	mkdir -p "$DATA"
+	echo "${l:-$VERSION} $(date +%s)" > "$DATA/update.seen"
+	if [ -n "$l" ] && ver_newer "$l" "$VERSION" && [ "$(cat "$DATA/update.told" 2>/dev/null)" != "$l" ]; then
+		echo "$l" > "$DATA/update.told"
+		[ "$UPDATE_CHECK" = 1 ] && cmd_notify "MatchWatch $l is out. Update it on the Tools page."
+	fi
+	return 0
+}
+update_shown() { # the newer version to mention on the dashboard, or nothing
+	local l
+	l="$(awk '{ print $1 }' "$DATA/update.seen" 2>/dev/null)"
+	case "$l" in ""|*[!0-9.]*) return 0 ;; esac
+	ver_newer "$l" "$VERSION" && printf '%s' "$l"
+	return 0
+}
 update_done() { # job-id true|false text
 	printf '{"id":"%s","state":"done","ok":%s,"out":"%s"}\n' "$1" "$2" "$3" > "$RUN/www/update.json.tmp" && mv -f "$RUN/www/update.json.tmp" "$RUN/www/update.json"
 	logger -t matchwatch "update: $3" 2>/dev/null
@@ -1737,6 +1767,7 @@ cmd_update() { # [check|now]
 	case "${1:-check}" in check|now) ;; *) die "use: matchwatch update [check|now]" ;; esac
 	l="$(update_latest)" || die "could not get the latest version number from GitHub. Check the router is online and try again in a minute."
 	latest="${l% *}"; sum="${l#* }"
+	update_note "$latest"; [ -d "$RUN/www" ] && export_json
 	if [ "${1:-check}" = check ]; then
 		if ver_newer "$latest" "$VERSION"; then echo "Version $latest is available. You have $VERSION."
 		else echo "You have the latest version, $VERSION."; fi
@@ -2094,7 +2125,7 @@ CGI
 }
 stop_children() {
 	local d f
-	kill $TPID $HPID $APID 2>/dev/null
+	kill $TPID $HPID $APID $UPID 2>/dev/null
 	for d in "$RUN"/probe.*; do
 		[ -d "$d" ] || continue
 		touch "$d/stop"
@@ -2139,6 +2170,9 @@ cmd_run() {
 	echo $$ > "$RUN/pid"
 	trap 'stop_children; exit 0' INT TERM
 	( sleep 20; regions_stale && cmd_regions measure >/dev/null 2>&1 ) &
+	# the daily look for a newer version, when switched on: soon after starting, then checked for each hour
+	( sleep 40; while :; do update_due && { update_note >/dev/null 2>&1; export_json; }; sleep 3600; done ) >/dev/null 2>&1 &
+	UPID=$!
 	logger -t matchwatch "watching $LAN_IF${DEVICE_IP:+ (device $DEVICE_IP)}" 2>/dev/null
 	wait $TPID
 	logger -t matchwatch "capture stopped: $(tail -n 1 "$RUN/tcpdump.err" 2>/dev/null)" 2>/dev/null
@@ -2253,6 +2287,7 @@ case "$1" in
 	allow) cmd_allow "$2" "$3" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
+	_updatetick) update_due && { update_note; export_json; } ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
@@ -3981,7 +4016,7 @@ var wrap = document.createElement("div"); wrap.className = "mw" + (T.full ? " fu
 wrap.innerHTML = '<header class="top"><a class="brand" href="#/">matchwatch</a><nav aria-label="Pages">' +
 	'<a href="#/" data-p="live">Live</a><a href="#/match/last" data-p="match">Last match</a><a href="#/matches" data-p="matches">Matches</a>' +
 	'<a href="#/servers" data-p="servers">Servers</a><a href="#/tools" data-p="tools">Tools</a></nav>' +
-	'<span id="state">Connecting to the router</span></header><main id="view"></main><div id="toast" role="status" aria-live="polite"></div>';
+	'<a id="upd" href="#/tools/data" style="display:none"></a><span id="state">Connecting to the router</span></header><main id="view"></main><div id="toast" role="status" aria-live="polite"></div>';
 shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
@@ -3992,7 +4027,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.25.0", reloading = false;
+var BUILT = "0.26.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -5342,7 +5377,9 @@ function loadAll(then) {
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
 	get("blocklist.json", function (x) { D.blocks = x || []; done(); });
-	get("info.json", function (x) { D.info = x || {}; versionSeen(D.info.version); done(); });
+	get("info.json", function (x) { D.info = x || {}; versionSeen(D.info.version);
+		var up = shadow.getElementById("upd"); if (up) { up.style.display = (D.info.latest && !RO) ? "" : "none"; up.textContent = D.info.latest ? "Update available: " + D.info.latest : ""; }
+		done(); });
 	get("favourites.json", function (x) { setFavs(x); done(); });
 	get("regions.json", function (x) { D.regions = x || []; done(); });
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
@@ -5593,6 +5630,8 @@ h2 + .kv { max-width: 640px; }
 .spot small { display: block; color: var(--muted); }
 .spotrow { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 0 0; margin-top: 8px; border-top: 1px solid var(--grid); }
 .spotrow .actions { margin: 0; flex: none; }
+/* a newer version is out */
+#upd { color: var(--star); border: 1px solid var(--star); border-radius: 999px; padding: 5px 13px; font-size: 0.9rem; font-weight: 700; text-decoration: none; white-space: nowrap; margin-right: -14px; }
 MW_FILE_END_15
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css.new"
 mv -f "$R/www/luci-static/resources/matchwatch/dashboard.css.new" "$R/www/luci-static/resources/matchwatch/dashboard.css"
@@ -6384,6 +6423,7 @@ return view.extend({
 		s.addremove = false;
 		s.tab('general', _('General'));
 		s.tab('alerts', _('Alerts'));
+		// placed with the alerts because it is one: the dashboard, and your phone, say when a new version is out
 		s.tab('blocking', _('Staying and blocking'));
 		s.tab('advanced', _('Advanced'));
 
@@ -6434,6 +6474,11 @@ return view.extend({
 
 		o = s.taboption('alerts', form.Flag, 'notify_start', _('Alert when a match starts'),
 			_('Tells your phone the moment the game itself begins: "Match started: United Kingdom, 5 ms." Handy when you have stepped away during a long queue.'));
+		o.default = '0';
+		o.rmempty = false;
+
+		o = s.taboption('alerts', form.Flag, 'update_check', _('Tell me when a new version is out'),
+			_('Once a day the router asks this project\'s page on GitHub for the newest version number. If there is a newer one, the dashboard shows it at the top and, with phone alerts set up, your phone is told once. Nothing is installed until you press Update now on the Tools page, and nothing about you is sent. Off, MatchWatch only looks when you press Check for an update.'));
 		o.default = '0';
 		o.rmempty = false;
 

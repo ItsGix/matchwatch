@@ -22,6 +22,7 @@ return view.extend({
 		s.addremove = false;
 		s.tab('general', _('General'));
 		s.tab('alerts', _('Alerts'));
+		// placed with the alerts because it is one: the dashboard, and your phone, say when a new version is out
 		s.tab('blocking', _('Staying and blocking'));
 		s.tab('advanced', _('Advanced'));
 
@@ -72,6 +73,11 @@ return view.extend({
 
 		o = s.taboption('alerts', form.Flag, 'notify_start', _('Alert when a match starts'),
 			_('Tells your phone the moment the game itself begins: "Match started: United Kingdom, 5 ms." Handy when you have stepped away during a long queue.'));
+		o.default = '0';
+		o.rmempty = false;
+
+		o = s.taboption('alerts', form.Flag, 'update_check', _('Tell me when a new version is out'),
+			_('Once a day the router asks this project\'s page on GitHub for the newest version number. If there is a newer one, the dashboard shows it at the top and, with phone alerts set up, your phone is told once. Nothing is installed until you press Update now on the Tools page, and nothing about you is sent. Off, MatchWatch only looks when you press Check for an update.'));
 		o.default = '0';
 		o.rmempty = false;
 

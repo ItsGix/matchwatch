@@ -15,7 +15,7 @@ var wrap = document.createElement("div"); wrap.className = "mw" + (T.full ? " fu
 wrap.innerHTML = '<header class="top"><a class="brand" href="#/">matchwatch</a><nav aria-label="Pages">' +
 	'<a href="#/" data-p="live">Live</a><a href="#/match/last" data-p="match">Last match</a><a href="#/matches" data-p="matches">Matches</a>' +
 	'<a href="#/servers" data-p="servers">Servers</a><a href="#/tools" data-p="tools">Tools</a></nav>' +
-	'<span id="state">Connecting to the router</span></header><main id="view"></main><div id="toast" role="status" aria-live="polite"></div>';
+	'<a id="upd" href="#/tools/data" style="display:none"></a><span id="state">Connecting to the router</span></header><main id="view"></main><div id="toast" role="status" aria-live="polite"></div>';
 shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.25.0", reloading = false;
+var BUILT = "0.26.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1376,7 +1376,9 @@ function loadAll(then) {
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
 	get("blocklist.json", function (x) { D.blocks = x || []; done(); });
-	get("info.json", function (x) { D.info = x || {}; versionSeen(D.info.version); done(); });
+	get("info.json", function (x) { D.info = x || {}; versionSeen(D.info.version);
+		var up = shadow.getElementById("upd"); if (up) { up.style.display = (D.info.latest && !RO) ? "" : "none"; up.textContent = D.info.latest ? "Update available: " + D.info.latest : ""; }
+		done(); });
 	get("favourites.json", function (x) { setFavs(x); done(); });
 	get("regions.json", function (x) { D.regions = x || []; done(); });
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
