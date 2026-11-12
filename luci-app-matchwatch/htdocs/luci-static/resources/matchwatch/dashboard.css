@@ -227,3 +227,13 @@ h2 + .kv { max-width: 640px; }
 #upd { color: var(--star); border: 1px solid var(--star); border-radius: 999px; padding: 5px 13px; font-size: 0.9rem; font-weight: 700; text-decoration: none; white-space: nowrap; margin-right: -14px; }
 /* the stop where trouble on the way starts */
 tr.hopfrom td { border-top: 2px solid var(--bad); }
+/* a long explanation: its first sentence, the rest behind More */
+details.more { display: inline; }
+details.more > summary { display: inline; cursor: pointer; color: var(--pen); text-decoration: underline; list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more[open] > summary { display: none; }
+details.more > span { display: inline; }
+/* a first-time user's steps */
+ol.steps { margin: 6px 0 0; padding-left: 1.3em; max-width: 70ch; }
+ol.steps li { margin: 8px 0; }
+@media (max-width: 560px) { .map { height: 360px; } }

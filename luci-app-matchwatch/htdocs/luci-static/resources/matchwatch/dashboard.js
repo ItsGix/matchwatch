@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.28.2", reloading = false;
+var BUILT = "0.29.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -342,7 +342,7 @@ function mapSection() {
 		MAP.el = h("div", { cls: "map" });
 		MAP.tools = h("div", { cls: "maptools" });
 		MAP.bar = h("div", { cls: "mapbar" }); MAP.bar.style.display = "none";
-		MAP.legend = h("p", { cls: "note", text: "Loading the map..." });
+		MAP.legend = h("div", null, h("p", { cls: "note", text: "Loading the map..." }));
 		MAP.box = h("div", { cls: "mapbox" }, MAP.tools, MAP.el, MAP.bar, MAP.legend);
 	}
 	leaflet(function () { setTimeout(mapSync, 0); });
@@ -374,7 +374,10 @@ function mapDraw() {
 	var LF = MAP.lf, map = MAP.map, c0 = null, circ = null, pen = cssVar("--pen");
 	if (MAP.busy) return;
 	MAP.busy = true; map.dragging.disable(); map.closePopup(); MAP.el.classList.add("drawing");
-	mapBar("Press where the middle of the circle should be, drag outwards, and let go.", [["Cancel", "", function () { off(); mapDone(); }]]);
+	var touch = !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
+	mapBar(touch ? "Tap where the middle of the circle should be, then tap where its edge should be." : "Press where the middle of the circle should be, drag outwards, and let go.", [["Cancel", "", function () { off(); mapDone(); }]]);
+	if (touch) map.dragging.enable();
+	function tap(e) { if (!circ) { down(e); return; } move(e); up(); }
 	function down(e) { c0 = e.latlng; circ = LF.circle(c0, { radius: 25000, color: pen, weight: 2, dashArray: "6 6", fillColor: pen, fillOpacity: 0.15, interactive: false }).addTo(map); MAP.edit.push(circ); }
 	function move(e) { if (circ) circ.setRadius(Math.max(25000, c0.distanceTo(e.latlng))); }
 	function up() {
@@ -386,8 +389,9 @@ function mapDraw() {
 		mapBar("A circle of " + km + " km. " + insideCount(c0, km) + (some ? "" : " Staying inside it turns away game servers everywhere else."),
 			[[some ? "Add to the pool" : "Stay inside this circle", "solid", function () { mapSend("staycircle", geoArg(c0, km)); }], ["Cancel", "", function () { mapDone(); }]]);
 	}
-	function off() { map.off("mousedown", down); map.off("mousemove", move); map.off("mouseup", up); document.removeEventListener("mouseup", up); }
-	map.on("mousedown", down); map.on("mousemove", move); map.on("mouseup", up); document.addEventListener("mouseup", up);
+	function off() { map.off("click", tap); map.off("mousedown", down); map.off("mousemove", move); map.off("mouseup", up); document.removeEventListener("mouseup", up); }
+	if (touch) map.on("click", tap);
+	else { map.on("mousedown", down); map.on("mousemove", move); map.on("mouseup", up); document.addEventListener("mouseup", up); }
 }
 // move or resize one circle of the pool: a grip in the middle and one on the edge
 function mapEdit(p) {
@@ -484,8 +488,8 @@ function mapSync() {
 		if (ls) LF.polyline([hm, [ls.lat, ls.lon]], { color: pen, weight: 2, dashArray: "4 6" }).addTo(g).bindTooltip("The match in progress");
 	}
 	if (!MAP.fitted && b.isValid() && MAP.map.getSize().x > 50) { MAP.map.fitBounds(b.pad(0.2), { maxZoom: 6, animate: false }); MAP.fitted = true; }
-	MAP.legend.textContent = "Green circles are the places you stay on" + (RO ? "" : "; press one to move, resize or remove it") + ". Round markers are servers you have played on, coloured by how they rated; a number means several in one city, and a faded one is outside your places. Small hollow dots are datacentre regions with their ping."
-		+ (whole.length ? " Also in the pool, but not drawn because they are whole countries or areas: " + whole.join(", ") + "." : "") + " The map pictures come from OpenStreetMap, fetched by your browser.";
+	MAP.legend.textContent = ""; MAP.legend.appendChild(brief("Green circles are the places you stay on" + (RO ? "" : "; press one to move, resize or remove it") + ". Round markers are servers you have played on, coloured by how they rated; a number means several in one city, and a faded one is outside your places. Small hollow dots are datacentre regions with their ping."
+		+ (whole.length ? " Also in the pool, but not drawn because they are whole countries or areas: " + whole.join(", ") + "." : "") + " The map pictures come from OpenStreetMap, fetched by your browser."));
 }
 // Strict, per game: hold every new server of a game until it has been placed. Offered for the games you have
 // played, and only where the game's ports are not shared with voice chat.
@@ -497,7 +501,7 @@ function strictSection() {
 	(D.hold || []).forEach(function (g) { if (g.on || played[g.name] || allGames) rows.push(g); else more++; });
 	if (!rows.length && !more) return null;
 	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "How each game is filtered"));
-	box.appendChild(h("p", { cls: "note", text: "A game MatchWatch knows by its port and by who hosts it is filtered from the first server it tries. One it knows by port alone is only filtered on ports and address blocks where you have played a match, because other things use those ports too. Make a game strict and every new server on its ports is held for a moment and judged before it can connect, whichever kind it is. All of this applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
+	box.appendChild(brief("A game MatchWatch knows by its port and by who hosts it is filtered from the first server it tries. One it knows by port alone is only filtered on ports and address blocks where you have played a match, because other things use those ports too. Make a game strict and every new server on its ports is held for a moment and judged before it can connect, whichever kind it is. All of this applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.")));
 	var t = table([["Game"], ["Server ports"], ["Servers outside your places"], ["", ""]]);
 	rows.forEach(function (g) {
 		var td = h("td", { cls: "act" });
@@ -586,6 +590,12 @@ function updateLive() {
 			L.last.appendChild(h("h2", "Last match"));
 			L.last.appendChild(h("p", { cls: "lede" }, when(m.start) + ", " + (place(m) || m.ip) + ": " + m.verdict + " "));
 			L.last.appendChild(h("div", { cls: "actions" }, h("a", { href: "#/match/" + m.start, text: "See the full report" })));
+		} else if (!RO) {
+			var dev = D.info.device, ol = h("ol", { cls: "steps" });
+			ol.appendChild(h("li", null, h("b", dev ? "Your gaming device is chosen. " : "Choose your gaming device. "), dev ? "MatchWatch is watching " + dev + "." : "Until you do, MatchWatch watches every device on your network. ", dev || !T.settings ? null : h("a", { href: T.settings, text: "Open Settings" })));
+			ol.appendChild(h("li", null, h("b", "Play a match. "), "It appears on this page within about ten seconds, and gets a full report when it ends."));
+			ol.appendChild(h("li", null, h("b", "Choose where you play, if you want to. "), "Draw a circle on the map and servers outside it are turned away. ", h("a", { href: "#/servers", text: "Open the map" })));
+			L.last.appendChild(h("h2", "Getting started")); L.last.appendChild(ol);
 		}
 		return;
 	}
@@ -825,6 +835,11 @@ function pageServers() {
 	view.textContent = ""; view.appendChild(h("h1", "Servers"));
 	var days = D.info.block_days || 14;
 	var stays = D.info.stays || [];
+	var tab = SERVTABS.some(function (t) { return t[0] === pageArg; }) ? pageArg : "places";
+	var seg = h("div", { cls: "seg" });
+	SERVTABS.forEach(function (t) { var a = h("a", { href: "#/servers/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
+	view.appendChild(seg);
+	if (tab === "places") {
 	if (stays.length) {
 		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed. Servers anywhere else are turned away as the game tries them. " + "A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
 		view.appendChild(bn);
@@ -841,29 +856,25 @@ function pageServers() {
 				cov.appendChild(w);
 			}
 			gameCoverNotes().forEach(function (s) { cov.appendChild(h("p", { cls: "note low", text: s })); });
-			cov.appendChild(h("p", { cls: "note", text: (c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places." }));
+			cov.appendChild(brief((c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places."));
 		})(D.cov);
-		if (stays.length > 1) {
-			var rm = h("div", { cls: "actions" });
-			stays.forEach(function (nm, i) { rm.appendChild(act("Remove " + nm, "stayrm", i + 1, {})); });
-			view.appendChild(rm);
-		}
 	}
-	// single servers let through, whatever region they are in
-	var lets = D.info.allowed || [];
-	if (lets.length) {
-		view.appendChild(h("h3", { cls: "favgame" }, "Single servers in the pool", h("small", String(lets.length))));
-		var lr = h("div", { cls: "actions" });
-		lets.forEach(function (ip) { var s = D.servers.filter(function (x) { return x.ip === ip; })[0] || D.favInfo[ip]; lr.appendChild(act("Remove " + ip + (s && place(s) ? ", " + place(s) : ""), "unallow", ip, {})); });
-		view.appendChild(lr);
-		view.appendChild(h("p", { cls: "note", text: (stays.length ? "These servers are let through even though they are outside the places you stay on. " : "These will be let through when you stay on places. ") + "Only the exact address is allowed, so its neighbours in the same datacentre are still turned away. The game still decides whether to offer one to you." }));
-	} else if (stays.length && !RO) view.appendChild(h("p", { cls: "note", text: "To let one server through from outside these places, press Add to pool beside it in your favourites or the server list below, or on a match report." }));
 	view.appendChild(h("h2", "Map"));
 	view.appendChild(mapSection());
-	addIf(view, strictSection());
+	// everything that is let in, in one list beside the map: the places, then the single servers
+	var lets = D.info.allowed || [];
+	if ((stays.length || lets.length) && !RO) {
+		view.appendChild(h("h2", "What is let in"));
+		var pl = h("div", { cls: "actions" });
+		stays.forEach(function (nm, i) { pl.appendChild(act("Remove " + nm, "stayrm", i + 1, stays.length === 1 ? { confirm: "Confirm: this stops staying" } : {})); });
+		lets.forEach(function (ip) { var s = D.servers.filter(function (x) { return x.ip === ip; })[0] || D.favInfo[ip]; pl.appendChild(act("Remove server " + ip + (s && place(s) ? ", " + place(s) : ""), "unallow", ip, {})); });
+		view.appendChild(pl);
+		view.appendChild(brief(lets.length ? "Each button removes one place or one single server. A single server is let through even when it is outside your places. Only its exact address is allowed, so its neighbours in the same datacentre are still turned away, and the game still decides whether to offer it to you." + (stays.length ? "" : " Single servers only matter while you are staying on places.")
+			: "Each button removes one place. To let one server through from outside your places, press Add to pool beside it under Favourites or Servers, on the map, or on a match report."));
+	}
 	// stay anywhere: cities, countries or wider areas, as one pool
 	if (!RO) {
-	view.appendChild(h("h2", stays.length ? "Change where you stay" : "Stay in one or more places"));
+	view.appendChild(h("h2", stays.length ? "Add places by name" : "Or type where to stay"));
 	var inp = h("input", { type: "text", id: "place", placeholder: "France, Germany, Spain", autocomplete: "off", "aria-label": "Places to stay on, separated by commas" });
 	var send = function (action, btn, label) {
 		var v = inp.value.trim().toLowerCase().replace(/[^a-z0-9 ,-]/g, "").replace(/ *, */g, ",").replace(/ +/g, "+");
@@ -881,45 +892,14 @@ function pageServers() {
 	var add = h("button", { type: "button", text: "Add to the pool" });
 	add.addEventListener("click", function () { send("stayadd", add, "Add to the pool"); });
 	view.appendChild(h("div", { cls: "stayform" }, inp, stays.length ? add : null, go));
-	view.appendChild(h("p", { cls: "note", text: "Type one place or several, separated by commas: cities, countries, or these areas: uk-ireland, western-europe, southern-europe, northern-europe, eastern-europe, europe, north-america, south-america, middle-east, asia, oceania. A city allows servers within about 150 km of it; a country or area allows any server located there. Several places make one pool, and the game picks among them, which keeps queues shorter than a single place." }));
+	view.appendChild(brief("Type one place or several, separated by commas: cities, countries, or these areas: uk-ireland, western-europe, southern-europe, northern-europe, eastern-europe, europe, north-america, south-america, middle-east, asia, oceania. A city allows servers within about 150 km of it; a country or area allows any server located there. Several places make one pool, and the game picks among them, which keeps queues shorter than a single place."));
 	}
+	addIf(view, strictSection());
+	}
+	if (tab === "favourites") {
 	view.appendChild(favSection());
-	view.appendChild(gamePlacesSection());
-	view.appendChild(h("h2", "Datacentres, worst first"));
-	if (!D.dcs.length) view.appendChild(h("p", { cls: "empty", text: "No datacentres seen yet." }));
-	else {
-		var t = table([["Datacentre"], ["Matches", "num"], ["Servers", "num"], ["Rating", "num"], ["Worst", "num"], ["Ping ms", "num"], ["", ""]]);
-		D.dcs.forEach(function (d) {
-			var td = h("td", { cls: "act" });
-			if (d.stay) { td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); }
-			else if (d.blocked && D.info.stay) { td.appendChild(h("span", { cls: "tag", text: "Turned away" })); }
-			else if (d.blocked) { td.appendChild(h("span", { cls: "tag", text: "Blocked" })); td.appendChild(act("Unblock", "unblockdc", d.n, {})); }
-			else { td.appendChild(act("Stay here", "stay", d.n, { confirm: "Confirm: turn the others away" })); td.appendChild(act("Block", "blockdc", d.n, { danger: true, confirm: "Confirm: block for " + days + " days" })); }
-			td.appendChild(act("Remove", "forgetdc", d.n, { confirm: "Confirm: remove it and its " + d.matches + " match" + (d.matches === 1 ? "" : "es") }));
-			t.lastChild.appendChild(row([[d.name], [String(d.matches), "num"], [String(d.servers), "num"], [String(d.rating), "num s " + cls(d.rating)], [String(d.worst), "num"], [d.ping == null ? "n/a" : fmt(d.ping, 1), "num"], td]));
-		});
-		view.appendChild(h("div", { cls: "tablewrap" }, t));
-		view.appendChild(h("p", { cls: "note", text: "A datacentre is one operator in one city. Ratings need a few matches each before they mean much. Blocking one only covers the address blocks you have been placed on there so far. Remove takes a datacentre, its servers and their matches out of MatchWatch altogether; it is refused while one of its servers is a favourite." }));
 	}
-	view.appendChild(h("h2", "Every region, nearest first"));
-	var rg = D.regions || [];
-	if (!rg.length) view.appendChild(h("p", { cls: "empty", text: "Not measured yet." }));
-	else {
-		var tr = table([["Region"], ["Area"], ["Ping ms", "num"], ["Grade"], ["Jitter ms", "num"], ["Your matches there", "num"], ["Rating", "num"], ["Ping in matches", "num"], ["", ""]]);
-		(regionsAll ? rg : rg.slice(0, 4)).forEach(function (r) {
-			tr.lastChild.appendChild(row([[r.city + ", " + r.cc], [r.area], [r.ping == null ? "No reply" : fmt(r.ping, 1), "num s"], [pingLetter(r.ping) || "", "s " + gradeCls(pingLetter(r.ping))], [r.jit == null ? "" : fmt(r.jit, 1), "num"],
-				[r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.matchping == null ? "" : fmt(r.matchping, 1), "num"],
-				(function () { var td = h("td", { cls: "act" }); if (r.stay) td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); else if (r.ping != null && stays.length) td.appendChild(act("Add", "stayadd", null, { extra: "&region=" + r.code })); else if (r.ping != null) td.appendChild(act("Stay here", "stay", null, { extra: "&region=" + r.code, confirm: "Confirm: turn the others away" })); return td; })()]));
-		});
-		view.appendChild(h("div", { cls: "tablewrap" }, tr));
-	}
-	var more = null;
-	if (rg.length > 4) {
-		more = h("button", { type: "button", text: regionsAll ? "Show the nearest 4" : "Show all " + rg.length + " regions" });
-		more.addEventListener("click", function () { var y = window.scrollY; regionsAll = !regionsAll; pageServers(); window.scrollTo(0, y); });
-	}
-	view.appendChild(h("div", { cls: "actions" }, more, act("Measure now", "regions", null, { done: function () { toast("Regions measured."); } })));
-	view.appendChild(h("p", { cls: "note", text: "Ping from your router to the test server Vultr runs in each of its datacentres" + (rg.length ? ", measured " + when(rg[0].ts) : "") + ". Every Call of Duty server you have been placed on so far is hosted by Vultr, but the game is reported to use other hosts in some places, so this is not a complete list of where it has servers. Stay here on a row is the same as typing that city above: it allows servers within about 150 km of it, whoever hosts them. The game still decides which regions to offer you." }));
+	if (tab === "servers") {
 	view.appendChild(h("h2", "Servers, worst first"));
 	if (!D.servers.length) view.appendChild(h("p", { cls: "empty", text: "No servers seen yet." }));
 	else {
@@ -943,6 +923,45 @@ function pageServers() {
 			t3.lastChild.appendChild(row([[b.ip], [b.days == null ? "When you unblock it" : b.days + " day" + (b.days === 1 ? "" : "s")], [b.reason === "stay" ? "Staying on another datacentre" : b.reason === "manual" ? "Blocked by you" : b.reason], td]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, t3));
+	}
+	view.appendChild(h("h2", "Datacentres, worst first"));
+	if (!D.dcs.length) view.appendChild(h("p", { cls: "empty", text: "No datacentres seen yet." }));
+	else {
+		var t = table([["Datacentre"], ["Matches", "num"], ["Servers", "num"], ["Rating", "num"], ["Worst", "num"], ["Ping ms", "num"], ["", ""]]);
+		D.dcs.forEach(function (d) {
+			var td = h("td", { cls: "act" });
+			if (d.stay) { td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); }
+			else if (d.blocked && D.info.stay) { td.appendChild(h("span", { cls: "tag", text: "Turned away" })); }
+			else if (d.blocked) { td.appendChild(h("span", { cls: "tag", text: "Blocked" })); td.appendChild(act("Unblock", "unblockdc", d.n, {})); }
+			else { td.appendChild(act("Stay here", "stay", d.n, { confirm: "Confirm: turn the others away" })); td.appendChild(act("Block", "blockdc", d.n, { danger: true, confirm: "Confirm: block for " + days + " days" })); }
+			td.appendChild(act("Remove", "forgetdc", d.n, { confirm: "Confirm: remove it and its " + d.matches + " match" + (d.matches === 1 ? "" : "es") }));
+			t.lastChild.appendChild(row([[d.name], [String(d.matches), "num"], [String(d.servers), "num"], [String(d.rating), "num s " + cls(d.rating)], [String(d.worst), "num"], [d.ping == null ? "n/a" : fmt(d.ping, 1), "num"], td]));
+		});
+		view.appendChild(h("div", { cls: "tablewrap" }, t));
+		view.appendChild(brief("A datacentre is one operator in one city. Ratings need a few matches each before they mean much. Blocking one only covers the address blocks you have been placed on there so far. Remove takes a datacentre, its servers and their matches out of MatchWatch altogether; it is refused while one of its servers is a favourite."));
+	}
+	}
+	if (tab === "regions") {
+	view.appendChild(h("h2", "Every region, nearest first"));
+	var rg = D.regions || [];
+	if (!rg.length) view.appendChild(h("p", { cls: "empty", text: "Not measured yet." }));
+	else {
+		var tr = table([["Region"], ["Area"], ["Ping ms", "num"], ["Grade"], ["Jitter ms", "num"], ["Your matches there", "num"], ["Rating", "num"], ["Ping in matches", "num"], ["", ""]]);
+		(regionsAll ? rg : rg.slice(0, 4)).forEach(function (r) {
+			tr.lastChild.appendChild(row([[r.city + ", " + r.cc], [r.area], [r.ping == null ? "No reply" : fmt(r.ping, 1), "num s"], [pingLetter(r.ping) || "", "s " + gradeCls(pingLetter(r.ping))], [r.jit == null ? "" : fmt(r.jit, 1), "num"],
+				[r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.matchping == null ? "" : fmt(r.matchping, 1), "num"],
+				(function () { var td = h("td", { cls: "act" }); if (r.stay) td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); else if (r.ping != null && stays.length) td.appendChild(act("Add", "stayadd", null, { extra: "&region=" + r.code })); else if (r.ping != null) td.appendChild(act("Stay here", "stay", null, { extra: "&region=" + r.code, confirm: "Confirm: turn the others away" })); return td; })()]));
+		});
+		view.appendChild(h("div", { cls: "tablewrap" }, tr));
+	}
+	var more = null;
+	if (rg.length > 4) {
+		more = h("button", { type: "button", text: regionsAll ? "Show the nearest 4" : "Show all " + rg.length + " regions" });
+		more.addEventListener("click", function () { var y = window.scrollY; regionsAll = !regionsAll; pageServers(); window.scrollTo(0, y); });
+	}
+	view.appendChild(h("div", { cls: "actions" }, more, act("Measure now", "regions", null, { done: function () { toast("Regions measured."); } })));
+	view.appendChild(brief("Ping from your router to the test server Vultr runs in each of its datacentres" + (rg.length ? ", measured " + when(rg[0].ts) : "") + ". Every Call of Duty server you have been placed on so far is hosted by Vultr, but the game is reported to use other hosts in some places, so this is not a complete list of where it has servers. Stay here on a row is the same as typing that city above: it allows servers within about 150 km of it, whoever hosts them. The game still decides which regions to offer you."));
+	view.appendChild(gamePlacesSection());
 	}
 }
 // A slow tool: the router starts it and answers with a job number; the result lands in a data file a little later.
@@ -1192,6 +1211,15 @@ function shareSection() {
 	return box;
 }
 
+var SERVTABS = [["places", "Where I play"], ["favourites", "Favourites"], ["servers", "Servers"], ["regions", "Regions and games"]];
+// A long grey paragraph shown as its first sentence, with the rest one press away. Short ones are left whole.
+function brief(text) {
+	var k = text.indexOf(". "), p = h("div", { cls: "note" });
+	if (k < 0 || text.length < 190) { p.textContent = text; return p; }
+	p.appendChild(document.createTextNode(text.slice(0, k + 1) + " "));
+	p.appendChild(h("details", { cls: "more" }, h("summary", "More"), h("span", text.slice(k + 2))));
+	return p;
+}
 var TOOLTABS = [["checks", "Checks"], ["games", "Games"], ["share", "Share"], ["data", "Data and settings"]];
 // one row on the Tools page: what the tool does on the left, its control and result on the right
 function tool(title, desc) {

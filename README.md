@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.28.2 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.29.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -62,7 +62,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Makes share files you choose the contents of, item by item. Nothing is ever uploaded.
 - Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
 
-| The map: your places as circles, your servers by rating, and how each game is filtered |
+| The map: your places as circles and your servers by rating |
 | --- |
 | ![Map](docs/map.png) |
 
@@ -74,9 +74,13 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 | --- | --- |
 | ![Live](docs/live.png) | ![Match report](docs/match-report.png) |
 
-| Matches | Servers |
+| Matches | Servers: where I play |
 | --- | --- |
-| ![Matches](docs/matches.png) | ![Servers](docs/servers-pool.png) |
+| ![Matches](docs/matches.png) | ![Where I play](docs/servers-pool.png) |
+
+| Servers, datacentres and blocks |
+| --- |
+| ![Servers](docs/servers.png) |
 
 | Tools: checks, with grades | Tools: sharing |
 | --- | --- |
@@ -149,10 +153,10 @@ keeps your history and settings. Use `purge` instead of `remove` to delete those
 | **Live** | The match in progress: ping, update rate, jitter, late and missing updates, freezes, your PC's send rate and pauses, a two-minute chart, and the "I felt that" button. When the game starts connecting you somewhere, a banner says where, how far, and how that server has rated |
 | **Last match** | The full report for one match: verdict, the four scores with the reason for each, a chart of the whole match, every figure, each stop on the route with where trouble started, what QoSmate's queues did, and your marks |
 | **Matches** | Every recorded match, your latest session in a sentence, and ratings by hour of the day. Flags is how many moments you marked with "I felt that" |
-| **Servers** | A map of your places and servers, your favourites by game, where each game plays, the places you stay on, datacentres, regions and servers with their ratings, and buttons to favourite, block, remove or stay |
+| **Servers** | Four tabs. **Where I play**: the map, everything that is let in, and how each game is filtered. **Favourites**. **Servers**: servers, datacentres and blocks. **Regions and games**: pings to every region and where each game plays. Before 0.29.0 this was one long page: where each game plays, the places you stay on, datacentres, regions and servers with their ratings, and buttons to favourite, block, remove or stay |
 | **Tools** | Checks, games, sharing, updating and data. See [Tools](#tools) |
 
-The dashboard fetches fresh data every fifteen seconds and redraws only when something has changed.
+The dashboard fetches fresh data every fifteen seconds and redraws only when something has changed. Longer explanations show their first sentence with a **More** link for the rest. Until your first match, the Live page lists the three steps to get started. Every page fits a phone; on a touch screen a circle is drawn with two taps, the middle and then the edge.
 
 **Settings.** The device to watch, phone alerts, blocking and staying, and the advanced capture options. Saving restarts MatchWatch, which ends the recording of a match in progress, so change settings between matches.
 
