@@ -93,7 +93,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.22.2", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True, "away": 412}}
+           "info": {"version": "0.22.3", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True, "away": 412}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -113,6 +113,13 @@ def build(site):
     out["status"] = {"ts": NOW + 3600, "candidates": 0, "flows": 3, "sessions": [{"ip": "203.0.113.21", "port": 30120, "device": "192.168.1.50", "age": 412, "start": NOW - 412, "loc": "Frankfurt, DE", "org": "Example Hosting Frankfurt",
                      "tick": 20.1, "jit": 0.41, "late": 0.02, "lost": 0, "uprate": 95.2, "upjit": 0.3, "s_lost": 0.04, "s_frz": 1, "s_hitch": 1, "rep": 97, "repn": 3, "ping": 6.1, "tl_d": d, "tl_u": u, "tl_p": p,
                      "marks": [{"t": NOW + 3600 - 76, "k": "server+ping", "x": "server updates stalled: one arrived 217 ms late; ping jumped to 14 ms (normally 6)"}]}]}
+    # results of the two slow tools, as the router would leave them (job number 1)
+    out["linetest"] = {"id": "1", "state": "done", "ts": NOW, "verdict": "good", "score": 100, "msg": "Your line is steady: about 4 ms to the nearest target, no loss, jitter 0.2 ms.",
+                       "rows": [{"name": "Your provider, first hop", "ip": "198.51.100.1", "answered": True, "loss": 0, "med": 3.7, "p95": 4.1, "jit": 0.31},
+                                {"name": "Public server", "ip": "192.0.2.53", "answered": True, "loss": 0, "med": 4.2, "p95": 4.6, "jit": 0.24},
+                                {"name": "Public server", "ip": "192.0.2.99", "answered": True, "loss": 0, "med": 3.9, "p95": 4.4, "jit": 0.22}]}
+    tip = sorted(servers, key=lambda x: -x["last"])[0]["ip"]
+    out["trace"] = {"id": "1", "state": "done", "ts": NOW, "ip": tip, "hops": ["1 198.51.100.1 3.2 ms", "2 100.64.0.64 3.1 ms", "3 100.64.0.74 3.7 ms", "4 192.0.2.180 5.7 ms", "5 192.0.2.36 5.9 ms", "6 *", "7 192.0.2.201 5.8 ms", "8 %s 6.2 ms" % tip]}
     for name, j in out.items(): json.dump(j, open(f"{data}/{name}.json", "w"))
     open(site + "/matchwatch/index.html", "w", encoding="utf-8", newline="\n").write("""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>matchwatch</title>
 <style>html, body { margin: 0; background: #0f2a2b; }</style></head><body><div id="mw"></div><script src="/%s/dashboard.js"></script><script>
@@ -170,10 +177,12 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
   line 9: a port that cannot be read`;
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
+		if (p.action === "linetest" || p.action === "trace") out = "1";
+		if (p.action === "updatecheck") out = "Version 0.23.0 is available. You have 0.22.3.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
-// for the Tools screenshot: open the picker, as a visitor would
-setTimeout(function () { var b = Array.prototype.filter.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { return x.textContent === "Choose what to share"; })[0]; if (b) b.click(); }, 3000);
+// for the Tools screenshots: press what a visitor would, so each picture shows a result
+setTimeout(function () { Array.prototype.forEach.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { if (["Choose what to share", "Test my line", "Trace the route now", "Check for an update"].indexOf(x.textContent) >= 0) x.click(); }); }, 3000);
 </script></body></html>""" % (RES, RES))
     return [m for m in hist if m["code"] == "server"][0]["start"]
 
@@ -196,12 +205,17 @@ if __name__ == "__main__":
     bad = build(site)
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=site)
     handler.log_message = lambda *a: None
+    # two servers on one port once made every picture come from the wrong site: the match report showed "no longer on file"
+    import socket
+    with socket.socket() as probe:
+        if probe.connect_ex(("127.0.0.1", PORT)) == 0: sys.exit(f"Port {PORT} is already in use. Stop whatever is serving there and run this again.")
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), handler)
     if sys.argv[1:] == ["serve"]:   # look at the mock dashboard by hand
         print(f"http://127.0.0.1:{PORT}/matchwatch/"); srv.serve_forever()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     os.makedirs(ROOT + "/docs", exist_ok=True)
-    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 5200), ("#/tools", "tools", 2200), ("#/tools/share", "share", 4200)):
+    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 5200), ("#/tools", "tools", 2600), ("#/tools/share", "share", 4200), ("#/tools/data", "update", 2200)):
         shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
+    assert os.path.getsize(f"{ROOT}/docs/match-report.png") > 60000, "the match report picture is nearly empty: the match was not found"
     srv.shutdown()
     shutil.rmtree(site, ignore_errors=True)
