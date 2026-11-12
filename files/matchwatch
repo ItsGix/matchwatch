@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.15.1"
+VERSION="0.17.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -246,6 +246,7 @@ export_json() {
 	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
+	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
 	share_json > "$RUN/www/shared.json.tmp" && mv -f "$RUN/www/shared.json.tmp" "$RUN/www/shared.json"
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -576,15 +577,31 @@ cmd_newgame() { # port : a match was just played on a server port nobody has nam
 	local msg="New game seen on server port $1. Name it on the Tools page in MatchWatch, so that staying on places, the lobby alert and automatic blocking cover it."
 	if [ "$NOTIFY_NEWGAME" = 1 ]; then cmd_notify "$msg"; else logger -t matchwatch "$msg" 2>/dev/null; fi
 }
-cmd_game() { # name <port or lo-hi> <name>
-	[ "$1" = name ] || die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>"
-	case "$2" in ""|*[!0-9-]*|-*|*-|*-*-*) die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>" ;; esac
-	[ -n "$3" ] || die "usage: matchwatch game name <server port> <name>"
-	touch "$DATA/games.local"
+cmd_game() { # name <port or lo-hi> <name> [hosts] [voice] | remove <port or lo-hi>
+	local use="usage: matchwatch game name <server port, or a range like 7000-7100> <name> [hosting company words] [voice]   |   matchwatch game remove <port or range>"
+	local lo hi hosts kind=""
+	case "$1" in name|remove) ;; *) die "$use" ;; esac
+	case "$2" in ""|*[!0-9-]*|-*|*-|*-*-*) die "$use" ;; esac
+	lo="${2%-*}"; hi="${2#*-}"
+	[ "${#lo}" -le 5 ] && [ "${#hi}" -le 5 ] && [ "$lo" -ge 1 ] && [ "$hi" -le 65535 ] && [ "$lo" -le "$hi" ] || die "ports run from 1 to 65535, and a range goes from low to high"
+	mkdir -p "$DATA"; touch "$DATA/games.local"
+	if [ "$1" = remove ]; then
+		awk -F'|' -v p="$2" '$2 != p' "$DATA/games.local" > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
+		export_json
+		echo "Removed your name for server port $2."
+		return 0
+	fi
+	[ -n "$3" ] || die "$use"
+	hosts="$(echo "$4" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9 ,.-' | sed 's/ *, */,/g; s/^[ ,]*//; s/[ ,]*$//')"
+	[ "$5" = voice ] && kind=voice
+	if [ -n "$hosts" ]; then echo "$hosts" | tr ',' '\n' | awk 'length($0) < 3 { bad = 1 } END { exit bad }' || die "each hosting company word needs three letters or more"; fi
+	# a wide range with no host check would take every unknown stream in it for this game, and stay mode could then block it
+	[ $((hi - lo)) -le 2000 ] || [ -n "$hosts" ] || die "a range over 2000 ports wide needs the name of the company hosting the servers"
 	# a name you give goes first, so it wins over an imported label that covers the same port
-	{ printf '%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2"; awk -F'|' -v p="$2" '$2 != p' "$DATA/games.local"; } > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
+	{ printf '%s|%s|%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2" "$kind" "$hosts"; awk -F'|' -v p="$2" '$2 != p' "$DATA/games.local"; } > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
 	export_json
-	echo "Matches on server port $2 are now labelled: $3. Staying on places, the lobby alert and automatic blocking now cover it."
+	if [ "$kind" = voice ]; then echo "Server port $2 is now marked as not a game ($3). MatchWatch will stop recording it within twenty seconds."
+	else echo "Matches on server port $2 are now labelled: $3. Staying on places, the lobby alert and automatic blocking now cover it."; fi
 }
 cmd_unblock_dc() { # number
 	local list p
@@ -882,7 +899,13 @@ cmd_share_undo() { # put back what the last import changed
 	export_json
 	echo "The last import is undone. Game names, places, ping hosts, shared ratings, favourites and settings are as they were before it."
 }
-cmd_share_forget() {
+cmd_share_forget() { # [network] : every rating shared with you, or just one network's
+	if [ -n "$1" ]; then
+		[ -f "$DATA/ratings.shared" ] && awk -F'\t' -v p="$1" '$1 != p' "$DATA/ratings.shared" > "$DATA/ratings.shared.tmp" && mv -f "$DATA/ratings.shared.tmp" "$DATA/ratings.shared"
+		export_json
+		echo "Removed the shared rating for $1."
+		return 0
+	fi
 	rm -f "$DATA/ratings.shared"
 	export_json
 	echo "Shared ratings removed. Your own ratings are untouched."
@@ -903,7 +926,7 @@ cmd_share() {
 		check) [ -n "$2" ] || die "usage: matchwatch share check <file>"; cmd_share_check "$2" || exit 1 ;;
 		import) [ -n "$2" ] || die "usage: matchwatch share import <file> [$SHARE_ALL]"; f="$2"; shift 2; cmd_share_import "$f" "$@" || exit 1 ;;
 		undo) cmd_share_undo || exit 1 ;;
-		forget) cmd_share_forget ;;
+		forget) cmd_share_forget "$2" ;;
 		*) cat <<EOF
 matchwatch share export [sections] > file    write a share file (nothing about your home goes in it)
 matchwatch share check <file>                say what a share file holds; changes nothing
@@ -939,6 +962,46 @@ cmd_fav() { # add <ip> | remove <ip> | (nothing = list)
 		echo "Removed $ip from your favourites."
 	fi
 	export_json
+}
+
+# ---- remove things from the history: one match, every match on one server, or a whole datacentre.
+# Whatever was built from them goes too: ratings, the datacentre and region figures, the hour chart.
+# A favourite cannot be removed this way, so one cannot be lost by a slip: take its star off first.
+cmd_forget() { # match <start time> | server <ip> | dc <number>
+	local kind="$1" arg="$2" pfx="" name="" ip n id
+	mkdir -p "$DATA"; touch "$DATA/sessions.tsv" "$DATA/favourites" "$DATA/blocklist"
+	case "$kind" in
+		match) case "$arg" in ""|*[!0-9]*) die "usage: matchwatch forget match <start time from the history>" ;; esac ;;
+		server) is_ipv4 "$arg" || die "usage: matchwatch forget server <server-ip>"
+			is_fav "$arg" && die "$arg is one of your favourites, so it is kept. Take its star off first if you want it gone." ;;
+		dc) case "$arg" in ""|*[!0-9]*) die "usage: matchwatch forget dc <number from 'matchwatch datacentres'>" ;; esac
+			pfx="$(awk -v MODE=dc_prefixes -v ARG="$arg" -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv")"
+			[ -n "$pfx" ] || die "no datacentre number $arg"
+			name="$(echo "$pfx" | head -n 1)"; pfx="$(echo "$pfx" | tail -n +2 | tr '\n' ' ')"
+			for ip in $(cut -f1 "$DATA/favourites"); do
+				case " $pfx " in *" ${ip%.*}.0/24 "*) die "$ip in that datacentre is one of your favourites, so the datacentre is kept. Take its star off first, or remove the other servers one by one." ;; esac
+			done ;;
+		*) die "usage: matchwatch forget match <start time> | server <ip> | dc <number>" ;;
+	esac
+	awk -F'\t' -v K="$kind" -v A="$arg" -v P=" $pfx " -v KEEP="$DATA/sessions.tsv.tmp" -v GONE="$RUN/forget.$$" '
+		BEGIN { printf "" > KEEP; printf "" > GONE }
+		{
+			split($5, o, "."); hit = (K == "match") ? ($1 == A) : (K == "server") ? ($5 == A) : (index(P, " " o[1] "." o[2] "." o[3] ".0/24 ") > 0)
+			if (hit) print $1 > GONE; else print > KEEP
+		}' "$DATA/sessions.tsv"
+	n="$(cnt "$RUN/forget.$$")"
+	if [ "$n" -lt 1 ]; then rm -f "$DATA/sessions.tsv.tmp" "$RUN/forget.$$"; die "there was nothing to remove"; fi
+	while read -r id; do rm -f "$DATA/matches/$id.json"; done < "$RUN/forget.$$"
+	rm -f "$RUN/forget.$$"
+	mv -f "$DATA/sessions.tsv.tmp" "$DATA/sessions.tsv"
+	export_json
+	# the running engine still remembers the old ratings. Start it afresh, unless that would cut a match short
+	if [ -z "$CONF" ] && [ -x /etc/init.d/matchwatch ] && grep -q '"sessions":\[\]' "$RUN/www/status.json" 2>/dev/null; then ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 & fi
+	case "$kind" in
+		match) echo "Removed that match." ;;
+		server) echo "Removed $arg and its $n match(es) from MatchWatch." ;;
+		dc) echo "Removed $name and its $n match(es) from MatchWatch." ;;
+	esac
 }
 
 # ---- tools for the dashboard's Tools page
@@ -1063,7 +1126,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		log) cmd_log ;;
 		linetest) cmd_linetest ;;
 		trace) cmd_trace "$arg" ;;
-		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" ;;
+		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" "$region" "$( [ "$days" = 1 ] && echo voice )" ;;   # region carries the host words; days = 1 marks it as not a game
+		gamedel) [ -n "$arg" ] || die "choose a name to remove"; cmd_game remove "$arg" ;;
 		clearhistory) cmd_clear_history ;;
 		shareexport) cmd_share_export $arg ;;
 		# the share file itself arrives on standard input
@@ -1073,7 +1137,10 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		fav) cmd_fav add "$arg" ;;
 		unfav) cmd_fav remove "$arg" ;;
 		shareundo) cmd_share_undo ;;
-		shareforget) cmd_share_forget ;;
+		shareforget) cmd_share_forget "$arg" ;;
+		forgetmatch) cmd_forget match "$arg" ;;
+		forgetserver) cmd_forget server "$arg" ;;
+		forgetdc) cmd_forget dc "$arg" ;;
 		*) die "unknown action" ;;
 	esac
 }
@@ -1456,7 +1523,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch stay add <places> | remove <n> | off     change or end the pool
   matchwatch hours             how your matches rate at each hour of the day
   matchwatch recap             summary of your latest session
-  matchwatch games             games seen; 'matchwatch game name <port> <name>' labels one
+  matchwatch games             games seen; 'matchwatch game name <port or lo-hi> <name>' adds or names one,
+                               'matchwatch game remove <port or lo-hi>' takes your name off again
   matchwatch regions [measure] ping every region the game's host has a datacentre in
   matchwatch mark              flag this moment ("I felt that"); same as the dashboard button
   matchwatch qos               check the game is in QoSmate's top class (run during a match)
@@ -1468,6 +1536,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
+  matchwatch forget match <start> | server <ip> | dc <n>   remove one match, one server or one datacentre
+                               and everything built from them. Favourites are kept.
   matchwatch share             make, check or import a share file: game labels, ping hosts,
                                places to stay on, server ratings and thresholds
   /etc/init.d/matchwatch start|stop|restart|enable
@@ -1489,7 +1559,7 @@ case "$1" in
 	hours) touch "$DATA/sessions.tsv"; awk -v MODE=hours_txt -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
 	recap) touch "$DATA/sessions.tsv"; awk -v MODE=recap_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
 	games) touch "$DATA/sessions.tsv"; awk -v MODE=games_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
-	game) cmd_game "$2" "$3" "$4" ;;
+	game) cmd_game "$2" "$3" "$4" "$5" "$6" ;;
 	device) cmd_device "$2" ;;
 	regions) cmd_regions "$2" ;;
 	places) awk -F'|' '/^area/ { printf "%-18s %-18s %s\n", $2, $3, $4 }' "$LIB/places.list"; echo; echo "Also any country by name or two-letter code, and any city by name." ;;
@@ -1504,6 +1574,7 @@ case "$1" in
 	fav) cmd_fav "$2" "$3" ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
+	forget) cmd_forget "$2" "$3" ;;
 	share) shift; cmd_share "$@" ;;
 	version) echo "$VERSION" ;;
 	_probe_start) shift; cmd_probe_start "$@" ;;

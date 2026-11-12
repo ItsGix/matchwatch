@@ -193,14 +193,27 @@ function nameForm(port, label, after) {
 	return h("div", { cls: "stayform" }, inp, btn);
 }
 // shown on Live and Matches until every game on file has a name
+// notices you have closed stay closed in this browser; the game can still be named on the Tools page
+function hiddenPorts() { try { return JSON.parse(localStorage.getItem("mw-hide-ports") || "[]"); } catch (e) { return []; } }
+function hidePort(port) { var a = hiddenPorts(); if (a.indexOf(port) < 0) a.push(port); try { localStorage.setItem("mw-hide-ports", JSON.stringify(a.slice(-50))); } catch (e) {} }
 function namePrompt(redraw) {
 	if (RO) return null;
-	var ps = unnamedPorts();
+	var gone = hiddenPorts(), ps = unnamedPorts().filter(function (p) { return gone.indexOf(p) < 0; });
 	if (!ps.length) return null;
 	var box = h("div");
 	ps.forEach(function (port) {
-		box.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "New game on server port " + port + ". "), "Give it a name. Until it has one, MatchWatch rates its matches but staying on places, the lobby alert and automatic blocking leave it alone."),
-			nameForm(port, "Save name", function () { setTimeout(redraw, 1500); })));
+		var not = h("button", { type: "button", text: "Not a game" }), x = h("button", { type: "button", cls: "close", title: "Hide this notice", "aria-label": "Hide the notice about server port " + port, text: "\u00d7" });
+		var bn = h("div", { cls: "banner far" }, h("p", null, h("b", "New game on server port " + port + ". "), "Give it a name so that staying on places, the lobby alert and automatic blocking cover it. If it was a call or something else, choose Not a game and MatchWatch stops recording it."),
+			nameForm(port, "Save name", function () { setTimeout(redraw, 1500); }), not, x);
+		not.addEventListener("click", function () {
+			not.disabled = true;
+			T.act({ action: "gamename", arg: String(port), name: "Not a game", days: "1" }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+				not.disabled = false; toast(j.out || "That did not work.", !j.ok);
+				if (j.ok) { bn.remove(); refresh(true); }
+			});
+		});
+		x.addEventListener("click", function () { hidePort(port); bn.remove(); });
+		box.appendChild(bn);
 	});
 	return box;
 }
@@ -362,6 +375,7 @@ function pageMatch(id) {
 		if (isBlocked(m.ip)) a.appendChild(h("span", { cls: "tag", text: "This server is blocked" }));
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		a.appendChild(star(m.ip, true));
+		if (idx >= 0) a.appendChild(act("Remove this match", "forgetmatch", m.start, { confirm: "Confirm: remove this match", done: function (o) { toast(o); location.hash = "#/matches"; } }));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
 		view.appendChild(a);
@@ -461,7 +475,7 @@ function pageMatches() {
 		view.appendChild(h("div", { cls: "stayform" }, sel));
 	} else gameFilter = "";
 	view.appendChild(h("p", { cls: "sub", text: "Select a match for its full report." }));
-	var heads = [["When"], ["Where"], ["Server"], ["Length"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Missing %", "num"], ["Overall", "num"], ["Finding"], ["You flagged"]];
+	var heads = [["When"], ["Where"], ["Server"], ["Length"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Missing %", "num"], ["Overall", "num"], ["Finding"], ["You flagged"], ["", ""]];
 	heads.splice(1, 0, ["Game"]);
 	var t = table(heads);
 	D.hist.forEach(function (m) {
@@ -469,6 +483,7 @@ function pageMatches() {
 		if (hourFilter >= 0 && hourOf(m) !== hourFilter) return;
 		var cells = [[when(m.start)], [place(m)], [m.ip], [mins(m.dur)], [m.ping == null ? "n/a" : fmt(m.ping, 1), "num"], [fmt(m.jit, 2), "num"], [fmt(m.lost, 2), "num"], [String(m.overall), "num s " + cls(m.overall)], [FINDING[m.code] || m.code], [m.marks ? m.marksum : ""]];
 		cells.splice(1, 0, [m.game || ""]);
+		var rm = h("td", { cls: "act" }); rm.appendChild(act("Remove", "forgetmatch", m.start, { confirm: "Confirm: remove this match" })); cells.push(rm);
 		var tr = row(cells);
 		tr.tabIndex = 0; tr.setAttribute("role", "link");
 		var go = function () { location.hash = "#/match/" + m.start; };
@@ -523,10 +538,11 @@ function pageServers() {
 			else if (d.blocked && D.info.stay) { td.appendChild(h("span", { cls: "tag", text: "Turned away" })); }
 			else if (d.blocked) { td.appendChild(h("span", { cls: "tag", text: "Blocked" })); td.appendChild(act("Unblock", "unblockdc", d.n, {})); }
 			else { td.appendChild(act("Stay here", "stay", d.n, { confirm: "Confirm: turn the others away" })); td.appendChild(act("Block", "blockdc", d.n, { danger: true, confirm: "Confirm: block for " + days + " days" })); }
+			td.appendChild(act("Remove", "forgetdc", d.n, { confirm: "Confirm: remove it and its " + d.matches + " match" + (d.matches === 1 ? "" : "es") }));
 			t.lastChild.appendChild(row([[d.name], [String(d.matches), "num"], [String(d.servers), "num"], [String(d.rating), "num s " + cls(d.rating)], [String(d.worst), "num"], [d.ping == null ? "n/a" : fmt(d.ping, 1), "num"], td]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, t));
-		view.appendChild(h("p", { cls: "note", text: "A datacentre is one operator in one city. Ratings need a few matches each before they mean much. Blocking one only covers the address blocks you have been placed on there so far." }));
+		view.appendChild(h("p", { cls: "note", text: "A datacentre is one operator in one city. Ratings need a few matches each before they mean much. Blocking one only covers the address blocks you have been placed on there so far. Remove takes a datacentre, its servers and their matches out of MatchWatch altogether; it is refused while one of its servers is a favourite." }));
 	}
 	view.appendChild(h("h2", "Every region, nearest first"));
 	var rg = D.regions || [];
@@ -555,6 +571,8 @@ function pageServers() {
 			var td = h("td", { cls: "act" });
 			td.appendChild(star(s.ip));
 			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" }));
+			if (!isFav(s.ip)) td.appendChild(act("Remove", "forgetserver", s.ip, { confirm: "Confirm: remove it and its " + s.matches + " match" + (s.matches === 1 ? "" : "es") }));
+			else if (!RO) td.appendChild(h("span", { cls: "kept", title: "A favourite cannot be removed. Take its star off first.", text: "Kept" }));
 			t2.lastChild.appendChild(row([[s.ip], [place(s)], [s.org === "-" ? "" : s.org], [String(s.matches), "num"], [String(s.rating), "num s " + cls(s.rating)], [String(s.worst), "num"], [s.ping == null ? "n/a" : fmt(s.ping, 1), "num"], td]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, t2));
@@ -672,8 +690,8 @@ function sharePicker(text, pickBox, made) {
 		var its = items[x[0]] || [];
 		if (!its.length) return;
 		var list = h("div", { cls: "picklist" });
-		its.forEach(function (i) { var t = tick1(i.text, "", i.on !== false); i.box = t.box; t.box.addEventListener("change", build); list.appendChild(t.el); });
-		var setAll = function (fn) { its.forEach(function (i) { i.box.checked = !!fn(i); }); build(); };
+		its.forEach(function (i) { var t = tick1(i.text, "", i.on !== false); i.box = t.box; i.el = t.el; t.box.addEventListener("change", build); list.appendChild(t.el); });
+		var setAll = function (fn) { its.forEach(function (i) { if (i.el.style.display !== "none") i.box.checked = !!fn(i); }); build(); };   // only what is listed
 		var all = h("button", { type: "button", text: "All" }), none = h("button", { type: "button", text: "None" });
 		all.addEventListener("click", function () { setAll(function () { return true; }); });
 		none.addEventListener("click", function () { setAll(function () { return false; }); });
@@ -690,21 +708,24 @@ function sharePicker(text, pickBox, made) {
 			var qr = mk("Pick by rating", [["", "Any rating"], ["poor", "Poor: under 50"], ["fair", "Fair or worse: under 70"], ["good", "Good: 70 or more"], ["great", "Excellent: 85 or more"]], "");
 			var qp = mk("Pick by place", [["", "Anywhere"]].concat(uniq("cc", "c:", "Country: "), uniq("city", "t:", "City: ")), "");
 			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], isFavs ? "0" : "2");
+			var hid = h("p", { cls: "note" });
 			var apply = function () {
-				setAll(function (i) {
+				var out = 0, some = 0;
+				its.forEach(function (i) { var s = (function (i) {
 					var r = qr.value, p = qp.value;
 					if (qf && qf.value === "fav" && !i.fav) return false;
 					if (qg && qg.value && i.game !== qg.value) return false;
 					if (r && (i.avg == null || r === "poor" && i.avg >= 50 || r === "fair" && i.avg >= 70 || r === "good" && i.avg < 70 || r === "great" && i.avg < 85)) return false;
 					if (p && (p.charAt(0) === "c" ? i.cc !== p.slice(2) : i.city !== p.slice(2))) return false;
 					return i.n >= +qn.value;
-				});
+				})(i); i.el.style.display = s ? "" : "none"; if (s) some++; else if (i.box.checked) out++; });
+				hid.textContent = (some ? "" : "Nothing matches. ") + (out ? out + " ticked " + (out === 1 ? "item is" : "items are") + " not listed here and " + (out === 1 ? "is" : "are") + " still in the file." : "");
 			};
-			var q = h("div", { cls: "quick" }, h("span", "Tick only: "));
+			var q = h("div", { cls: "quick" }, h("span", "Show only: "));
 			sels.forEach(function (s) { s.addEventListener("change", apply); q.appendChild(s); });
-			inner.appendChild(q);
-		}
-		inner.appendChild(list);
+			inner.appendChild(q); inner.appendChild(list); inner.appendChild(hid);
+			apply();
+		} else inner.appendChild(list);
 		pickBox.appendChild(blk);
 	});
 	note.addEventListener("input", build);
@@ -789,9 +810,10 @@ function shareSection() {
 				got.appendChild(h("h3", "Ratings shared with you"));
 				var t = table([["Server network"], ["Where"], ["Hosted by"], ["Matches", "num"], ["Their rating", "num"], [""]]);
 				rs.forEach(function (x) {
-					var td = h("td", { cls: "num" });
-					if (x.blocked) td.textContent = "Blocked";
+					var td = h("td", { cls: "act" });
+					if (x.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" }));
 					else td.appendChild(act("Block", "block", x.p, { confirm: "Confirm block", done: function (o) { toast(o); td.textContent = "Blocked"; } }));
+					td.appendChild(act("Remove", "shareforget", x.p, { done: function (o) { toast(o); setTimeout(shared, 800); } }));
 					t.lastChild.appendChild(row([[x.p], [place(x)], [x.org || ""], [String(x.n), "num"], [String(x.avg), "num " + cls(x.avg)], td]));
 				});
 				got.appendChild(h("div", { cls: "tablewrap" }, t));
@@ -817,6 +839,10 @@ function tool(title, desc) {
 	return h("section", { cls: "tool" }, h("div", { cls: "toolhead" }, h("h3", title), desc ? h("p", { cls: "note", text: desc }) : null), body);
 }
 function outBox() { var p = h("pre"); p.style.display = "none"; p.show = function (text) { p.textContent = text; p.style.display = "block"; }; return p; }
+function needQos() {
+	return h("p", { cls: "note" }, "This needs QoSmate, a separate package that prioritises traffic on OpenWrt. It is not installed on this router. ",
+		h("a", { href: "https://github.com/hudra0/qosmate", target: "_blank", rel: "noopener", text: "Get QoSmate" }), ". Everything else in MatchWatch works without it.");
+}
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
 	var i = D.info, hasQos = i.qosmate !== false;
@@ -845,9 +871,10 @@ function pageTools() {
 		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
 			h("div", { cls: "actions" }, lineBtn), lineOut));
 
-		if (hasQos) {
+		if (!hasQos) view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in the top priority queue. Needs QoSmate.", needQos()));
+		else {
 			var qosOut = outBox();
-			view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.",
+			view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in the top priority queue of QoSmate, which is installed on this router. Needs a match in progress and changes nothing.",
 				h("div", { cls: "actions" }, act("Check priority", "qos", null, { done: qosOut.show })), qosOut));
 		}
 
@@ -892,6 +919,40 @@ function pageTools() {
 			view.appendChild(tool("Name a game", "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it.",
 				h("div", { cls: "stayform" }, gsel, ginp, gbtn)));
 		}
+		// add a game by its port, before or without ever playing a match on it
+		var aPort = h("input", { type: "text", maxlength: "11", placeholder: "Port, or 7000-7100", autocomplete: "off", "aria-label": "Server port or range" });
+		var aName = h("input", { type: "text", maxlength: "40", placeholder: "Name of the game", autocomplete: "off", "aria-label": "Name of the game" });
+		var aHost = h("input", { type: "text", maxlength: "60", placeholder: "Hosted by (optional)", autocomplete: "off", "aria-label": "Words in the name of the company hosting the servers, optional" });
+		var aKind = h("select", { "aria-label": "What this port carries" }); aKind.appendChild(h("option", { value: "", text: "A game" })); aKind.appendChild(h("option", { value: "1", text: "Not a game (voice chat, a call)" }));
+		var aBtn = h("button", { type: "button", cls: "solid", text: "Add" }), mine = h("div");
+		var drawMine = function () {
+			get("mygames.json", function (g) {
+				if (page !== "tools") return;
+				mine.textContent = "";
+				if (!g || !g.length) { mine.appendChild(h("p", { cls: "empty", text: "You have not added or named any yet." })); return; }
+				var t = table([["Name"], ["Server ports", "num"], ["Treated as"], ["Only when hosted by"], ["", ""]]);
+				g.forEach(function (x) {
+					var td = h("td", { cls: "act" });
+					td.appendChild(act("Remove", "gamedel", x.ports, { done: function (o) { toast(o); setTimeout(drawMine, 800); } }));
+					t.lastChild.appendChild(row([[x.name], [x.ports, "num"], [x.kind === "voice" ? "Not a game" : "A game"], [x.hosts || ""], td]));
+				});
+				mine.appendChild(h("div", { cls: "tablewrap" }, t));
+			});
+		};
+		aBtn.addEventListener("click", function () {
+			var p = aPort.value.replace(/\s/g, ""), n = aName.value.replace(/[^A-Za-z0-9 .:-]/g, "").trim(), hs = aHost.value.toLowerCase().replace(/[^a-z0-9 ,-]/g, " ").trim();
+			if (!/^\d{1,5}(-\d{1,5})?$/.test(p)) { toast("Type one server port, or a range like 7000-7100.", true); aPort.focus(); return; }
+			if (!n) { aName.focus(); return; }
+			aBtn.disabled = true;
+			T.act({ action: "gamename", arg: p, name: n, region: hs, days: aKind.value }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+				aBtn.disabled = false; toast(j.out || "That did not work.", !j.ok);
+				if (j.ok) { aPort.value = ""; aName.value = ""; aHost.value = ""; refresh(true); setTimeout(drawMine, 800); }
+			});
+		});
+		view.appendChild(tool("Add a game", "Know which port a game's servers use? Add it and MatchWatch recognises the game from its first match. Use one port or a range. If the range is shared with other things, add a word from the name of the company hosting the servers (shown on the Servers page); a range over 2000 ports wide must have one.",
+			h("div", { cls: "stayform" }, aPort, aName), h("div", { cls: "stayform" }, aHost, aKind, aBtn)));
+		view.appendChild(tool("Your games", "Everything you have added, named or taken from a share file. These are checked before the built-in list. Removing one puts the port back to how MatchWatch treats it by default.", mine));
+		drawMine();
 		var skBox = h("div");
 		view.appendChild(tool("Skipped as voice chat", "Voice chat is not a match, so MatchWatch does not record it and can never block it. A few games use the same ports. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on.", skBox));
 		get("skipped.json", function (sk) {
@@ -919,10 +980,11 @@ function pageTools() {
 		view.appendChild(tool("Recent activity", "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent.",
 			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
-		if (hasQos) {
-			view.appendChild(h("h2", "QoSmate priority"));
+		view.appendChild(h("h2", "QoSmate priority"));
+		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
+		else {
 			var fixOut = outBox();
-			view.appendChild(tool("Prioritise my game traffic", "Use this if \"Is my game prioritised?\" says your game is not reaching the top queue. It adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as top priority. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes the two rules out again.",
+			view.appendChild(tool("Prioritise my game traffic", "QoSmate is installed on this router. Use this if \"Is my game prioritised?\" says your game is not reaching the top queue. It adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as top priority. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes the two rules out again.",
 				h("div", { cls: "actions" }, act("Add the rules", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: fixOut.show }), act("Remove the rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: fixOut.show })), fixOut));
 		}
 	}

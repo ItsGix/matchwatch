@@ -114,6 +114,7 @@ td.num, th.num { text-align: right; }
 td.act { text-align: right; padding-right: 0; }
 td.act > * + * { margin-left: 6px; }
 td.act button:not(.star) { padding: 4px 11px; }
+.kept { color: var(--muted); font-size: 0.85rem; padding: 0 6px; cursor: help; }
 tr[tabindex] { cursor: pointer; } tr[tabindex]:hover td { background: var(--soft); }
 .tag { display: inline-block; font-size: 0.78rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; color: var(--bad); background: var(--soft); background: color-mix(in srgb, var(--bad) 16%, transparent); }
 .tag.keep { color: var(--ok); background: var(--soft); background: color-mix(in srgb, var(--ok) 16%, transparent); }
@@ -130,7 +131,10 @@ button.hr:hover i, button.hr.sel i { outline: 2px solid var(--ink); outline-offs
 /* ---- messages */
 .banner { margin: 16px 0 18px; padding: 14px 16px; border: 1px solid var(--grid); border-left: 4px solid var(--pen); border-radius: var(--r2); background: var(--panel); display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .banner.far { border-left-color: var(--mid); } .banner.bad { border-left-color: var(--bad); }
-.banner p { margin: 0; max-width: 70ch; }
+.banner p { margin: 0; max-width: 70ch; flex: 1 1 320px; }
+button.close { background: none; border: 0; padding: 0 6px; font-size: 1.5rem; line-height: 1; color: var(--muted); align-self: flex-start; }
+button.close:hover:not(:disabled) { color: var(--ink); }
+.toolbody .stayform + .stayform { margin-top: 8px; }
 .banner b { font-family: var(--display); }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: min(92vw, 640px); background: var(--ink); color: var(--paper); padding: 11px 18px; border-radius: var(--r2); font-size: 0.95rem; white-space: pre-line; display: none; z-index: 5; }
 #toast.err { background: var(--bad); }

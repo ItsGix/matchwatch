@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.15.1"
+VERSION="0.17.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -296,6 +296,7 @@ export_json() {
 	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
+	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
 	share_json > "$RUN/www/shared.json.tmp" && mv -f "$RUN/www/shared.json.tmp" "$RUN/www/shared.json"
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -626,15 +627,31 @@ cmd_newgame() { # port : a match was just played on a server port nobody has nam
 	local msg="New game seen on server port $1. Name it on the Tools page in MatchWatch, so that staying on places, the lobby alert and automatic blocking cover it."
 	if [ "$NOTIFY_NEWGAME" = 1 ]; then cmd_notify "$msg"; else logger -t matchwatch "$msg" 2>/dev/null; fi
 }
-cmd_game() { # name <port or lo-hi> <name>
-	[ "$1" = name ] || die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>"
-	case "$2" in ""|*[!0-9-]*|-*|*-|*-*-*) die "usage: matchwatch game name <server port, or a range like 7000-7100> <name>" ;; esac
-	[ -n "$3" ] || die "usage: matchwatch game name <server port> <name>"
-	touch "$DATA/games.local"
+cmd_game() { # name <port or lo-hi> <name> [hosts] [voice] | remove <port or lo-hi>
+	local use="usage: matchwatch game name <server port, or a range like 7000-7100> <name> [hosting company words] [voice]   |   matchwatch game remove <port or range>"
+	local lo hi hosts kind=""
+	case "$1" in name|remove) ;; *) die "$use" ;; esac
+	case "$2" in ""|*[!0-9-]*|-*|*-|*-*-*) die "$use" ;; esac
+	lo="${2%-*}"; hi="${2#*-}"
+	[ "${#lo}" -le 5 ] && [ "${#hi}" -le 5 ] && [ "$lo" -ge 1 ] && [ "$hi" -le 65535 ] && [ "$lo" -le "$hi" ] || die "ports run from 1 to 65535, and a range goes from low to high"
+	mkdir -p "$DATA"; touch "$DATA/games.local"
+	if [ "$1" = remove ]; then
+		awk -F'|' -v p="$2" '$2 != p' "$DATA/games.local" > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
+		export_json
+		echo "Removed your name for server port $2."
+		return 0
+	fi
+	[ -n "$3" ] || die "$use"
+	hosts="$(echo "$4" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9 ,.-' | sed 's/ *, */,/g; s/^[ ,]*//; s/[ ,]*$//')"
+	[ "$5" = voice ] && kind=voice
+	if [ -n "$hosts" ]; then echo "$hosts" | tr ',' '\n' | awk 'length($0) < 3 { bad = 1 } END { exit bad }' || die "each hosting company word needs three letters or more"; fi
+	# a wide range with no host check would take every unknown stream in it for this game, and stay mode could then block it
+	[ $((hi - lo)) -le 2000 ] || [ -n "$hosts" ] || die "a range over 2000 ports wide needs the name of the company hosting the servers"
 	# a name you give goes first, so it wins over an imported label that covers the same port
-	{ printf '%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2"; awk -F'|' -v p="$2" '$2 != p' "$DATA/games.local"; } > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
+	{ printf '%s|%s|%s|%s\n' "$(echo "$3" | tr -d '|"\\')" "$2" "$kind" "$hosts"; awk -F'|' -v p="$2" '$2 != p' "$DATA/games.local"; } > "$DATA/games.local.tmp"; mv -f "$DATA/games.local.tmp" "$DATA/games.local"
 	export_json
-	echo "Matches on server port $2 are now labelled: $3. Staying on places, the lobby alert and automatic blocking now cover it."
+	if [ "$kind" = voice ]; then echo "Server port $2 is now marked as not a game ($3). MatchWatch will stop recording it within twenty seconds."
+	else echo "Matches on server port $2 are now labelled: $3. Staying on places, the lobby alert and automatic blocking now cover it."; fi
 }
 cmd_unblock_dc() { # number
 	local list p
@@ -932,7 +949,13 @@ cmd_share_undo() { # put back what the last import changed
 	export_json
 	echo "The last import is undone. Game names, places, ping hosts, shared ratings, favourites and settings are as they were before it."
 }
-cmd_share_forget() {
+cmd_share_forget() { # [network] : every rating shared with you, or just one network's
+	if [ -n "$1" ]; then
+		[ -f "$DATA/ratings.shared" ] && awk -F'\t' -v p="$1" '$1 != p' "$DATA/ratings.shared" > "$DATA/ratings.shared.tmp" && mv -f "$DATA/ratings.shared.tmp" "$DATA/ratings.shared"
+		export_json
+		echo "Removed the shared rating for $1."
+		return 0
+	fi
 	rm -f "$DATA/ratings.shared"
 	export_json
 	echo "Shared ratings removed. Your own ratings are untouched."
@@ -953,7 +976,7 @@ cmd_share() {
 		check) [ -n "$2" ] || die "usage: matchwatch share check <file>"; cmd_share_check "$2" || exit 1 ;;
 		import) [ -n "$2" ] || die "usage: matchwatch share import <file> [$SHARE_ALL]"; f="$2"; shift 2; cmd_share_import "$f" "$@" || exit 1 ;;
 		undo) cmd_share_undo || exit 1 ;;
-		forget) cmd_share_forget ;;
+		forget) cmd_share_forget "$2" ;;
 		*) cat <<EOF
 matchwatch share export [sections] > file    write a share file (nothing about your home goes in it)
 matchwatch share check <file>                say what a share file holds; changes nothing
@@ -989,6 +1012,46 @@ cmd_fav() { # add <ip> | remove <ip> | (nothing = list)
 		echo "Removed $ip from your favourites."
 	fi
 	export_json
+}
+
+# ---- remove things from the history: one match, every match on one server, or a whole datacentre.
+# Whatever was built from them goes too: ratings, the datacentre and region figures, the hour chart.
+# A favourite cannot be removed this way, so one cannot be lost by a slip: take its star off first.
+cmd_forget() { # match <start time> | server <ip> | dc <number>
+	local kind="$1" arg="$2" pfx="" name="" ip n id
+	mkdir -p "$DATA"; touch "$DATA/sessions.tsv" "$DATA/favourites" "$DATA/blocklist"
+	case "$kind" in
+		match) case "$arg" in ""|*[!0-9]*) die "usage: matchwatch forget match <start time from the history>" ;; esac ;;
+		server) is_ipv4 "$arg" || die "usage: matchwatch forget server <server-ip>"
+			is_fav "$arg" && die "$arg is one of your favourites, so it is kept. Take its star off first if you want it gone." ;;
+		dc) case "$arg" in ""|*[!0-9]*) die "usage: matchwatch forget dc <number from 'matchwatch datacentres'>" ;; esac
+			pfx="$(awk -v MODE=dc_prefixes -v ARG="$arg" -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv")"
+			[ -n "$pfx" ] || die "no datacentre number $arg"
+			name="$(echo "$pfx" | head -n 1)"; pfx="$(echo "$pfx" | tail -n +2 | tr '\n' ' ')"
+			for ip in $(cut -f1 "$DATA/favourites"); do
+				case " $pfx " in *" ${ip%.*}.0/24 "*) die "$ip in that datacentre is one of your favourites, so the datacentre is kept. Take its star off first, or remove the other servers one by one." ;; esac
+			done ;;
+		*) die "usage: matchwatch forget match <start time> | server <ip> | dc <number>" ;;
+	esac
+	awk -F'\t' -v K="$kind" -v A="$arg" -v P=" $pfx " -v KEEP="$DATA/sessions.tsv.tmp" -v GONE="$RUN/forget.$$" '
+		BEGIN { printf "" > KEEP; printf "" > GONE }
+		{
+			split($5, o, "."); hit = (K == "match") ? ($1 == A) : (K == "server") ? ($5 == A) : (index(P, " " o[1] "." o[2] "." o[3] ".0/24 ") > 0)
+			if (hit) print $1 > GONE; else print > KEEP
+		}' "$DATA/sessions.tsv"
+	n="$(cnt "$RUN/forget.$$")"
+	if [ "$n" -lt 1 ]; then rm -f "$DATA/sessions.tsv.tmp" "$RUN/forget.$$"; die "there was nothing to remove"; fi
+	while read -r id; do rm -f "$DATA/matches/$id.json"; done < "$RUN/forget.$$"
+	rm -f "$RUN/forget.$$"
+	mv -f "$DATA/sessions.tsv.tmp" "$DATA/sessions.tsv"
+	export_json
+	# the running engine still remembers the old ratings. Start it afresh, unless that would cut a match short
+	if [ -z "$CONF" ] && [ -x /etc/init.d/matchwatch ] && grep -q '"sessions":\[\]' "$RUN/www/status.json" 2>/dev/null; then ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 & fi
+	case "$kind" in
+		match) echo "Removed that match." ;;
+		server) echo "Removed $arg and its $n match(es) from MatchWatch." ;;
+		dc) echo "Removed $name and its $n match(es) from MatchWatch." ;;
+	esac
 }
 
 # ---- tools for the dashboard's Tools page
@@ -1113,7 +1176,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		log) cmd_log ;;
 		linetest) cmd_linetest ;;
 		trace) cmd_trace "$arg" ;;
-		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" ;;
+		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" "$region" "$( [ "$days" = 1 ] && echo voice )" ;;   # region carries the host words; days = 1 marks it as not a game
+		gamedel) [ -n "$arg" ] || die "choose a name to remove"; cmd_game remove "$arg" ;;
 		clearhistory) cmd_clear_history ;;
 		shareexport) cmd_share_export $arg ;;
 		# the share file itself arrives on standard input
@@ -1123,7 +1187,10 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		fav) cmd_fav add "$arg" ;;
 		unfav) cmd_fav remove "$arg" ;;
 		shareundo) cmd_share_undo ;;
-		shareforget) cmd_share_forget ;;
+		shareforget) cmd_share_forget "$arg" ;;
+		forgetmatch) cmd_forget match "$arg" ;;
+		forgetserver) cmd_forget server "$arg" ;;
+		forgetdc) cmd_forget dc "$arg" ;;
 		*) die "unknown action" ;;
 	esac
 }
@@ -1506,7 +1573,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch stay add <places> | remove <n> | off     change or end the pool
   matchwatch hours             how your matches rate at each hour of the day
   matchwatch recap             summary of your latest session
-  matchwatch games             games seen; 'matchwatch game name <port> <name>' labels one
+  matchwatch games             games seen; 'matchwatch game name <port or lo-hi> <name>' adds or names one,
+                               'matchwatch game remove <port or lo-hi>' takes your name off again
   matchwatch regions [measure] ping every region the game's host has a datacentre in
   matchwatch mark              flag this moment ("I felt that"); same as the dashboard button
   matchwatch qos               check the game is in QoSmate's top class (run during a match)
@@ -1518,6 +1586,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
+  matchwatch forget match <start> | server <ip> | dc <n>   remove one match, one server or one datacentre
+                               and everything built from them. Favourites are kept.
   matchwatch share             make, check or import a share file: game labels, ping hosts,
                                places to stay on, server ratings and thresholds
   /etc/init.d/matchwatch start|stop|restart|enable
@@ -1539,7 +1609,7 @@ case "$1" in
 	hours) touch "$DATA/sessions.tsv"; awk -v MODE=hours_txt -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
 	recap) touch "$DATA/sessions.tsv"; awk -v MODE=recap_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
 	games) touch "$DATA/sessions.tsv"; awk -v MODE=games_txt -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" ;;
-	game) cmd_game "$2" "$3" "$4" ;;
+	game) cmd_game "$2" "$3" "$4" "$5" "$6" ;;
 	device) cmd_device "$2" ;;
 	regions) cmd_regions "$2" ;;
 	places) awk -F'|' '/^area/ { printf "%-18s %-18s %s\n", $2, $3, $4 }' "$LIB/places.list"; echo; echo "Also any country by name or two-letter code, and any city by name." ;;
@@ -1554,6 +1624,7 @@ case "$1" in
 	fav) cmd_fav "$2" "$3" ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
+	forget) cmd_forget "$2" "$3" ;;
 	share) shift; cmd_share "$@" ;;
 	version) echo "$VERSION" ;;
 	_probe_start) shift; cmd_probe_start "$@" ;;
@@ -2938,7 +3009,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_9'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename clearhistory sharecheck shareimport shareundo shareforget fav unfav"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget fav unfav forgetmatch forgetserver forgetdc"
 
 reply() { # ok(0|1) text
 	json_init
@@ -3233,14 +3304,27 @@ function nameForm(port, label, after) {
 	return h("div", { cls: "stayform" }, inp, btn);
 }
 // shown on Live and Matches until every game on file has a name
+// notices you have closed stay closed in this browser; the game can still be named on the Tools page
+function hiddenPorts() { try { return JSON.parse(localStorage.getItem("mw-hide-ports") || "[]"); } catch (e) { return []; } }
+function hidePort(port) { var a = hiddenPorts(); if (a.indexOf(port) < 0) a.push(port); try { localStorage.setItem("mw-hide-ports", JSON.stringify(a.slice(-50))); } catch (e) {} }
 function namePrompt(redraw) {
 	if (RO) return null;
-	var ps = unnamedPorts();
+	var gone = hiddenPorts(), ps = unnamedPorts().filter(function (p) { return gone.indexOf(p) < 0; });
 	if (!ps.length) return null;
 	var box = h("div");
 	ps.forEach(function (port) {
-		box.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "New game on server port " + port + ". "), "Give it a name. Until it has one, MatchWatch rates its matches but staying on places, the lobby alert and automatic blocking leave it alone."),
-			nameForm(port, "Save name", function () { setTimeout(redraw, 1500); })));
+		var not = h("button", { type: "button", text: "Not a game" }), x = h("button", { type: "button", cls: "close", title: "Hide this notice", "aria-label": "Hide the notice about server port " + port, text: "\u00d7" });
+		var bn = h("div", { cls: "banner far" }, h("p", null, h("b", "New game on server port " + port + ". "), "Give it a name so that staying on places, the lobby alert and automatic blocking cover it. If it was a call or something else, choose Not a game and MatchWatch stops recording it."),
+			nameForm(port, "Save name", function () { setTimeout(redraw, 1500); }), not, x);
+		not.addEventListener("click", function () {
+			not.disabled = true;
+			T.act({ action: "gamename", arg: String(port), name: "Not a game", days: "1" }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+				not.disabled = false; toast(j.out || "That did not work.", !j.ok);
+				if (j.ok) { bn.remove(); refresh(true); }
+			});
+		});
+		x.addEventListener("click", function () { hidePort(port); bn.remove(); });
+		box.appendChild(bn);
 	});
 	return box;
 }
@@ -3402,6 +3486,7 @@ function pageMatch(id) {
 		if (isBlocked(m.ip)) a.appendChild(h("span", { cls: "tag", text: "This server is blocked" }));
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		a.appendChild(star(m.ip, true));
+		if (idx >= 0) a.appendChild(act("Remove this match", "forgetmatch", m.start, { confirm: "Confirm: remove this match", done: function (o) { toast(o); location.hash = "#/matches"; } }));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
 		view.appendChild(a);
@@ -3501,7 +3586,7 @@ function pageMatches() {
 		view.appendChild(h("div", { cls: "stayform" }, sel));
 	} else gameFilter = "";
 	view.appendChild(h("p", { cls: "sub", text: "Select a match for its full report." }));
-	var heads = [["When"], ["Where"], ["Server"], ["Length"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Missing %", "num"], ["Overall", "num"], ["Finding"], ["You flagged"]];
+	var heads = [["When"], ["Where"], ["Server"], ["Length"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Missing %", "num"], ["Overall", "num"], ["Finding"], ["You flagged"], ["", ""]];
 	heads.splice(1, 0, ["Game"]);
 	var t = table(heads);
 	D.hist.forEach(function (m) {
@@ -3509,6 +3594,7 @@ function pageMatches() {
 		if (hourFilter >= 0 && hourOf(m) !== hourFilter) return;
 		var cells = [[when(m.start)], [place(m)], [m.ip], [mins(m.dur)], [m.ping == null ? "n/a" : fmt(m.ping, 1), "num"], [fmt(m.jit, 2), "num"], [fmt(m.lost, 2), "num"], [String(m.overall), "num s " + cls(m.overall)], [FINDING[m.code] || m.code], [m.marks ? m.marksum : ""]];
 		cells.splice(1, 0, [m.game || ""]);
+		var rm = h("td", { cls: "act" }); rm.appendChild(act("Remove", "forgetmatch", m.start, { confirm: "Confirm: remove this match" })); cells.push(rm);
 		var tr = row(cells);
 		tr.tabIndex = 0; tr.setAttribute("role", "link");
 		var go = function () { location.hash = "#/match/" + m.start; };
@@ -3563,10 +3649,11 @@ function pageServers() {
 			else if (d.blocked && D.info.stay) { td.appendChild(h("span", { cls: "tag", text: "Turned away" })); }
 			else if (d.blocked) { td.appendChild(h("span", { cls: "tag", text: "Blocked" })); td.appendChild(act("Unblock", "unblockdc", d.n, {})); }
 			else { td.appendChild(act("Stay here", "stay", d.n, { confirm: "Confirm: turn the others away" })); td.appendChild(act("Block", "blockdc", d.n, { danger: true, confirm: "Confirm: block for " + days + " days" })); }
+			td.appendChild(act("Remove", "forgetdc", d.n, { confirm: "Confirm: remove it and its " + d.matches + " match" + (d.matches === 1 ? "" : "es") }));
 			t.lastChild.appendChild(row([[d.name], [String(d.matches), "num"], [String(d.servers), "num"], [String(d.rating), "num s " + cls(d.rating)], [String(d.worst), "num"], [d.ping == null ? "n/a" : fmt(d.ping, 1), "num"], td]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, t));
-		view.appendChild(h("p", { cls: "note", text: "A datacentre is one operator in one city. Ratings need a few matches each before they mean much. Blocking one only covers the address blocks you have been placed on there so far." }));
+		view.appendChild(h("p", { cls: "note", text: "A datacentre is one operator in one city. Ratings need a few matches each before they mean much. Blocking one only covers the address blocks you have been placed on there so far. Remove takes a datacentre, its servers and their matches out of MatchWatch altogether; it is refused while one of its servers is a favourite." }));
 	}
 	view.appendChild(h("h2", "Every region, nearest first"));
 	var rg = D.regions || [];
@@ -3595,6 +3682,8 @@ function pageServers() {
 			var td = h("td", { cls: "act" });
 			td.appendChild(star(s.ip));
 			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" }));
+			if (!isFav(s.ip)) td.appendChild(act("Remove", "forgetserver", s.ip, { confirm: "Confirm: remove it and its " + s.matches + " match" + (s.matches === 1 ? "" : "es") }));
+			else if (!RO) td.appendChild(h("span", { cls: "kept", title: "A favourite cannot be removed. Take its star off first.", text: "Kept" }));
 			t2.lastChild.appendChild(row([[s.ip], [place(s)], [s.org === "-" ? "" : s.org], [String(s.matches), "num"], [String(s.rating), "num s " + cls(s.rating)], [String(s.worst), "num"], [s.ping == null ? "n/a" : fmt(s.ping, 1), "num"], td]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, t2));
@@ -3712,8 +3801,8 @@ function sharePicker(text, pickBox, made) {
 		var its = items[x[0]] || [];
 		if (!its.length) return;
 		var list = h("div", { cls: "picklist" });
-		its.forEach(function (i) { var t = tick1(i.text, "", i.on !== false); i.box = t.box; t.box.addEventListener("change", build); list.appendChild(t.el); });
-		var setAll = function (fn) { its.forEach(function (i) { i.box.checked = !!fn(i); }); build(); };
+		its.forEach(function (i) { var t = tick1(i.text, "", i.on !== false); i.box = t.box; i.el = t.el; t.box.addEventListener("change", build); list.appendChild(t.el); });
+		var setAll = function (fn) { its.forEach(function (i) { if (i.el.style.display !== "none") i.box.checked = !!fn(i); }); build(); };   // only what is listed
 		var all = h("button", { type: "button", text: "All" }), none = h("button", { type: "button", text: "None" });
 		all.addEventListener("click", function () { setAll(function () { return true; }); });
 		none.addEventListener("click", function () { setAll(function () { return false; }); });
@@ -3730,21 +3819,24 @@ function sharePicker(text, pickBox, made) {
 			var qr = mk("Pick by rating", [["", "Any rating"], ["poor", "Poor: under 50"], ["fair", "Fair or worse: under 70"], ["good", "Good: 70 or more"], ["great", "Excellent: 85 or more"]], "");
 			var qp = mk("Pick by place", [["", "Anywhere"]].concat(uniq("cc", "c:", "Country: "), uniq("city", "t:", "City: ")), "");
 			var qn = mk("Pick by number of matches", [["0", "Any number of matches"], ["2", "2 or more matches"], ["3", "3 or more"], ["5", "5 or more"], ["10", "10 or more"]], isFavs ? "0" : "2");
+			var hid = h("p", { cls: "note" });
 			var apply = function () {
-				setAll(function (i) {
+				var out = 0, some = 0;
+				its.forEach(function (i) { var s = (function (i) {
 					var r = qr.value, p = qp.value;
 					if (qf && qf.value === "fav" && !i.fav) return false;
 					if (qg && qg.value && i.game !== qg.value) return false;
 					if (r && (i.avg == null || r === "poor" && i.avg >= 50 || r === "fair" && i.avg >= 70 || r === "good" && i.avg < 70 || r === "great" && i.avg < 85)) return false;
 					if (p && (p.charAt(0) === "c" ? i.cc !== p.slice(2) : i.city !== p.slice(2))) return false;
 					return i.n >= +qn.value;
-				});
+				})(i); i.el.style.display = s ? "" : "none"; if (s) some++; else if (i.box.checked) out++; });
+				hid.textContent = (some ? "" : "Nothing matches. ") + (out ? out + " ticked " + (out === 1 ? "item is" : "items are") + " not listed here and " + (out === 1 ? "is" : "are") + " still in the file." : "");
 			};
-			var q = h("div", { cls: "quick" }, h("span", "Tick only: "));
+			var q = h("div", { cls: "quick" }, h("span", "Show only: "));
 			sels.forEach(function (s) { s.addEventListener("change", apply); q.appendChild(s); });
-			inner.appendChild(q);
-		}
-		inner.appendChild(list);
+			inner.appendChild(q); inner.appendChild(list); inner.appendChild(hid);
+			apply();
+		} else inner.appendChild(list);
 		pickBox.appendChild(blk);
 	});
 	note.addEventListener("input", build);
@@ -3829,9 +3921,10 @@ function shareSection() {
 				got.appendChild(h("h3", "Ratings shared with you"));
 				var t = table([["Server network"], ["Where"], ["Hosted by"], ["Matches", "num"], ["Their rating", "num"], [""]]);
 				rs.forEach(function (x) {
-					var td = h("td", { cls: "num" });
-					if (x.blocked) td.textContent = "Blocked";
+					var td = h("td", { cls: "act" });
+					if (x.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" }));
 					else td.appendChild(act("Block", "block", x.p, { confirm: "Confirm block", done: function (o) { toast(o); td.textContent = "Blocked"; } }));
+					td.appendChild(act("Remove", "shareforget", x.p, { done: function (o) { toast(o); setTimeout(shared, 800); } }));
 					t.lastChild.appendChild(row([[x.p], [place(x)], [x.org || ""], [String(x.n), "num"], [String(x.avg), "num " + cls(x.avg)], td]));
 				});
 				got.appendChild(h("div", { cls: "tablewrap" }, t));
@@ -3857,6 +3950,10 @@ function tool(title, desc) {
 	return h("section", { cls: "tool" }, h("div", { cls: "toolhead" }, h("h3", title), desc ? h("p", { cls: "note", text: desc }) : null), body);
 }
 function outBox() { var p = h("pre"); p.style.display = "none"; p.show = function (text) { p.textContent = text; p.style.display = "block"; }; return p; }
+function needQos() {
+	return h("p", { cls: "note" }, "This needs QoSmate, a separate package that prioritises traffic on OpenWrt. It is not installed on this router. ",
+		h("a", { href: "https://github.com/hudra0/qosmate", target: "_blank", rel: "noopener", text: "Get QoSmate" }), ". Everything else in MatchWatch works without it.");
+}
 function pageTools() {
 	view.textContent = ""; view.appendChild(h("h1", "Tools"));
 	var i = D.info, hasQos = i.qosmate !== false;
@@ -3885,9 +3982,10 @@ function pageTools() {
 		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
 			h("div", { cls: "actions" }, lineBtn), lineOut));
 
-		if (hasQos) {
+		if (!hasQos) view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in the top priority queue. Needs QoSmate.", needQos()));
+		else {
 			var qosOut = outBox();
-			view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.",
+			view.appendChild(tool("Is my game prioritised?", "Looks at whether your game's traffic is in the top priority queue of QoSmate, which is installed on this router. Needs a match in progress and changes nothing.",
 				h("div", { cls: "actions" }, act("Check priority", "qos", null, { done: qosOut.show })), qosOut));
 		}
 
@@ -3932,6 +4030,40 @@ function pageTools() {
 			view.appendChild(tool("Name a game", "Games are recognised by the port their servers use. Give an unrecognised one a name and every match on that port, past and future, shows it.",
 				h("div", { cls: "stayform" }, gsel, ginp, gbtn)));
 		}
+		// add a game by its port, before or without ever playing a match on it
+		var aPort = h("input", { type: "text", maxlength: "11", placeholder: "Port, or 7000-7100", autocomplete: "off", "aria-label": "Server port or range" });
+		var aName = h("input", { type: "text", maxlength: "40", placeholder: "Name of the game", autocomplete: "off", "aria-label": "Name of the game" });
+		var aHost = h("input", { type: "text", maxlength: "60", placeholder: "Hosted by (optional)", autocomplete: "off", "aria-label": "Words in the name of the company hosting the servers, optional" });
+		var aKind = h("select", { "aria-label": "What this port carries" }); aKind.appendChild(h("option", { value: "", text: "A game" })); aKind.appendChild(h("option", { value: "1", text: "Not a game (voice chat, a call)" }));
+		var aBtn = h("button", { type: "button", cls: "solid", text: "Add" }), mine = h("div");
+		var drawMine = function () {
+			get("mygames.json", function (g) {
+				if (page !== "tools") return;
+				mine.textContent = "";
+				if (!g || !g.length) { mine.appendChild(h("p", { cls: "empty", text: "You have not added or named any yet." })); return; }
+				var t = table([["Name"], ["Server ports", "num"], ["Treated as"], ["Only when hosted by"], ["", ""]]);
+				g.forEach(function (x) {
+					var td = h("td", { cls: "act" });
+					td.appendChild(act("Remove", "gamedel", x.ports, { done: function (o) { toast(o); setTimeout(drawMine, 800); } }));
+					t.lastChild.appendChild(row([[x.name], [x.ports, "num"], [x.kind === "voice" ? "Not a game" : "A game"], [x.hosts || ""], td]));
+				});
+				mine.appendChild(h("div", { cls: "tablewrap" }, t));
+			});
+		};
+		aBtn.addEventListener("click", function () {
+			var p = aPort.value.replace(/\s/g, ""), n = aName.value.replace(/[^A-Za-z0-9 .:-]/g, "").trim(), hs = aHost.value.toLowerCase().replace(/[^a-z0-9 ,-]/g, " ").trim();
+			if (!/^\d{1,5}(-\d{1,5})?$/.test(p)) { toast("Type one server port, or a range like 7000-7100.", true); aPort.focus(); return; }
+			if (!n) { aName.focus(); return; }
+			aBtn.disabled = true;
+			T.act({ action: "gamename", arg: p, name: n, region: hs, days: aKind.value }).then(function (j) { return j || {}; }, function () { return { ok: false }; }).then(function (j) {
+				aBtn.disabled = false; toast(j.out || "That did not work.", !j.ok);
+				if (j.ok) { aPort.value = ""; aName.value = ""; aHost.value = ""; refresh(true); setTimeout(drawMine, 800); }
+			});
+		});
+		view.appendChild(tool("Add a game", "Know which port a game's servers use? Add it and MatchWatch recognises the game from its first match. Use one port or a range. If the range is shared with other things, add a word from the name of the company hosting the servers (shown on the Servers page); a range over 2000 ports wide must have one.",
+			h("div", { cls: "stayform" }, aPort, aName), h("div", { cls: "stayform" }, aHost, aKind, aBtn)));
+		view.appendChild(tool("Your games", "Everything you have added, named or taken from a share file. These are checked before the built-in list. Removing one puts the port back to how MatchWatch treats it by default.", mine));
+		drawMine();
 		var skBox = h("div");
 		view.appendChild(tool("Skipped as voice chat", "Voice chat is not a match, so MatchWatch does not record it and can never block it. A few games use the same ports. If a game you play is listed here, name it and MatchWatch treats that port as a game from then on.", skBox));
 		get("skipped.json", function (sk) {
@@ -3959,10 +4091,11 @@ function pageTools() {
 		view.appendChild(tool("Recent activity", "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent.",
 			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
-		if (hasQos) {
-			view.appendChild(h("h2", "QoSmate priority"));
+		view.appendChild(h("h2", "QoSmate priority"));
+		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
+		else {
 			var fixOut = outBox();
-			view.appendChild(tool("Prioritise my game traffic", "Use this if \"Is my game prioritised?\" says your game is not reaching the top queue. It adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as top priority. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes the two rules out again.",
+			view.appendChild(tool("Prioritise my game traffic", "QoSmate is installed on this router. Use this if \"Is my game prioritised?\" says your game is not reaching the top queue. It adds two QoSmate rules that mark all UDP to and from your gaming device, except web ports, as top priority. It restarts QoSmate, which causes a brief blip, so do it between matches. Remove takes the two rules out again.",
 				h("div", { cls: "actions" }, act("Add the rules", "qosfix", null, { confirm: "Confirm: add the rules and restart QoSmate", done: fixOut.show }), act("Remove the rules", "qosunfix", null, { confirm: "Confirm: remove and restart QoSmate", done: fixOut.show })), fixOut));
 		}
 	}
@@ -4132,6 +4265,7 @@ td.num, th.num { text-align: right; }
 td.act { text-align: right; padding-right: 0; }
 td.act > * + * { margin-left: 6px; }
 td.act button:not(.star) { padding: 4px 11px; }
+.kept { color: var(--muted); font-size: 0.85rem; padding: 0 6px; cursor: help; }
 tr[tabindex] { cursor: pointer; } tr[tabindex]:hover td { background: var(--soft); }
 .tag { display: inline-block; font-size: 0.78rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; color: var(--bad); background: var(--soft); background: color-mix(in srgb, var(--bad) 16%, transparent); }
 .tag.keep { color: var(--ok); background: var(--soft); background: color-mix(in srgb, var(--ok) 16%, transparent); }
@@ -4148,7 +4282,10 @@ button.hr:hover i, button.hr.sel i { outline: 2px solid var(--ink); outline-offs
 /* ---- messages */
 .banner { margin: 16px 0 18px; padding: 14px 16px; border: 1px solid var(--grid); border-left: 4px solid var(--pen); border-radius: var(--r2); background: var(--panel); display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .banner.far { border-left-color: var(--mid); } .banner.bad { border-left-color: var(--bad); }
-.banner p { margin: 0; max-width: 70ch; }
+.banner p { margin: 0; max-width: 70ch; flex: 1 1 320px; }
+button.close { background: none; border: 0; padding: 0 6px; font-size: 1.5rem; line-height: 1; color: var(--muted); align-self: flex-start; }
+button.close:hover:not(:disabled) { color: var(--ink); }
+.toolbody .stayform + .stayform { margin-top: 8px; }
 .banner b { font-family: var(--display); }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: min(92vw, 640px); background: var(--ink); color: var(--paper); padding: 11px 18px; border-radius: var(--r2); font-size: 0.95rem; white-space: pre-line; display: none; z-index: 5; }
 #toast.err { background: var(--bad); }

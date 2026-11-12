@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.15.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.17.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -133,6 +133,7 @@ Everything is also available over SSH:
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
 | `matchwatch doctor` | Checks that capture works. Changes nothing |
 | `matchwatch clear-history` | Forgets every recorded match. Blocks and settings are kept |
+| `matchwatch forget match <start>` / `server <ip>` / `dc <n>` | Removes one match, server or datacentre. Favourites are kept |
 | `matchwatch share export` / `check` / `import` / `undo` | Make, inspect or take in a share file |
 
 Settings live in `/etc/config/matchwatch`. To change one over SSH: `uci set matchwatch.main.<option>=<value>`, `uci commit matchwatch`, then `/etc/init.d/matchwatch restart`.
@@ -142,7 +143,7 @@ Settings live in `/etc/config/matchwatch`. To change one over SSH: `uci set matc
 The Tools page has four tabs: Checks, Games, Share, and Data and settings. Each tool says what it does beside its button. Between them the tabs hold:
 
 - **Check MatchWatch is working.** Confirms the programs it needs are present and that it can see your device's traffic. Takes five seconds and changes nothing.
-- **Is my game prioritised?** Only shown when QoSmate is installed. Checks whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.
+- **Is my game prioritised?** Needs [QoSmate](https://github.com/hudra0/qosmate) installed. Checks whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.
 - **Test my line.** Twenty seconds of pings from the router to your provider's first hop and two public servers, with no game needed. It gives a plain verdict on ping, jitter and loss, so you can tell before you queue whether your own connection is steady. Trouble seen on every target is blamed on your line; trouble with one target is not.
 - **Send a test alert.** Sends one message to your phone to prove the alerts address works.
 - **Route to a server.** Traces the route to any server in your history, to compare with the route in a match report.
@@ -151,7 +152,7 @@ The Tools page has four tabs: Checks, Games, Share, and Data and settings. Each 
 - **Share with other players.** Makes a share file from your game names, places, server ratings, ping hosts and thresholds, or takes one in. See [Sharing with other players](#sharing-with-other-players).
 - **Match history and Clear all history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
-- **QoSmate priority.** Only shown when QoSmate is installed. See [QoSmate check and fix](#qosmate-check-and-fix).
+- **QoSmate priority.** Needs [QoSmate](https://github.com/hudra0/qosmate) installed; without it the tool says so and links to it. See [QoSmate check and fix](#qosmate-check-and-fix).
 
 ## Games and voice chat
 
@@ -178,8 +179,10 @@ This list cannot be complete, and it is worth knowing why:
 
 A game not on the list is still detected, recorded and rated, as "Game on port N". The first time that happens:
 
-- a banner appears on the Live and Matches pages with a box to name it, and
+- a banner appears on the Live and Matches pages with a box to name it, a **Not a game** button for calls and other traffic (MatchWatch then stops recording that port), and a cross to hide the notice, and
 - with phone alerts set up, your phone is told ("Alert when a new game is seen" in Settings, on by default).
+
+You do not have to wait for a match. **Add a game** on the Tools page, Games tab, takes a server port or a range, a name and, where the range is shared, a word from the name of the company hosting the servers. **Your games** on the same tab lists everything you have added, named or imported, each with a Remove button.
 
 Name it once and every match on that port, past and future, carries the name. You can also name it on the Tools page or with `matchwatch game name <port> <name>`. A range works too: `matchwatch game name 7000-7100 "My Game"`.
 
@@ -217,8 +220,9 @@ Make one, or use one, under **Share with other players** on the Tools page.
 "Choose what to share" lists everything you could share, and every item has its own tick: each game name, each place, each server network, each ping host and each threshold. Nothing goes in unless it is ticked.
 
 - **All** and **None** on every section.
-- **Favourite servers** starts with your starred servers ticked. Switch it to every server you have played on, then tick by game, rating, country or city, and number of matches: for example every Call of Duty server rated 85 or more over three matches.
-- **Network ratings** can be ticked in one go by rating (only the poor ones, only the good ones), by country or city, and by how many matches you have played there. Single ticks can still be changed afterwards. Networks with only one match start unticked, because one match says little.
+- **Favourite servers** starts with your starred servers ticked. Switch it to every server you have played on, then narrow the list by game, rating, country or city, and number of matches: for example every Call of Duty server rated 85 or more over three matches.
+- The dropdowns choose what is listed, and never untick anything. Tick your favourites, switch the list to servers in one country, tick more: both sets stay in the file. A line under the list says how many ticked items are not currently shown. All and None act on what is listed.
+- **Network ratings** can be listed by rating (only the poor ones, only the good ones), by country or city, and by how many matches you have played there. Single ticks can still be changed afterwards. Networks with only one match start unticked, because one match says little.
 - **Thresholds** start unticked.
 - **A note** can be added for whoever gets the file, such as roughly where you are and what you play. It is the only free text in the file, and only what you type goes in.
 
@@ -298,6 +302,21 @@ Blocks live in their own nftables table, so your firewall rules are untouched. A
 
 A match only counts towards a server's rating when it lasted at least a minute and your own line was stable.
 
+## Removing things
+
+Every row you might want gone has a **Remove** button, and each asks you to press twice.
+
+- **A match** (Matches page, or the match report): that match and its report.
+- **A server** (Servers page): the server and every match on it.
+- **A datacentre** (Servers page): the datacentre, its servers and their matches.
+- **A rating someone shared with you**, **a game you added** and **a block**: on their own rows.
+
+Ratings, the regions table, the hour chart and the recap are rebuilt without what you removed. Something that was not a game at all, such as a call recorded on an unknown port, can be cleared out this way.
+
+A favourite cannot be removed by accident. A favourite server shows **Kept** where Remove would be, and removing its datacentre is refused. Take the star off first.
+
+From the command line: `matchwatch forget match <start time>`, `forget server <ip>`, `forget dc <number>`.
+
 ## Favourites
 
 Press the star beside any server, on the Servers page, the Live page or a match report, to keep it as a favourite. The Servers page lists your favourites at the top, grouped by game and best rated first, with where each one is, its rating, ping and when you last played on it.
@@ -335,6 +354,8 @@ What to expect:
 The table on the Servers page, or `matchwatch regions`, shows the ping from your router to about thirty datacentre regions worldwide. It pings the public test server that Vultr, the host of every Call of Duty server seen so far, runs in each of its datacentres. It refreshes every six hours and on "Measure now". It is not a complete list of where the game has servers.
 
 ## QoSmate check and fix
+
+This part needs [QoSmate](https://github.com/hudra0/qosmate), a separate package that prioritises traffic on OpenWrt. Without it the two QoSmate tools say so and link to it; everything else in MatchWatch works the same.
 
 Once per match, and on demand, MatchWatch checks that the game's traffic is in QoSmate's top priority queue. It compares the packet count in the top queue with what the game is sending, and reads the priority mark on the game's packets.
 

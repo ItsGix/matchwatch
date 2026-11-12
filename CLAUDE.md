@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.15.1.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.17.0.
 
 ## Layout
 
@@ -30,6 +30,8 @@ Favourites (0.15.0): `/etc/matchwatch/favourites` holds one server per line: the
 
 Dashboard look (0.15.0): colours and radii are variables at the top of `dashboard.css`; the chart reads the same variables. Buttons are a quiet fill (`--soft`), `solid` for the main action, `danger` for destructive ones. The Tools page is four tabs (`TOOLTABS`, addresses `#/tools/<tab>`) of rows built by `tool(title, description, controls...)`: say what a tool does on the left, put its control and result on the right. Check both themes after a style change (`dark:` in the mock page of `test/mockshots.py`).
 
+Removing (0.17.0): `cmd_forget match|server|dc` rewrites `sessions.tsv` without the chosen rows, deletes their `matches/<start>.json`, re-exports, and restarts the engine only when no match is in progress (its ratings live in memory). It refuses a favourite server, and a datacentre holding one. Actions `forgetmatch`, `forgetserver`, `forgetdc`.
+
 ## Rules that have bitten already
 
 - BusyBox awk only. No `cos`, `sqrt` or other maths functions (some builds lack them), no gawk extensions. Distances are compared squared with a cosine series.
@@ -43,6 +45,7 @@ Dashboard look (0.15.0): colours and radii are variables at the top of `dashboar
 - Publishers' port lists mostly do not say whether a port is the server's or the player's, and many are missing. `games.list` marks lines without a publisher source as unconfirmed. Do not add a game from memory; find a source.
 - The lobby alert needs both tests: a game-labelled port, and a port or /24 that carried an earlier match (`KPORT`, `K24`). A patch once dropped the second test; game port ranges are wide (30000-45000), and calls and peer-to-peer traffic use ports inside them, so with stay mode on that would have blocked non-game servers.
 - Share files come from strangers. Import must never be able to block a server or widen what counts as a game without a check: ratings from others are display only (`ratings.shared` is never read by auto-block or stay mode), a game label over 2000 ports wide needs hosts, host words need three characters, settings are a fixed list of numeric keys with ranges (never `autoblock`, `ntfy_url`, `device_ip`, `only_filter`), and region hosts must be names, not addresses. Export must never include the device, LAN or ISP addresses, or match times.
+- `matchwatch game name <port or lo-hi> <name> [hosts] [voice]` and `game remove` are the only writers of hand-made labels (actions `gamename`, where `region` carries the host words and `days` = 1 means not a game, and `gamedel`). They refuse a range over 2000 ports with no host words, the same rule as imports.
 - A name given by hand goes at the top of `games.local` so it beats an imported label covering the same port; imported labels are appended.
 - A patch script once emptied `files/matchwatch` by opening it for writing before reading. Check file sizes after scripted edits.
 - Python run from a Git Bash heredoc turns `\\n` inside its strings into real newlines. Write patch scripts to a file and run the file.
