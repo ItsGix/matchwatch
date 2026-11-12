@@ -223,6 +223,8 @@ if __name__ == "__main__":
     os.makedirs(ROOT + "/docs", exist_ok=True)
     for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 5200), ("#/tools", "tools", 2600), ("#/tools/share", "share", 4200), ("#/tools/data", "update", 2200)):
         shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
+    # the map and the filter table on their own, large enough to read in the README (they sit a long way down the Servers page)
+    Image.open(f"{ROOT}/docs/servers-pool.png").crop((0, 570, 1180, 1750)).save(f"{ROOT}/docs/map.png", optimize=True)
     assert os.path.getsize(f"{ROOT}/docs/match-report.png") > 60000, "the match report picture is nearly empty: the match was not found"
     srv.shutdown()
     shutil.rmtree(site, ignore_errors=True)

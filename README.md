@@ -62,6 +62,10 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Makes share files you choose the contents of, item by item. Nothing is ever uploaded.
 - Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
 
+| The map: your places as circles, your servers by rating, and how each game is filtered |
+| --- |
+| ![Map](docs/map.png) |
+
 | Live | Match report |
 | --- | --- |
 | ![Live](docs/live.png) | ![Match report](docs/match-report.png) |
