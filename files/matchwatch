@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.21.1"
+VERSION="0.22.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1433,6 +1433,65 @@ linetest_run() { # job-id -> the result as JSON
 }
 
 # ---- what the dashboard's buttons run (through LuCI's rpcd backend, /usr/libexec/rpcd/luci.matchwatch)
+# ---- updating from the project's page on GitHub. Nothing is contacted until the owner asks.
+# dist/version there holds one line: the version, then the SHA-256 of the installer beside it.
+UPDATE_URL="${MW_UPDATE_URL:-https://raw.githubusercontent.com/ItsGix/matchwatch/main/dist}"
+ver_newer() { # a b : true when a is a later version than b
+	echo "$1 $2" | awk '{ split($1, a, "."); split($2, b, "."); for (i = 1; i <= 3; i++) { if (a[i] + 0 > b[i] + 0) exit 0; if (a[i] + 0 < b[i] + 0) exit 1 } exit 1 }'
+}
+update_latest() { # prints "version sha256" as published, or fails
+	fetch "$UPDATE_URL/version" | tr -d '\r' | awk 'NR == 1 && $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ && $2 ~ /^[0-9a-f]+$/ && length($2) == 64 && NF == 2 { print $1, $2; ok = 1 } END { exit !ok }'
+}
+fetch_file() { # url file : a download that may take a while
+	if have uclient-fetch; then uclient-fetch -q -T 30 -O "$2" "$1" 2>/dev/null
+	elif have curl; then curl -fsS -m 60 -o "$2" "$1" 2>/dev/null
+	elif have wget; then wget -q -T 30 -O "$2" "$1" 2>/dev/null
+	else return 1; fi
+}
+update_done() { # job-id true|false text
+	printf '{"id":"%s","state":"done","ok":%s,"out":"%s"}\n' "$1" "$2" "$3" > "$RUN/www/update.json.tmp" && mv -f "$RUN/www/update.json.tmp" "$RUN/www/update.json"
+	logger -t matchwatch "update: $3" 2>/dev/null
+}
+update_run() { # job-id version sha256 : download the installer, check it is whole, run it
+	local id="$1" want="$2" sum="$3" d="$RUN/update.$$" f got new
+	mkdir -p "$d"; f="$d/matchwatch-install.sh"
+	if ! fetch_file "$UPDATE_URL/matchwatch-install.sh" "$f"; then
+		update_done "$id" false "The download failed. Nothing was changed."
+	else
+		got="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
+		if [ "$got" != "$sum" ] || [ "$(head -n 1 "$f")" != '#!/bin/sh' ] || ! grep -q "^VERSION=\"$want\"\$" "$f" || ! sh -n "$f" 2>/dev/null; then
+			update_done "$id" false "The download did not match what was published, so nothing was changed. If a new version came out in the last few minutes, try again shortly."
+		else
+			sh "$f" > "$RUN/update.log" 2>&1
+			new="$("${MW_ROOT:-}/usr/bin/matchwatch" version 2>/dev/null)"
+			if [ "$new" = "$want" ]; then update_done "$id" true "Updated from $VERSION to $want. Your history and settings are kept. Reload this page to use the new version."
+			else update_done "$id" false "The installer ran but this router still has ${new:-no version}. The installer's output is in $RUN/update.log."; fi
+		fi
+	fi
+	rm -rf "$d" "$RUN/update.busy"
+}
+cmd_update() { # [check|now]
+	local l latest sum id busy="$RUN/update.busy"
+	case "${1:-check}" in check|now) ;; *) die "use: matchwatch update [check|now]" ;; esac
+	l="$(update_latest)" || die "could not get the latest version number from GitHub. Check the router is online and try again in a minute."
+	latest="${l% *}"; sum="${l#* }"
+	if [ "${1:-check}" = check ]; then
+		if ver_newer "$latest" "$VERSION"; then echo "Version $latest is available. You have $VERSION."
+		else echo "You have the latest version, $VERSION."; fi
+		return 0
+	fi
+	ver_newer "$latest" "$VERSION" || die "you already have the latest version, $VERSION"
+	have sha256sum || die "this router has no sha256sum, so the download could not be checked. Update with the installer instead."
+	grep -q '"sessions":\[{' "$RUN/www/status.json" 2>/dev/null && die "a match is in progress. Updating restarts MatchWatch, so do it between matches."
+	[ -f "$busy" ] && [ $(( $(date +%s) - $(cat "$busy") )) -lt 300 ] && die "an update is already running"
+	mkdir -p "$RUN/www"
+	id="$(date +%s)$$"
+	date +%s > "$busy"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$RUN/www/update.json"
+	( update_run "$id" "$latest" "$sum" ) >/dev/null 2>&1 &
+	echo "$id"
+}
+
 cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-zero exit means it did not work
 	local action="$1" arg="$2" days="$3" region="$4" name="$5" f rc
 	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
@@ -1463,6 +1522,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		testalert) cmd_testalert ;;
 		log) cmd_log ;;
 		linetest) cmd_linetest ;;
+		updatecheck) cmd_update check ;;
+		update) cmd_update now ;;
 		trace) cmd_trace "$arg" ;;
 		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" "$region" "$( [ "$days" = 1 ] && echo voice )" ;;   # region carries the host words; days = 1 marks it as not a game
 		gamedel) [ -n "$arg" ] || die "choose a name to remove"; cmd_game remove "$arg" ;;
@@ -1877,6 +1938,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
+  matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
   matchwatch forget match <start> | server <ip> | dc <n>   remove one match, one server or one datacentre
                                and everything built from them. Favourites are kept.
   matchwatch share             make, check or import a share file: game labels, ping hosts,
@@ -1919,6 +1981,7 @@ case "$1" in
 	forget) cmd_forget "$2" "$3" ;;
 	share) shift; cmd_share "$@" ;;
 	version) echo "$VERSION" ;;
+	update) cmd_update "$2" ;;
 	_probe_start) shift; cmd_probe_start "$@" ;;
 	_probe_stop) cmd_probe_stop "$2" ;;
 	_notify) cmd_notify "$2" ;;

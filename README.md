@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.21.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.22.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -78,7 +78,7 @@ If the router cannot download the file, fetch [`dist/matchwatch-install.sh`](dis
 
 **What the installer does.** Read it before you run it: it runs as root. It installs `tcpdump` if missing, copies the program and the LuCI app into place, creates `/etc/config/matchwatch`, starts the service and runs a self-check. It works on both `apk` (OpenWrt 25.12) and `opkg` (older releases).
 
-**Updating.** Run the new installer the same way. History and settings are kept. Settings from versions before 0.10.0 are carried over automatically.
+**Updating.** From 0.22.0, open Tools, Data and settings, and press Check for an update; if there is a newer version, Update now installs it. Over SSH that is `matchwatch update` and `matchwatch update now`. On older versions, run the new installer the same way you installed. History and settings are kept. Settings from versions before 0.10.0 are carried over automatically.
 
 **After a firmware upgrade.** History and settings survive, but the program is removed. Run the installer again.
 
@@ -136,6 +136,7 @@ Everything is also available over SSH:
 | `matchwatch qos fix` / `qos unfix` | Add or remove QoSmate rules that prioritise your gaming device |
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
 | `matchwatch doctor` | Checks that capture works. Changes nothing |
+| `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |
 | `matchwatch clear-history` | Forgets every recorded match. Blocks and settings are kept |
 | `matchwatch forget match <start>` / `server <ip>` / `dc <n>` | Removes one match, server or datacentre. Favourites are kept |
 | `matchwatch share export` / `check` / `import` / `undo` | Make, inspect or take in a share file |
@@ -156,6 +157,7 @@ The Tools page has four tabs: Checks, Games, Share, and Data and settings. Each 
 - **Your games.** Lists every game you have added, named or imported, each with a Remove button.
 - **Skipped, not recorded.** Lists streams from the last six hours that were left out, either as voice chat or because they did not look like a game, so you can name one as a game if MatchWatch got that wrong.
 - **Share with other players.** Makes a share file from your game names, favourite servers, places, ratings, ping hosts and thresholds, or takes one in. See [Sharing with other players](#sharing-with-other-players).
+- **Update MatchWatch.** Shows your version and asks GitHub whether there is a newer one. If there is, Update now downloads the installer, checks it arrived whole and runs it. It refuses during a match, because updating restarts MatchWatch. Nothing is checked or downloaded until you press the button.
 - **Match history and Clear all history.** Downloads your matches as a spreadsheet (CSV) file, or clears them. Clearing deletes every match and the ratings built from them, and cannot be undone; blocks, the places you stay on and your settings are kept.
 - **Recent activity.** The last things MatchWatch wrote to the router's log.
 - **QoSmate priority.** Needs [QoSmate](https://github.com/hudra0/qosmate) installed; without it the tool says so and links to it. See [QoSmate check and fix](#qosmate-check-and-fix).
@@ -427,6 +429,7 @@ Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.
 - Keep LuCI on a network you trust and never expose it through a public port forward.
 - With stay mode on, address lists are downloaded from the hosting companies in `geofeeds.list` (Vultr), and the city names in them are looked up at Open-Meteo. Nothing about you or your matches is sent.
 - Server locations come from ip-api.com; only the server's IP address is sent. Turn off "Look up where servers are" to stop this (staying on places and the lobby alert need it on).
+- Checking for an update fetches one small file from this project's page on GitHub, and only when you press the button. Updating downloads the installer from the same place and runs it as root, exactly as installing by hand does.
 - Nothing else leaves your router unless you set up phone alerts.
 - Share files are only ever made when you ask, are shown to you in full, and hold nothing about your home. MatchWatch never uploads one.
 - The project has not had a security audit.

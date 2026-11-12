@@ -1059,6 +1059,18 @@ function pageTools() {
 	}
 	if (!RO && tab === "share") view.appendChild(shareSection());
 	if (!RO && tab === "data") {
+		var upOut = outBox(), upBtn = h("button", { type: "button", cls: "solid", text: "Update now" }), upAgain = h("button", { type: "button", text: "Reload this page" });
+		upBtn.style.display = "none"; upAgain.style.display = "none";
+		upAgain.addEventListener("click", function () { location.reload(); });
+		upBtn.addEventListener("click", function () {
+			upOut.show("Downloading and installing. This takes about half a minute.");
+			job(upBtn, "update", null, "update.json", function (r) {
+				upOut.show(r.out || "");
+				if (r.ok) { upBtn.style.display = "none"; upAgain.style.display = ""; }
+			});
+		});
+		view.appendChild(tool("Update MatchWatch", "You have version " + (D.info.version || "?") + ". Checking asks GitHub, where MatchWatch is published, for the newest version number. If there is one, Update now downloads the installer from there, checks it arrived whole and runs it. Your history and settings are kept. It restarts MatchWatch, so do it between matches.",
+			h("div", { cls: "actions" }, act("Check for an update", "updatecheck", null, { done: function (o) { upOut.show(o); upBtn.style.display = /is available/.test(o || "") ? "" : "none"; } }), upBtn, upAgain), upOut));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
 		view.appendChild(tool("Match history", D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. The download is a CSV file that opens in any spreadsheet.", h("div", { cls: "actions" }, dl)));

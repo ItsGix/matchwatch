@@ -132,10 +132,18 @@ for i, (src, dst, mode) in enumerate(items):
     tag = f"MW_FILE_END_{i}"
     assert tag not in body
     if not body.endswith("\n"): body += "\n"
-    out.append(f"cat > \"$R{dst}\" <<'{tag}'\n{body}{tag}\nchmod {mode} \"$R{dst}\"\n")
+    # written beside the old file and then moved over it: the update button runs this installer from
+    # the very script being replaced, and a shell reading a file that is rewritten under it goes wrong
+    out.append(f"cat > \"$R{dst}.new\" <<'{tag}'\n{body}{tag}\nchmod {mode} \"$R{dst}.new\"\nmv -f \"$R{dst}.new\" \"$R{dst}\"\n")
 out.append(tail)
 os.makedirs("dist", exist_ok=True)
 # newline="\n": on Windows the default would write CRLF, which the router's shell cannot run
 with open("dist/matchwatch-install.sh", "w", encoding="utf-8", newline="\n") as f:
     f.write("".join(out))
+# what `matchwatch update` reads: the version, and the installer's SHA-256 so a cut-short download is caught
+import hashlib, re
+version = re.search(r'^VERSION="([0-9.]+)"$', open(f"{CORE}/matchwatch", encoding="utf-8").read(), re.M).group(1)
+digest = hashlib.sha256(open("dist/matchwatch-install.sh", "rb").read()).hexdigest()
+with open("dist/version", "w", encoding="utf-8", newline="\n") as f:
+    f.write(f"{version} {digest}\n")
 print("built", os.path.getsize("dist/matchwatch-install.sh"), "bytes from", len(items), "files")

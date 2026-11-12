@@ -13,7 +13,7 @@ var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: 
 var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name', 'data' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1 };
 
 function loadDashboard() {
 	if (window.MatchwatchDashboard)

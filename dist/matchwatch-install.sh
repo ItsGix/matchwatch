@@ -47,12 +47,12 @@ if [ -z "$R" ]; then
 fi
 
 mkdir -p "$R/etc/config" "$R/etc/init.d" "$R/etc/matchwatch" "$R/usr/bin" "$R/usr/lib/matchwatch" "$R/usr/libexec/rpcd" "$R/usr/share/luci/menu.d" "$R/usr/share/rpcd/acl.d" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch"
-cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
+cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 #!/bin/sh
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.21.1"
+VERSION="0.22.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1483,6 +1483,65 @@ linetest_run() { # job-id -> the result as JSON
 }
 
 # ---- what the dashboard's buttons run (through LuCI's rpcd backend, /usr/libexec/rpcd/luci.matchwatch)
+# ---- updating from the project's page on GitHub. Nothing is contacted until the owner asks.
+# dist/version there holds one line: the version, then the SHA-256 of the installer beside it.
+UPDATE_URL="${MW_UPDATE_URL:-https://raw.githubusercontent.com/ItsGix/matchwatch/main/dist}"
+ver_newer() { # a b : true when a is a later version than b
+	echo "$1 $2" | awk '{ split($1, a, "."); split($2, b, "."); for (i = 1; i <= 3; i++) { if (a[i] + 0 > b[i] + 0) exit 0; if (a[i] + 0 < b[i] + 0) exit 1 } exit 1 }'
+}
+update_latest() { # prints "version sha256" as published, or fails
+	fetch "$UPDATE_URL/version" | tr -d '\r' | awk 'NR == 1 && $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ && $2 ~ /^[0-9a-f]+$/ && length($2) == 64 && NF == 2 { print $1, $2; ok = 1 } END { exit !ok }'
+}
+fetch_file() { # url file : a download that may take a while
+	if have uclient-fetch; then uclient-fetch -q -T 30 -O "$2" "$1" 2>/dev/null
+	elif have curl; then curl -fsS -m 60 -o "$2" "$1" 2>/dev/null
+	elif have wget; then wget -q -T 30 -O "$2" "$1" 2>/dev/null
+	else return 1; fi
+}
+update_done() { # job-id true|false text
+	printf '{"id":"%s","state":"done","ok":%s,"out":"%s"}\n' "$1" "$2" "$3" > "$RUN/www/update.json.tmp" && mv -f "$RUN/www/update.json.tmp" "$RUN/www/update.json"
+	logger -t matchwatch "update: $3" 2>/dev/null
+}
+update_run() { # job-id version sha256 : download the installer, check it is whole, run it
+	local id="$1" want="$2" sum="$3" d="$RUN/update.$$" f got new
+	mkdir -p "$d"; f="$d/matchwatch-install.sh"
+	if ! fetch_file "$UPDATE_URL/matchwatch-install.sh" "$f"; then
+		update_done "$id" false "The download failed. Nothing was changed."
+	else
+		got="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
+		if [ "$got" != "$sum" ] || [ "$(head -n 1 "$f")" != '#!/bin/sh' ] || ! grep -q "^VERSION=\"$want\"\$" "$f" || ! sh -n "$f" 2>/dev/null; then
+			update_done "$id" false "The download did not match what was published, so nothing was changed. If a new version came out in the last few minutes, try again shortly."
+		else
+			sh "$f" > "$RUN/update.log" 2>&1
+			new="$("${MW_ROOT:-}/usr/bin/matchwatch" version 2>/dev/null)"
+			if [ "$new" = "$want" ]; then update_done "$id" true "Updated from $VERSION to $want. Your history and settings are kept. Reload this page to use the new version."
+			else update_done "$id" false "The installer ran but this router still has ${new:-no version}. The installer's output is in $RUN/update.log."; fi
+		fi
+	fi
+	rm -rf "$d" "$RUN/update.busy"
+}
+cmd_update() { # [check|now]
+	local l latest sum id busy="$RUN/update.busy"
+	case "${1:-check}" in check|now) ;; *) die "use: matchwatch update [check|now]" ;; esac
+	l="$(update_latest)" || die "could not get the latest version number from GitHub. Check the router is online and try again in a minute."
+	latest="${l% *}"; sum="${l#* }"
+	if [ "${1:-check}" = check ]; then
+		if ver_newer "$latest" "$VERSION"; then echo "Version $latest is available. You have $VERSION."
+		else echo "You have the latest version, $VERSION."; fi
+		return 0
+	fi
+	ver_newer "$latest" "$VERSION" || die "you already have the latest version, $VERSION"
+	have sha256sum || die "this router has no sha256sum, so the download could not be checked. Update with the installer instead."
+	grep -q '"sessions":\[{' "$RUN/www/status.json" 2>/dev/null && die "a match is in progress. Updating restarts MatchWatch, so do it between matches."
+	[ -f "$busy" ] && [ $(( $(date +%s) - $(cat "$busy") )) -lt 300 ] && die "an update is already running"
+	mkdir -p "$RUN/www"
+	id="$(date +%s)$$"
+	date +%s > "$busy"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$RUN/www/update.json"
+	( update_run "$id" "$latest" "$sum" ) >/dev/null 2>&1 &
+	echo "$id"
+}
+
 cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-zero exit means it did not work
 	local action="$1" arg="$2" days="$3" region="$4" name="$5" f rc
 	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
@@ -1513,6 +1572,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		testalert) cmd_testalert ;;
 		log) cmd_log ;;
 		linetest) cmd_linetest ;;
+		updatecheck) cmd_update check ;;
+		update) cmd_update now ;;
 		trace) cmd_trace "$arg" ;;
 		gamename) [ -n "$arg" ] && [ -n "$name" ] || die "choose a game and type a name for it"; cmd_game name "$arg" "$name" "$region" "$( [ "$days" = 1 ] && echo voice )" ;;   # region carries the host words; days = 1 marks it as not a game
 		gamedel) [ -n "$arg" ] || die "choose a name to remove"; cmd_game remove "$arg" ;;
@@ -1927,6 +1988,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
+  matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
   matchwatch forget match <start> | server <ip> | dc <n>   remove one match, one server or one datacentre
                                and everything built from them. Favourites are kept.
   matchwatch share             make, check or import a share file: game labels, ping hosts,
@@ -1969,6 +2031,7 @@ case "$1" in
 	forget) cmd_forget "$2" "$3" ;;
 	share) shift; cmd_share "$@" ;;
 	version) echo "$VERSION" ;;
+	update) cmd_update "$2" ;;
 	_probe_start) shift; cmd_probe_start "$@" ;;
 	_probe_stop) cmd_probe_stop "$2" ;;
 	_notify) cmd_notify "$2" ;;
@@ -1980,8 +2043,9 @@ case "$1" in
 	*) usage ;;
 esac
 MW_FILE_END_0
-chmod 755 "$R/usr/bin/matchwatch"
-cat > "$R/usr/lib/matchwatch/analyze.awk" <<'MW_FILE_END_1'
+chmod 755 "$R/usr/bin/matchwatch.new"
+mv -f "$R/usr/bin/matchwatch.new" "$R/usr/bin/matchwatch"
+cat > "$R/usr/lib/matchwatch/analyze.awk.new" <<'MW_FILE_END_1'
 # matchwatch analysis engine
 # Reads "tcpdump -tt -n -q -l" lines for UDP traffic seen on the LAN side,
 # plus "TICK" heartbeat lines, and judges each game session.
@@ -2791,8 +2855,9 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 	system("mv -f " sf " " RUN "/www/status.json; mv -f " tf " " RUN "/status.txt")
 }
 MW_FILE_END_1
-chmod 644 "$R/usr/lib/matchwatch/analyze.awk"
-cat > "$R/usr/lib/matchwatch/report.awk" <<'MW_FILE_END_2'
+chmod 644 "$R/usr/lib/matchwatch/analyze.awk.new"
+mv -f "$R/usr/lib/matchwatch/analyze.awk.new" "$R/usr/lib/matchwatch/analyze.awk"
+cat > "$R/usr/lib/matchwatch/report.awk.new" <<'MW_FILE_END_2'
 # matchwatch history reports. Input: sessions.tsv
 # MODE = hist_txt | srv_txt | dc_txt | hist_json | srv_json | dc_json | dc_prefixes
 #        | dc_key | dc_others | dc_recent | dc_last | lobby     (KEY = datacentre key, STAY = key being kept to)
@@ -3147,8 +3212,9 @@ END {
 	}
 }
 MW_FILE_END_2
-chmod 644 "$R/usr/lib/matchwatch/report.awk"
-cat > "$R/usr/lib/matchwatch/public.html" <<'MW_FILE_END_3'
+chmod 644 "$R/usr/lib/matchwatch/report.awk.new"
+mv -f "$R/usr/lib/matchwatch/report.awk.new" "$R/usr/lib/matchwatch/report.awk"
+cat > "$R/usr/lib/matchwatch/public.html.new" <<'MW_FILE_END_3'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3183,8 +3249,9 @@ MatchwatchDashboard(document.getElementById("mw"), {
 </body>
 </html>
 MW_FILE_END_3
-chmod 644 "$R/usr/lib/matchwatch/public.html"
-cat > "$R/usr/lib/matchwatch/config.uci" <<'MW_FILE_END_4'
+chmod 644 "$R/usr/lib/matchwatch/public.html.new"
+mv -f "$R/usr/lib/matchwatch/public.html.new" "$R/usr/lib/matchwatch/public.html"
+cat > "$R/usr/lib/matchwatch/config.uci.new" <<'MW_FILE_END_4'
 
 config matchwatch 'main'
 	option device_ip ''
@@ -3196,8 +3263,9 @@ config matchwatch 'main'
 	option autoblock '0'
 	option stay_strict '1'
 MW_FILE_END_4
-chmod 644 "$R/usr/lib/matchwatch/config.uci"
-cat > "$R/usr/lib/matchwatch/regions.list" <<'MW_FILE_END_5'
+chmod 644 "$R/usr/lib/matchwatch/config.uci.new"
+mv -f "$R/usr/lib/matchwatch/config.uci.new" "$R/usr/lib/matchwatch/config.uci"
+cat > "$R/usr/lib/matchwatch/regions.list.new" <<'MW_FILE_END_5'
 # Vultr datacentre regions and their public ping test hosts.
 # code|city|country code|area|latitude|longitude|host
 # Call of Duty game servers seen so far are all hosted by Vultr. Add lines for other hosts if you meet them.
@@ -3235,8 +3303,9 @@ sel-kor|Seoul|KR|Asia|37.57|126.98|sel-kor-ping.vultr.com
 syd-au|Sydney|AU|Oceania|-33.87|151.21|syd-au-ping.vultr.com
 mel-au|Melbourne|AU|Oceania|-37.81|144.96|mel-au-ping.vultr.com
 MW_FILE_END_5
-chmod 644 "$R/usr/lib/matchwatch/regions.list"
-cat > "$R/usr/lib/matchwatch/geofeeds.list" <<'MW_FILE_END_6'
+chmod 644 "$R/usr/lib/matchwatch/regions.list.new"
+mv -f "$R/usr/lib/matchwatch/regions.list.new" "$R/usr/lib/matchwatch/regions.list"
+cat > "$R/usr/lib/matchwatch/geofeeds.list.new" <<'MW_FILE_END_6'
 # Hosting companies that publish which of their address ranges is in which city (a geofeed, RFC 8805).
 # With stay mode on, MatchWatch uses these to turn away every range outside your places ahead of time,
 # for the gaming device's game traffic only.
@@ -3250,8 +3319,9 @@ cat > "$R/usr/lib/matchwatch/geofeeds.list" <<'MW_FILE_END_6'
 # Hosts every Call of Duty server seen so far. Checked 12 November 2026: about 490 ranges.
 Vultr|https://geofeed.constant.com/?csv|Call of Duty
 MW_FILE_END_6
-chmod 644 "$R/usr/lib/matchwatch/geofeeds.list"
-cat > "$R/usr/lib/matchwatch/countries.list" <<'MW_FILE_END_7'
+chmod 644 "$R/usr/lib/matchwatch/geofeeds.list.new"
+mv -f "$R/usr/lib/matchwatch/geofeeds.list.new" "$R/usr/lib/matchwatch/geofeeds.list"
+cat > "$R/usr/lib/matchwatch/countries.list.new" <<'MW_FILE_END_7'
 # Rough centre of each country that can be stayed on: country code|latitude|longitude
 # Only used to suggest the nearest places with servers when a country in the pool has none.
 # Approximate on purpose: nothing is blocked or allowed from these figures.
@@ -3311,8 +3381,9 @@ PH|12.9|121.8
 AU|-25.3|133.8
 NZ|-41.5|173.0
 MW_FILE_END_7
-chmod 644 "$R/usr/lib/matchwatch/countries.list"
-cat > "$R/usr/lib/matchwatch/places.list" <<'MW_FILE_END_8'
+chmod 644 "$R/usr/lib/matchwatch/countries.list.new"
+mv -f "$R/usr/lib/matchwatch/countries.list.new" "$R/usr/lib/matchwatch/countries.list"
+cat > "$R/usr/lib/matchwatch/places.list.new" <<'MW_FILE_END_8'
 # Wider places to stay on, by country code. kind|code|name|country codes (comma separated)
 # kind "area" = a named group of countries; kind "country" = one country.
 area|uk-ireland|UK and Ireland|GB,IE
@@ -3384,8 +3455,9 @@ country|ph|Philippines|PH
 country|au|Australia|AU
 country|nz|New Zealand|NZ
 MW_FILE_END_8
-chmod 644 "$R/usr/lib/matchwatch/places.list"
-cat > "$R/usr/lib/matchwatch/games.list" <<'MW_FILE_END_9'
+chmod 644 "$R/usr/lib/matchwatch/places.list.new"
+mv -f "$R/usr/lib/matchwatch/places.list.new" "$R/usr/lib/matchwatch/places.list"
+cat > "$R/usr/lib/matchwatch/games.list.new" <<'MW_FILE_END_9'
 # Labels for game servers and voice chat:   name|ports|kind|hosts
 #
 #   ports  the SERVER's UDP port: single ports or ranges, separated by commas
@@ -3454,8 +3526,9 @@ Call of Duty|30000-45000
 # ---- everything else on high ports is taken to be voice chat (Discord uses 50000-65535)
 Discord voice|50000-65535|voice
 MW_FILE_END_9
-chmod 644 "$R/usr/lib/matchwatch/games.list"
-cat > "$R/etc/init.d/matchwatch" <<'MW_FILE_END_10'
+chmod 644 "$R/usr/lib/matchwatch/games.list.new"
+mv -f "$R/usr/lib/matchwatch/games.list.new" "$R/usr/lib/matchwatch/games.list"
+cat > "$R/etc/init.d/matchwatch.new" <<'MW_FILE_END_10'
 #!/bin/sh /etc/rc.common
 # matchwatch service
 
@@ -3483,19 +3556,20 @@ reload_service() {
 	start
 }
 MW_FILE_END_10
-chmod 755 "$R/etc/init.d/matchwatch"
-cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_11'
+chmod 755 "$R/etc/init.d/matchwatch.new"
+mv -f "$R/etc/init.d/matchwatch.new" "$R/etc/init.d/matchwatch"
+cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 #!/bin/sh
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
-#   read   checks, the line test, a route trace, the activity log, making a share file, and "I felt that"
-#   write  anything that blocks, stays, favourites, measures, alerts, renames, clears, imports, or changes QoSmate or the device
+#   read   checks, the line test, a route trace, the activity log, making a share file, the version check, and "I felt that"
+#   write  updating, and anything that blocks, stays, favourites, measures, alerts, renames, clears, imports, or changes QoSmate or the device
 # The work itself is done by /usr/bin/matchwatch _action, which validates every argument.
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos log linetest trace shareexport"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc"
+READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update"
 
 reply() { # ok(0|1) text
 	json_init
@@ -3536,8 +3610,9 @@ case "$1" in
 		;;
 esac
 MW_FILE_END_11
-chmod 755 "$R/usr/libexec/rpcd/luci.matchwatch"
-cat > "$R/usr/share/luci/menu.d/luci-app-matchwatch.json" <<'MW_FILE_END_12'
+chmod 755 "$R/usr/libexec/rpcd/luci.matchwatch.new"
+mv -f "$R/usr/libexec/rpcd/luci.matchwatch.new" "$R/usr/libexec/rpcd/luci.matchwatch"
+cat > "$R/usr/share/luci/menu.d/luci-app-matchwatch.json.new" <<'MW_FILE_END_12'
 {
 	"admin/services/matchwatch": {
 		"title": "MatchWatch",
@@ -3567,8 +3642,9 @@ cat > "$R/usr/share/luci/menu.d/luci-app-matchwatch.json" <<'MW_FILE_END_12'
 	}
 }
 MW_FILE_END_12
-chmod 644 "$R/usr/share/luci/menu.d/luci-app-matchwatch.json"
-cat > "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json" <<'MW_FILE_END_13'
+chmod 644 "$R/usr/share/luci/menu.d/luci-app-matchwatch.json.new"
+mv -f "$R/usr/share/luci/menu.d/luci-app-matchwatch.json.new" "$R/usr/share/luci/menu.d/luci-app-matchwatch.json"
+cat > "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json.new" <<'MW_FILE_END_13'
 {
 	"luci-app-matchwatch": {
 		"description": "Grant access to MatchWatch",
@@ -3593,8 +3669,9 @@ cat > "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json" <<'MW_FILE_END_13'
 	}
 }
 MW_FILE_END_13
-chmod 644 "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json"
-cat > "$R/www/luci-static/resources/matchwatch/dashboard.js" <<'MW_FILE_END_14'
+chmod 644 "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json.new"
+mv -f "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json.new" "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json"
+cat > "$R/www/luci-static/resources/matchwatch/dashboard.js.new" <<'MW_FILE_END_14'
 // matchwatch dashboard. One copy serves two homes: the LuCI page (Services > MatchWatch)
 // and the optional page that needs no login. Each home supplies T, how to talk to the router:
 //   T.css       address of dashboard.css
@@ -4656,6 +4733,18 @@ function pageTools() {
 	}
 	if (!RO && tab === "share") view.appendChild(shareSection());
 	if (!RO && tab === "data") {
+		var upOut = outBox(), upBtn = h("button", { type: "button", cls: "solid", text: "Update now" }), upAgain = h("button", { type: "button", text: "Reload this page" });
+		upBtn.style.display = "none"; upAgain.style.display = "none";
+		upAgain.addEventListener("click", function () { location.reload(); });
+		upBtn.addEventListener("click", function () {
+			upOut.show("Downloading and installing. This takes about half a minute.");
+			job(upBtn, "update", null, "update.json", function (r) {
+				upOut.show(r.out || "");
+				if (r.ok) { upBtn.style.display = "none"; upAgain.style.display = ""; }
+			});
+		});
+		view.appendChild(tool("Update MatchWatch", "You have version " + (D.info.version || "?") + ". Checking asks GitHub, where MatchWatch is published, for the newest version number. If there is one, Update now downloads the installer from there, checks it arrived whole and runs it. Your history and settings are kept. It restarts MatchWatch, so do it between matches.",
+			h("div", { cls: "actions" }, act("Check for an update", "updatecheck", null, { done: function (o) { upOut.show(o); upBtn.style.display = /is available/.test(o || "") ? "" : "none"; } }), upBtn, upAgain), upOut));
 		var dl = h("button", { type: "button", text: "Download as a spreadsheet file" });
 		dl.addEventListener("click", downloadHistory); dl.disabled = !D.hist.length;
 		view.appendChild(tool("Match history", D.hist.length + " match" + (D.hist.length === 1 ? "" : "es") + " on file. The download is a CSV file that opens in any spreadsheet.", h("div", { cls: "actions" }, dl)));
@@ -4734,8 +4823,9 @@ loadAll(function () { lastSig = sigNow(); route(); });
 tick(); setInterval(tick, 1000); setInterval(function () { setDark(); refresh(false); }, 15000);
 };
 MW_FILE_END_14
-chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.js"
-cat > "$R/www/luci-static/resources/matchwatch/dashboard.css" <<'MW_FILE_END_15'
+chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.js.new"
+mv -f "$R/www/luci-static/resources/matchwatch/dashboard.js.new" "$R/www/luci-static/resources/matchwatch/dashboard.js"
+cat > "$R/www/luci-static/resources/matchwatch/dashboard.css.new" <<'MW_FILE_END_15'
 :host { display: block; }
 /* Colours. --soft is the quiet fill for buttons and hovers; --grid is every hairline. The chart reads these too. */
 .mw {
@@ -4928,8 +5018,9 @@ summary.pickhead .pickcount { margin-left: 8px; }
 
 h2 + .kv { max-width: 640px; }
 MW_FILE_END_15
-chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css"
-cat > "$R/www/luci-static/resources/view/matchwatch/dashboard.js" <<'MW_FILE_END_16'
+chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css.new"
+mv -f "$R/www/luci-static/resources/matchwatch/dashboard.css.new" "$R/www/luci-static/resources/matchwatch/dashboard.css"
+cat > "$R/www/luci-static/resources/view/matchwatch/dashboard.js.new" <<'MW_FILE_END_16'
 'use strict';
 'require view';
 'require rpc';
@@ -4945,7 +5036,7 @@ var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: 
 var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name', 'data' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1 };
 
 function loadDashboard() {
 	if (window.MatchwatchDashboard)
@@ -5008,8 +5099,9 @@ return view.extend({
 	}
 });
 MW_FILE_END_16
-chmod 644 "$R/www/luci-static/resources/view/matchwatch/dashboard.js"
-cat > "$R/www/luci-static/resources/view/matchwatch/settings.js" <<'MW_FILE_END_17'
+chmod 644 "$R/www/luci-static/resources/view/matchwatch/dashboard.js.new"
+mv -f "$R/www/luci-static/resources/view/matchwatch/dashboard.js.new" "$R/www/luci-static/resources/view/matchwatch/dashboard.js"
+cat > "$R/www/luci-static/resources/view/matchwatch/settings.js.new" <<'MW_FILE_END_17'
 'use strict';
 'require view';
 'require form';
@@ -5187,7 +5279,8 @@ return view.extend({
 	}
 });
 MW_FILE_END_17
-chmod 644 "$R/www/luci-static/resources/view/matchwatch/settings.js"
+chmod 644 "$R/www/luci-static/resources/view/matchwatch/settings.js.new"
+mv -f "$R/www/luci-static/resources/view/matchwatch/settings.js.new" "$R/www/luci-static/resources/view/matchwatch/settings.js"
 
 rm -f "$R/usr/lib/matchwatch/index.html" "$R/usr/lib/matchwatch/config.default" "$R/www/cgi-bin/matchwatch-api"
 if [ ! -f "$R/etc/config/matchwatch" ]; then

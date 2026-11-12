@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.21.1.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.22.0.
 
 ## Layout
 
@@ -15,7 +15,7 @@ matchwatch runs on an OpenWrt router and judges each online match: the game serv
 - `luci-app-matchwatch/htdocs/luci-static/resources/view/matchwatch/`: the LuCI pages. `dashboard.js` hosts the dashboard, reading data with `file.read` and running buttons through rpcd. `settings.js` is a native form on `/etc/config/matchwatch`.
 - `luci-app-matchwatch/root/`: menu entry (Services, MatchWatch), permissions (`acl.d`), and the rpcd backend `luci.matchwatch` with two methods, `read` and `write`, so permissions can tell looking from changing. It calls `matchwatch _action`.
 - `packs/`: community share files (game packs) and the format and acceptance rules for them. Not installed; people import what they choose.
-- `build.py`: bundles both directories into `dist/matchwatch-install.sh` (heredocs). Run it after any change to either.
+- `build.py`: bundles both directories into `dist/matchwatch-install.sh` (heredocs) and writes `dist/version` (the version and the installer's SHA-256). Run it after any change to either, and commit both: routers update from them.
 - `test/`: traffic generator, stand-ins for router tools, a test site serving the view-only dashboard, Playwright screenshots. `test/mockshots.py` makes `docs/*.png` from invented data with headless Edge or Chrome and Pillow; it needs no router or BusyBox.
 - Privacy: the repository is public. Nothing from a real network goes in it: no real LAN, ISP or game server addresses, device names, match history or screenshots of real data. Tests and screenshots use the documentation ranges 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24. Commit with a GitHub no-reply address.
 
@@ -40,6 +40,8 @@ Unnamed ports (0.18.0): a stream on a port with no label is kept only if at leas
 Whole ranges (0.20.0): with stay mode on, `stay_ranges` (always started in the background; the first run does about forty city lookups) downloads the lists in `geofeeds.list` and `geofeeds.local` into `ranges.cache`, places each city with Open-Meteo (`cities.cache`), and loads every range outside the pool into the nftables set `away`. Two rules refuse UDP between `device_ip` and that set; `nft_ready` rebuilds the table when the device changes. `cmd_lobby` returns early for a server already in `away`. Seen on the router: the Vultr list downloads, the city lookup takes a country code, and an interval set with `auto-merge` accepts overlapping ranges. `ranges_cover` writes `coverage.json`: how many known ranges each place in the pool holds, and for a place with none the three nearest cities that have servers (`coverage.sug`, added with the `staysuggest` action; country centres come from `countries.list`). The owner chose a country with no servers and had no way to know. Not yet seen: whether the game then finds a match faster.
 
 Where each game plays (0.21.0): `report.awk` MODE `gameplaces` groups game and /24 from `sessions.tsv`, from `tried` (written by `tried_note` in `cmd_lobby`: network, port, city, country, host, AS, position, count, last seen; 2,000 lines at most) and, for the dashboard only, from `gameplaces.shared` (imported, 5,000 lines at most). `ARG=share` prints your own for the `[gameservers]` share section; `ARG=json` writes `gameplaces.json` with an `in` flag when a stay pool is set. Shared entries never reach the `blocked` or `away` sets. `sessions.tsv` is trimmed to its newest 5,000 lines in `cmd_after`; the owner wants total storage well under 20 to 30 MB for small routers.
+
+Updating (0.22.0): `matchwatch update` reads `dist/version` from the raw GitHub address of `main` and compares; `update now` (action `update`, a slow tool writing `update.json`) downloads the installer, refuses it unless its SHA-256 matches that line, and runs it. It refuses during a match. Nothing is fetched until the owner asks. Whatever is pushed to `main` in `dist/` is what every router installs, so never push a `dist/` that has not been installed on the test router first. The installer writes each file as `<name>.new` and moves it into place, because the updater runs from the script being replaced. `MW_UPDATE_URL` points it elsewhere for tests, with `MW_ROOT` so the installer writes into a sandbox.
 
 ## Rules that have bitten already
 
@@ -104,6 +106,7 @@ The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbou
 5. A voice chat check (Discord, in-game voice) rated like matches. Discord voice is labelled and protected from blocking since 0.12.0; a verdict worded for calls rather than matches is still to do.
 6. Share files exist since 0.14.0. Still to do: real game packs in `packs/` (each needs a source), a way to add a region ping host without editing `regions.local` by hand, and showing shared ratings on the Servers page beside your own.
 7. Packaging and a write-up for the OpenWrt forum. The repository is public with no licence yet: choose one before packaging.
+8. Later, once there is a better answer for uploads: a community list of game names by port and host, and of where each game's servers are, that routers fetch daily. The owner will not host a server. Fetching from this repository is easy; the open question is how contributions arrive without a shared secret in a public script (the idea so far: a Contribute button opening a pre-filled GitHub issue, merged by a GitHub Action with the share-file checks). A community name must be port plus host, agreed by several contributors, rank below the owner's names and the built-in list, and never drive blocking by default. Not to be built until the owner asks.
 
 ## Lines not to cross
 
