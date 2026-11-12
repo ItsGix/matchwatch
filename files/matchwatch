@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.18.0"
+VERSION="0.19.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -151,10 +151,9 @@ notify_start() { # server-ip : tell the phone a match has begun, for when you ar
 	IFS="$TAB" read -r cc country city rest <<EOF
 $g
 EOF
-	loc="${city:+$city, }$cc"
+	loc="${country:-$cc}"
 	[ -n "$p" ] && p="$(echo "$p" | awk '{ printf "%.0f", $1 }')"
-	if [ -n "$p" ]; then cmd_notify "Match started${loc:+: $loc}. Ping $p ms."
-	else cmd_notify "Match started${loc:+: $loc}. Ping not known yet: the server does not answer ping."; fi
+	cmd_notify "Match started${loc:+: $loc}${p:+, $p ms}."
 }
 # ---- what QoSmate's shaper did during a match. Read only, and only in its cake modes.
 # cake keeps counters for each of its queues. The last column is the top priority queue, where the
@@ -331,10 +330,13 @@ cmd_after() { # note overall
 			set -- "$1" "$2"
 			i=$((i - 1))
 		done
+		sleep 2   # let the live status drop the match that has just ended, so its server is no longer spared
 		if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; else stay_off; cmd_notify "Stay mode is off: every place in the pool had gone bad."; fi
 	fi
 	export_json
-	if [ "$NOTIFY_EVERY_MATCH" = 1 ] || [ "${2:-100}" -lt "$WARN_SCORE" ]; then cmd_notify "$1"; else logger -t matchwatch "$1" 2>/dev/null; fi
+	logger -t matchwatch "$1" 2>/dev/null
+	if [ "$NOTIFY_EVERY_MATCH" = 1 ] || [ "${2:-100}" -lt "$WARN_SCORE" ]; then [ -n "$NTFY_URL" ] && fetch "$NTFY_URL" "Match ended: $(echo "$1" | sed 's/^Match on [^:]*: //; s/^\([0-9]*\/100 [A-Za-z]*\)\..*/\1/')." >/dev/null; fi
+	return 0
 }
 
 # ---- blocking (own nftables table; fw4 is left alone)
@@ -443,6 +445,7 @@ jesc() { printf '%s' "$1" | tr -d '\n\r\t' | sed 's/["\\]/ /g'; }
 cmd_lobby() { # server-ip port device-ip
 	local ip="$1" port="$2" g cc country city lat lon isp org asn key r i s="" ping="" k v
 	local srv_n=0 srv_rating="" dc_name="" dc_ping="" best_key="" best_name="" best_ping="" verdict=good msg loc blocked=false
+	local where short want=0 now last
 	is_ipv4 "$ip" || return 1
 	mkdir -p "$RUN/www"
 	g="$(geo_lookup "$ip")"
@@ -450,14 +453,21 @@ cmd_lobby() { # server-ip port device-ip
 $g
 EOF
 	key="$asn|$city|$cc"
-	for i in 1 2 3; do
-		r="$(ping -c 1 -W 1 "$ip" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p')"
-		[ -n "$r" ] && s="$s $r"
-	done
-	if [ -z "$s" ] && have traceroute; then
-		s="$(traceroute -n -q 1 -w 1 -m 20 "$ip" 2>/dev/null | awk -v ip="$ip" '$2 == ip && $3 ~ /^[0-9.]+$/ { print $3; exit }')"
+	# Staying somewhere? Decide first. Every second spent measuring is a second the game spends joining
+	# this server, and turning it away late throws the player out of a lobby they had already reached.
+	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ]; then
+		if outside_stay "$lat" "$lon" "$cc"; then MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay && blocked=true; fi
 	fi
-	[ -n "$s" ] && ping="$(echo $s | awk '{ m = $1; for (i = 2; i <= NF; i++) if ($i < m) m = $i; printf "%.1f", m }')"
+	if [ "$blocked" != true ]; then
+		for i in 1 2 3; do
+			r="$(ping -c 1 -W 1 "$ip" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p')"
+			[ -n "$r" ] && s="$s $r"
+		done
+		if [ -z "$s" ] && have traceroute; then
+			s="$(traceroute -n -q 1 -w 1 -m 20 "$ip" 2>/dev/null | awk -v ip="$ip" '$2 == ip && $3 ~ /^[0-9.]+$/ { print $3; exit }')"
+		fi
+		[ -n "$s" ] && ping="$(echo $s | awk '{ m = $1; for (i = 2; i <= NF; i++) if ($i < m) m = $i; printf "%.1f", m }')"
+	fi
 	touch "$DATA/sessions.tsv"
 	while IFS="=" read -r k v; do
 		case "$k" in
@@ -468,34 +478,45 @@ EOF
 $(awk -v MODE=lobby -v ARG="$ip" -v KEY="$key" -f "$LIB/report.awk" "$DATA/sessions.tsv")
 EOF
 	loc="${city:+$city, }${cc:-unknown location}"
+	where="${country:-${cc:-an unknown place}}"
+	# the dashboard gets the whole story; the phone gets one short line
 	msg="Heading to $loc${org:+ ($org)}"
 	[ -n "$ping" ] && msg="$msg, about $ping ms"
 	msg="$msg."
+	short="Heading to $where${ping:+, ${ping%.*} ms}."
 	is_fav "$ip" && msg="$msg One of your favourites."
 	if [ "$srv_n" -ge 1 ] 2>/dev/null && [ -n "$srv_rating" ]; then
 		msg="$msg This server rated $srv_rating/100 over $srv_n match(es)."
-		[ "$srv_rating" -lt "$WARN_SCORE" ] && { verdict=bad; msg="$msg That is poor: consider backing out."; }
+		if [ "$srv_rating" -lt "$WARN_SCORE" ]; then
+			verdict=bad; msg="$msg That is poor: consider backing out."
+			short="Poor server ahead: $where${ping:+, ${ping%.*} ms}. Rated $srv_rating/100 before."
+		fi
 	else
 		msg="$msg First time on this server."
 		r="$(awk -F'\t' -v p="${ip%.*}.0/24" '$1 == p { print $3 "/100 over " $2 " match(es)"; exit }' "$DATA/ratings.shared" 2>/dev/null)"
 		[ -n "$r" ] && msg="$msg Someone who shared ratings with you scored its network $r."
 	fi
-	if [ "$verdict" = good ] && [ -n "$ping" ] && [ -n "$best_ping" ] && [ "$best_key" != "$key" ]; then
+	if [ "$verdict" = good ] && [ "$blocked" != true ] && [ -n "$ping" ] && [ -n "$best_ping" ] && [ "$best_key" != "$key" ]; then
 		if awk -v a="$ping" -v b="$best_ping" -v m="$LOBBY_MARGIN_MS" 'BEGIN { exit !(a > b + m) }'; then
 			verdict=far; msg="$msg ${best_name%% - *} is usually $best_ping ms."
+			short="Far server ahead: $where, ${ping%.*} ms."
 		fi
 	fi
-	# staying somewhere? turn this server away before the match starts if it is outside every chosen place
-	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ]; then
-		if outside_stay "$lat" "$lon" "$cc"; then
-			MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay && blocked=true
-			msg="$msg Blocked, because you are staying on $(stay_names). The game should search again."
-		fi
+	if [ "$blocked" = true ]; then
+		msg="$msg Turned away, because you are staying on $(stay_names). The game should search again."
+		short="Turned away a server in $where."
 	fi
 	printf '{"ts":%s,"ip":"%s","port":%s,"loc":"%s","org":"%s","ping":%s,"verdict":"%s","blocked":%s,"msg":"%s"}\n' \
 		"$(date +%s)" "$ip" "${port:-0}" "$(jesc "$loc")" "$(jesc "$org")" "${ping:-null}" "$verdict" "$blocked" "$(jesc "$msg")" > "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
-	if [ "$LOBBY_ALERT" = 2 ] || { [ "$LOBBY_ALERT" = 1 ] && { [ "$verdict" != good ] || [ "$blocked" = true ]; }; }; then cmd_notify "$msg"
-	else logger -t matchwatch "$msg" 2>/dev/null; fi
+	logger -t matchwatch "$msg" 2>/dev/null
+	# The phone: only a far or poor server, unless "always" is chosen. A server turned away is the router
+	# doing what it was asked, and a game may try five in a minute, so that is not worth a buzz each time.
+	[ "$LOBBY_ALERT" = 2 ] && want=1
+	[ "$LOBBY_ALERT" = 1 ] && [ "$verdict" != good ] && [ "$blocked" != true ] && want=1
+	now="$(date +%s)"; last="$(cat "$RUN/lobby.alert" 2>/dev/null)"
+	[ "$want" = 1 ] && [ -n "$last" ] && [ $((now - last)) -lt 60 ] && want=0     # and never more than one a minute
+	if [ "$want" = 1 ] && [ -n "$NTFY_URL" ]; then echo "$now" > "$RUN/lobby.alert"; fetch "$NTFY_URL" "$short" >/dev/null; fi
+	return 0
 }
 
 # ---- ping every region the game's host has a datacentre in
@@ -599,16 +620,23 @@ add_places() { # comma separated list -> appended to the pool (skipping ones alr
 	done
 }
 stay_apply() { # make the blocks match the pool: clear the old ones, then block every address block played on outside it
-	local ip p n=0
+	local ip p n=0 live
 	touch "$DATA/blocklist"
 	awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist" | while read -r ip; do nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null; done
 	awk -F'\t' '$4 != "stay"' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
-	for p in $(awk -v MODE=area_others $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv"); do MW_QUIET=1 cmd_block "$p" 0 stay; n=$((n + 1)); done
+	live="$(grep -o '"ip":"[0-9.]*"' "$RUN/www/status.json" 2>/dev/null | sed 's/"ip":"\([0-9]*\.[0-9]*\.[0-9]*\)\..*/ \1.0\/24 /' | tr -d '\n')"
+	rm -f "$RUN/stay.spared"
+	for p in $(awk -v MODE=area_others $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv"); do
+		# the match being played right now is never cut off: its server is dealt with once the match has ended
+		case "$live" in *" $p "*) echo "$p" > "$RUN/stay.spared"; continue ;; esac
+		MW_QUIET=1 cmd_block "$p" 0 stay; n=$((n + 1))
+	done
 	export_json
 	echo "$n"
 }
 stay_report() {
 	echo "Staying on: $(stay_names)"
+	[ -f "$RUN/stay.spared" ] && echo "The match you are in now is on a server outside these places. It is left alone until the match ends."
 	echo "Any server in any of these places is allowed, whoever hosts it. Blocked $1 address block(s) you have played on elsewhere; others are turned away as the game tries them."
 	echo "The game still decides which of them to offer you. A place is dropped from the pool if its last three matches average under $WARN_SCORE."
 }
@@ -635,7 +663,7 @@ cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
 	esac
 }
 cmd_newgame() { # port : a match was just played on a server port nobody has named
-	local msg="New game seen on server port $1. Name it on the Tools page in MatchWatch, so that staying on places, the lobby alert and automatic blocking cover it."
+	local msg="New game on server port $1. Name it in MatchWatch, or mark it as not a game."
 	if [ "$NOTIFY_NEWGAME" = 1 ]; then cmd_notify "$msg"; else logger -t matchwatch "$msg" 2>/dev/null; fi
 }
 cmd_game() { # name <port or lo-hi> <name> [hosts] [voice] | remove <port or lo-hi>

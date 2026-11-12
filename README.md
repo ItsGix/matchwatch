@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.18.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.19.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -293,7 +293,7 @@ Press the button on the Live page (or the M key with the page focused) when some
 
 > Match started: Frankfurt, DE, ping about 6 ms.
 
-It fires when the steady game traffic starts, not while you are still in the lobby or on a loading screen, so it means "get back to your seat now". It gives the place and the ping; when the server does not answer ping within about fourteen seconds, it says so and sends anyway. It is only sent for named games, not for a stream on an unknown port. It needs phone alerts set up (see [Phone alerts](#phone-alerts)), and is off by default.
+It fires when the steady game traffic starts, not while you are still in the lobby or on a loading screen, so it means "get back to your seat now". It reads "Match started: United Kingdom, 5 ms." When the server does not answer ping within about fourteen seconds it is sent without the ping. It is only sent for named games, not for a stream on an unknown port. It needs phone alerts set up (see [Phone alerts](#phone-alerts)), and is off by default.
 
 **New-game alert.** The first time a match is played on a game MatchWatch does not recognise, your phone is told to name it. See [Games it does not recognise](#games-it-does-not-recognise).
 
@@ -338,6 +338,8 @@ From the command line: `matchwatch fav`, `matchwatch fav add <ip>`, `matchwatch 
 
 ## Staying in a pool of places
 
+Two things to expect. A server outside your places is turned away the moment the game first reaches for it, before MatchWatch measures it, so you are refused in the lobby and not thrown out later. And if you start staying while a match is in progress on a server outside your places, that match is left alone; its server is turned away once the match has ended.
+
 `matchwatch stay <places>`, the box on the Servers page, or a "Stay here" button keeps you to servers in the places you choose, whoever hosts them. Give one place or several, separated by commas:
 
 - **A city**: `milan`, `helsinki`. Servers within 150 km of it are allowed. Cities in the regions table work offline; any other city name is looked up with the Open-Meteo geocoding service, which is sent only the name you typed.
@@ -375,6 +377,17 @@ If the game is not prioritised, "Prioritise my game traffic" on the Tools page (
 This only happens when you ask for it. If you already have rules named `Game_Outbound` and `Game_Inbound`, made from commands an older version printed, the fix adopts and renames them, and "Remove those rules" then deletes them.
 
 ## Phone alerts
+
+Alerts are one short line each. The full detail is always in the dashboard and in Recent activity on the Tools page.
+
+| Alert | Reads like | When |
+|---|---|---|
+| Match started | Match started: United Kingdom, 5 ms. | Each match, if switched on |
+| Lobby | Poor server ahead: United Kingdom, 5 ms. Rated 40/100 before. | A far or poor server, at most one a minute |
+| Match ended | Match ended: 41/100 Poor. | After a bad match, or every match if switched on |
+| New game | New game on server port 4444. Name it in MatchWatch, or mark it as not a game. | The first match on an unknown port |
+
+A server turned away because you are staying somewhere else does not alert your phone, unless the lobby alert is set to "Always alert my phone". A game can try several servers in a minute.
 
 Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.sh/<your topic>` under Alerts in Settings. You get an alert when you land on a server with a bad history, and after bad matches. Turn on "Alert when a match starts" to also be told the moment the game itself begins, which helps if you step away during a long queue.
 

@@ -71,7 +71,7 @@ return view.extend({
 		};
 
 		o = s.taboption('alerts', form.Flag, 'notify_start', _('Alert when a match starts'),
-			_('Tells your phone the moment the game itself begins, with where the server is and the ping. Handy when you have stepped away during a long queue.'));
+			_('Tells your phone the moment the game itself begins: "Match started: United Kingdom, 5 ms." Handy when you have stepped away during a long queue.'));
 		o.default = '0';
 		o.rmempty = false;
 
@@ -86,7 +86,7 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.taboption('alerts', form.ListValue, 'lobby_alert', _('Lobby alert'),
-			_('When the game starts connecting you to a server, MatchWatch works out where it is and how it has rated.'));
+			_('When the game starts connecting you to a server, MatchWatch works out where it is and how it has rated. Phone alerts are one short line, and never more than one a minute. A server turned away because you are staying elsewhere only alerts your phone on "Always".'));
 		o.value('0', _('Show on the dashboard only'));
 		o.value('1', _('Also alert my phone when it is far or badly rated'));
 		o.value('2', _('Always alert my phone'));

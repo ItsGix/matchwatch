@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.18.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.19.0.
 
 ## Layout
 
@@ -38,6 +38,10 @@ Unnamed ports (0.18.0): a stream on a port with no label is kept only if at leas
 
 ## Rules that have bitten already
 
+- Phone alerts are one short line with no addresses or host names; the full sentence goes to the log and the dashboard. The owner found five long turn-away alerts in a minute too much: a stay-mode turn-away only reaches the phone on `lobby_alert` 2, and lobby alerts are limited to one a minute.
+- In `cmd_lobby` the stay decision comes before any ping or traceroute. Measuring first let the game join the server and then threw the player out.
+- `stay_apply` never blocks the address block of a match in progress (read from `status.json`); `cmd_after` applies it once the match has ended.
+
 - BusyBox awk only. No `cos`, `sqrt` or other maths functions (some builds lack them), no gawk extensions. Distances are compared squared with a cosine series.
 - BusyBox ash only. No bashisms. Test with `busybox ash -n` and `busybox awk`.
 - Game traffic is the ground truth. Probe results (ping, traceroute-style UDP) only split blame; they never lower a score when the game's own packets arrived cleanly. Servers ration UDP probe replies, so unanswered ones are not loss.
@@ -73,11 +77,11 @@ The commands behind the dashboard buttons, each run and then undone: block and u
 
 0.10.0: the installer, the one-time settings import, the rpcd backend through `ubus call` (checks, block and unblock, stay on and off, refusal of a changing action through `read`, rejection of shell characters in arguments), `file.read` of the data files, and the no-login page.
 
-Phone alerts through ntfy and the match-started alert were seen working on a real phone on 12 November 2026. The same night the engine's lobby check fired on a real Call of Duty lobby (a `LOBBY` line in `engine.log`, confirmed by the owner as a Call of Duty lobby). The owner has used the LuCI dashboard pages daily since 0.15.0, including the Servers, Matches and Tools pages and their buttons.
+Phone alerts through ntfy and the match-started alert were seen working on a real phone on 12 November 2026. The same night the engine's lobby check fired on a real Call of Duty lobby (a `LOBBY` line in `engine.log`, confirmed by the owner as a Call of Duty lobby). Stay mode turned away five real Call of Duty servers in a row on 12 November 2026 while the owner stayed on places abroad (whether the game then offers a server inside the pool is the game's choice and was not seen). The owner has used the LuCI dashboard pages daily since 0.15.0, including the Servers, Matches and Tools pages and their buttons.
 
 ## Not yet run on a real router
 
-The Settings page's Save & Apply restarting the service. The lobby alert's message reaching the Live page or the phone (it only goes to the phone when the server is far or badly rated), stay mode against real matchmaking, the QoSmate check during a match on this version. From 0.18.0: the ping in the match-started alert, the unnamed-port filter and the "QoSmate in this match" report section on a real match.
+The Settings page's Save & Apply restarting the service. The lobby alert's message reaching the Live page or the phone (it only goes to the phone when the server is far or badly rated), the QoSmate check during a match on this version. From 0.18.0: the ping in the match-started alert, the unnamed-port filter and the "QoSmate in this match" report section on a real match.
 
 The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbound` and `Game_Inbound` (made from commands an older version printed) by renaming them, so unfix afterwards deletes them and leaves the game unprioritised.
 

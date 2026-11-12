@@ -142,14 +142,14 @@ function early_check(f,    ip, avg, p) {
 		p = pfx(ip)
 		if ((p in R24_n) && R24_n[p] >= 2 && R24_sum[p] / R24_n[p] < WARNSCORE) {
 			print "WARN bad neighbourhood " ip
-			if (!REPLAY) system(SELF " _notify 'New server " ip ", but its neighbours in the same datacentre block rate " int(R24_sum[p] / R24_n[p]) "/100 over " R24_n[p] " matches.' &")
+			if (!REPLAY) system(SELF " _notify 'New server, but its neighbours rate " int(R24_sum[p] / R24_n[p]) "/100 over " R24_n[p] " matches.' &")
 		}
 		return
 	}
 	avg = REP_sum[ip] / REP_n[ip]
 	if (avg < WARNSCORE) {
 		print "WARN known bad server " ip " (rating " int(avg) " over " REP_n[ip] " matches)"
-		if (!REPLAY) system(SELF " _notify 'Known bad server " ip " - rated " int(avg) "/100 over " REP_n[ip] " matches. Consider backing out.' &")
+		if (!REPLAY) system(SELF " _notify 'Poor server: rated " int(avg) "/100 over " REP_n[ip] " matches.' &")
 	}
 }
 
