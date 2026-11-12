@@ -373,14 +373,20 @@ function updateLive() {
 		marks: (s.marks || []).map(function (m) { return 119 - (now - m.t); }) });
 }
 
+// Tests are graded A+ to F. A score out of 100 becomes a letter; a ping on its own is graded by how far away it is.
+function letter(s) { return s == null ? null : s >= 97 ? "A+" : s >= 90 ? "A" : s >= 80 ? "B" : s >= 70 ? "C" : s >= 55 ? "D" : s >= 40 ? "E" : "F"; }
+function pingLetter(ms) { return ms == null ? null : ms <= 15 ? "A+" : ms <= 30 ? "A" : ms <= 50 ? "B" : ms <= 80 ? "C" : ms <= 120 ? "D" : ms <= 180 ? "E" : "F"; }
+function gradeCls(g) { return !g ? "" : g.charAt(0) === "A" || g === "B" ? "ok" : g === "C" || g === "D" ? "mid" : "low"; }
+function gradeBox(g, text) { return h("div", { cls: "grade " + gradeCls(g) }, h("b", { text: g || "?", "aria-label": "Grade " + (g || "unknown") }), h("p", text)); }
 // ---------- one match in full
 function chain(m) {
+	var why = m.why || {}, whys = [why.pc, why.line, why.route, why.server];
 	var parts = [["Your PC", m.s_pc, m.pc_counted === 0 ? "Shown, not counted" : null], ["Your line", m.s_line, null], ["Route", m.s_route, m.route_ign ? "Shown, not counted" : null], ["Server", m.s_server, null]];
 	var min = null; parts.forEach(function (p) { if (p[1] != null && !p[2] && (min == null || p[1] < min)) min = p[1]; });
 	var c = h("div", { cls: "chain" });
-	parts.forEach(function (p) {
+	parts.forEach(function (p, i) {
 		var weak = p[1] != null && !p[2] && p[1] === min && p[1] < 70;
-		c.appendChild(h("div", { cls: "link " + cls(p[1]) }, h("div", { cls: "dot", text: p[1] == null ? "n/a" : String(p[1]) }), h("b", p[0]), h("span", p[2] || (weak ? "Weakest link" : grade(p[1])))));
+		c.appendChild(h("div", { cls: "link " + cls(p[1]) }, h("div", { cls: "dot", text: p[1] == null ? "n/a" : String(p[1]) }), h("b", p[0]), h("span", p[2] || (weak ? "Weakest link" : grade(p[1]))), whys[i] ? h("small", whys[i]) : null));
 	});
 	return c;
 }
@@ -632,9 +638,9 @@ function pageServers() {
 	var rg = D.regions || [];
 	if (!rg.length) view.appendChild(h("p", { cls: "empty", text: "Not measured yet." }));
 	else {
-		var tr = table([["Region"], ["Area"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Your matches there", "num"], ["Rating", "num"], ["Ping in matches", "num"], ["", ""]]);
+		var tr = table([["Region"], ["Area"], ["Ping ms", "num"], ["Grade"], ["Jitter ms", "num"], ["Your matches there", "num"], ["Rating", "num"], ["Ping in matches", "num"], ["", ""]]);
 		(regionsAll ? rg : rg.slice(0, 4)).forEach(function (r) {
-			tr.lastChild.appendChild(row([[r.city + ", " + r.cc], [r.area], [r.ping == null ? "No reply" : fmt(r.ping, 1), "num s"], [r.jit == null ? "" : fmt(r.jit, 1), "num"],
+			tr.lastChild.appendChild(row([[r.city + ", " + r.cc], [r.area], [r.ping == null ? "No reply" : fmt(r.ping, 1), "num s"], [pingLetter(r.ping) || "", "s " + gradeCls(pingLetter(r.ping))], [r.jit == null ? "" : fmt(r.jit, 1), "num"],
 				[r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.matchping == null ? "" : fmt(r.matchping, 1), "num"],
 				(function () { var td = h("td", { cls: "act" }); if (r.stay) td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); else if (r.ping != null && stays.length) td.appendChild(act("Add", "stayadd", null, { extra: "&region=" + r.code })); else if (r.ping != null) td.appendChild(act("Stay here", "stay", null, { extra: "&region=" + r.code, confirm: "Confirm: turn the others away" })); return td; })()]));
 		});
@@ -950,7 +956,8 @@ function pageTools() {
 		lineBtn.addEventListener("click", function () {
 			lineOut.textContent = "";
 			job(lineBtn, "linetest", null, "linetest.json", function (r) {
-				lineOut.appendChild(h("p", { cls: "lede " + (r.verdict === "good" ? "ok" : r.verdict === "fair" ? "mid" : r.verdict === "poor" ? "low" : ""), text: r.msg }));
+				if (r.score != null) lineOut.appendChild(gradeBox(letter(r.score), r.msg));
+				else lineOut.appendChild(h("p", { cls: "lede " + (r.verdict === "good" ? "ok" : r.verdict === "fair" ? "mid" : r.verdict === "poor" ? "low" : ""), text: r.msg }));
 				var t = table([["Target"], ["Address"], ["Ping ms", "num"], ["Slowest 5% ms", "num"], ["Jitter ms", "num"], ["Lost %", "num"]]);
 				(r.rows || []).forEach(function (x) { t.lastChild.appendChild(row(x.answered ? [[x.name], [x.ip], [fmt(x.med, 1), "num s"], [fmt(x.p95, 1), "num"], [fmt(x.jit, 2), "num"], [fmt(x.loss, 0), "num"]] : [[x.name], [x.ip], ["Does not answer ping", "num"], ["", "num"], ["", "num"], ["", "num"]])); });
 				lineOut.appendChild(h("div", { cls: "tablewrap" }, t));
@@ -977,6 +984,10 @@ function pageTools() {
 				trOut.textContent = "";
 				job(trBtn, "trace", sel.value, "trace.json", function (r) {
 					if (!r.hops || !r.hops.length) { trOut.appendChild(h("p", { cls: "note", text: "No hop answered." })); return; }
+					// the grade is for the last stop when that is the server itself: one trace shows distance, not steadiness
+					var lastHop = r.hops[r.hops.length - 1].split(" "), ms = lastHop[1] === r.ip ? parseFloat(lastHop[2]) : NaN;
+					if (!isNaN(ms)) trOut.appendChild(gradeBox(pingLetter(ms), "The server answered in " + fmt(ms, 0) + " ms over " + r.hops.length + " stops. This grades distance only: a single trace cannot show how steady the route is. A match report does that."));
+					else trOut.appendChild(h("p", { cls: "note", text: "No grade: the server itself did not answer the trace, so there is no ping to it to judge. Many game servers do not." }));
 					var ol = h("ol", { cls: "hops" }); r.hops.forEach(function (x) { ol.appendChild(h("li", x)); }); trOut.appendChild(ol);
 					trOut.appendChild(h("p", { cls: "note", text: "Each line is one stop between your router and the server, with how long it took to answer. A star means that stop did not answer, which is common and not a fault." }));
 				});

@@ -58,6 +58,7 @@ def build(site):
              "clump": 3.1 if code == "route" else 0.0, "freeze": 3 if code == "server" else 0, "rough": 51.0 if code == "server" else (18.0 if bad else 0.0), "uprate": 95.2, "upjit": 0.2,
              "hitch": 4 if code == "pc" else 0, "farkind": "server", "ping": p, "pingjit": 3.9 if code == "route" else 0.3, "pingloss": 1.5 if code == "route" else 0.0, "nearping": 3.7, "nearjit": 0.3, "nearloss": 0,
              "lanping": 0.2, "s_server": s["server"], "s_route": s["route"], "s_line": s["line"], "s_pc": s["pc"], "overall": overall, "rating": s["server"] if code == "server" else 100, "counted": 1,
+             "why": {"server": "2.40% of updates went missing; 3 freezes over 100 ms" if code == "server" else "Nothing to fault", "route": "Ping jitter 3.9 ms; 1.5% of pings lost" if code == "route" else "Nothing to fault", "line": "Nothing to fault", "pc": "4 pauses over 100 ms in what it sent" if code == "pc" else "Nothing to fault"},
              "code": code, "verdict": VERDICT[code], "hops": "9", "marks": marks, "marksum": ("server stalled" if code == "server" else "nothing on the network") if marks else "", "qos": "top"}
         hist.append(m)
         n = min(dur, 600)
@@ -92,7 +93,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.22.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True, "away": 412}}
+           "info": {"version": "0.22.1", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Germany", "Sweden"], "web": False, "qosmate": True, "away": 412}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [

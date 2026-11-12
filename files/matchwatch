@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.22.0"
+VERSION="0.22.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1427,7 +1427,15 @@ linetest_run() { # job-id -> the result as JSON
 		else if (bl >= 2) { vd = "poor"; msg = sprintf("Your line is losing packets: at least %d%% went missing to every target. Expect rubber-banding until that clears.", bl) }
 		else if (bl > 0 || bj > 3 || bs > 10) { vd = "fair"; msg = sprintf("Your line is a little unsteady right now: jitter %.1f ms, slowest replies %.0f ms above normal%s.", bj, bs, (bl > 0 ? ", some loss" : "")) }
 		else { vd = "good"; msg = sprintf("Your line is steady: about %.0f ms to the nearest target, no loss, jitter %.1f ms.", bm, bj) }
-		printf "],\"verdict\":\"%s\",\"msg\":\"%s\"}\n", vd, msg
+		# a score for the dashboard to grade A+ to F: shared loss costs most, then jitter, then slow replies
+		sc = -1
+		if (ans) {
+			x = bl * 10; if (x > 60) x = 60; sc = 100 - x
+			x = (bj - 0.5) * 6; if (x < 0) x = 0; if (x > 25) x = 25; sc -= x
+			x = (bs - 3) * 1.5; if (x < 0) x = 0; if (x > 20) x = 20; sc -= x
+			if (sc < 0) sc = 0
+		}
+		printf "],\"verdict\":\"%s\",\"score\":%s,\"msg\":\"%s\"}\n", vd, (sc < 0 ? "null" : int(sc + 0.5)), msg
 	}'
 	rm -f "$d"/*; rmdir "$d" 2>/dev/null
 }

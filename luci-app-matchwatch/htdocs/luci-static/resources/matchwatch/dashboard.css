@@ -90,6 +90,11 @@ canvas { display: block; width: 100%; height: 300px; }
 .link.na .dot { border-color: var(--grid); color: var(--muted); font-size: 0.9rem; }
 .link b { display: block; margin-top: 8px; font: 700 1.02rem var(--display); }
 .link span { display: block; color: var(--muted); font-size: 0.88rem; }
+.link small { display: block; margin: 6px auto 0; max-width: 26ch; color: var(--ink); font-size: 0.8rem; line-height: 1.35; }
+.grade { display: flex; align-items: center; gap: 14px; margin: 4px 0 14px; }
+.grade b { flex: none; min-width: 56px; height: 56px; padding: 0 8px; display: grid; place-items: center; border-radius: var(--r); border: 3px solid var(--ok); font: 700 1.5rem/1 var(--display); }
+.grade.mid b { border-color: var(--mid); } .grade.low b { border-color: var(--bad); background: var(--bad); color: var(--paper); }
+.grade p { margin: 0; }
 @media (max-width: 560px) { .chain { grid-template-columns: repeat(2, 1fr); row-gap: 18px; } .chain::before { display: none; } }
 
 .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }

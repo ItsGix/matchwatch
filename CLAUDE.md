@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.22.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.22.1.
 
 ## Layout
 
@@ -42,6 +42,8 @@ Whole ranges (0.20.0): with stay mode on, `stay_ranges` (always started in the b
 Where each game plays (0.21.0): `report.awk` MODE `gameplaces` groups game and /24 from `sessions.tsv`, from `tried` (written by `tried_note` in `cmd_lobby`: network, port, city, country, host, AS, position, count, last seen; 2,000 lines at most) and, for the dashboard only, from `gameplaces.shared` (imported, 5,000 lines at most). `ARG=share` prints your own for the `[gameservers]` share section; `ARG=json` writes `gameplaces.json` with an `in` flag when a stay pool is set. Shared entries never reach the `blocked` or `away` sets. `sessions.tsv` is trimmed to its newest 5,000 lines in `cmd_after`; the owner wants total storage well under 20 to 30 MB for small routers.
 
 Updating (0.22.0): `matchwatch update` reads `dist/version` from the raw GitHub address of `main` and compares; `update now` (action `update`, a slow tool writing `update.json`) downloads the installer, refuses it unless its SHA-256 matches that line, and runs it. It refuses during a match. Nothing is fetched until the owner asks. Whatever is pushed to `main` in `dist/` is what every router installs, so never push a `dist/` that has not been installed on the test router first. The installer writes each file as `<name>.new` and moves it into place, because the updater runs from the script being replaced. `MW_UPDATE_URL` points it elsewhere for tests, with `MW_ROOT` so the installer writes into a sandbox.
+
+Reasons and grades (0.22.1): the engine notes every deduction as it scores (`why_add`) and writes the largest one or two per part into the match detail as `why` (`server`, `route`, `line`, `pc`); the dashboard prints them under the four scores. Matches from before 0.22.1 have none. Change a scoring formula and its `why_add` line together, and the table in the README. Tests get letters in the dashboard only: `letter(score)` for the line test (`score` in `linetest.json`), `pingLetter(ms)` for a trace and the region table.
 
 ## Rules that have bitten already
 

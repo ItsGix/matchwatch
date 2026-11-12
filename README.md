@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.22.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.22.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -149,6 +149,7 @@ The Tools page has four tabs: Checks, Games, Share, and Data and settings. Each 
 
 - **Check MatchWatch is working.** Confirms the programs it needs are present and that it can see your device's traffic. Takes five seconds and changes nothing.
 - **Is my game prioritised?** Needs [QoSmate](https://github.com/hudra0/qosmate) installed. Checks whether your game's traffic is in QoSmate's top priority queue. Needs a match in progress and changes nothing.
+- **Grades on tests.** The line test, the route trace and the region pings each get a letter from A+ to F. The line test is graded on loss, jitter and slow replies shared by every target (97 and over is A+, 90 A, 80 B, 70 C, 55 D, 40 E). A trace and a region ping are graded on distance alone: up to 15 ms is A+, 30 A, 50 B, 80 C, 120 D, 180 E.
 - **Test my line.** Twenty seconds of pings from the router to your provider's first hop and two public servers, with no game needed. It gives a plain verdict on ping, jitter and loss, so you can tell before you queue whether your own connection is steady. Trouble seen on every target is blamed on your line; trouble with one target is not.
 - **Send a test alert.** Sends one message to your phone to prove the alerts address works.
 - **Route to a server.** Traces the route to any server in your history, to compare with the route in a match report.
@@ -283,7 +284,32 @@ The [`packs/`](packs/) folder is for game packs anyone can use: share files with
 
 **Your PC.** Whether your PC keeps sending without pauses, measured as its packets arrive at the router, plus a ping from router to PC if the PC answers. Only pauses over 100 ms are scored; they usually mean frame drops or a loading screen. Send jitter is shown but barely scored, because games tie their send rate to frame rate. Turn off "Count your PC towards scores" in Settings to leave your PC out of the overall score and verdict.
 
-Each part gets a score out of 100. The verdict names the weakest part. Scoring starts when steady game traffic begins, so the wait before a match is not counted, and sessions with under a minute analysed are not judged.
+Each part gets a score out of 100, and the match report prints one short line under each score saying what cost the most points ("Ping 73 ms: a long way to the server", "4 pauses over 100 ms in what it sent"), or "Nothing to fault".
+
+### What takes points off
+
+| Score | Starts at 100 and loses points for | Most it can lose |
+|---|---|---|
+| Server | Timing jitter above 5% of one update | 30 |
+| | Updates late or in clumps (4 points per 1%) | 25 |
+| | Missing updates (12 points per 1%) | 35 |
+| | Stutters over 50 ms, counted per ten minutes | 30 |
+| | Freezes over 100 ms, counted per ten minutes | 20 |
+| | Rough stretches beyond 5% of the match | 20 |
+| Route | Ping jitter above 1 ms (6 points per ms) | 35 |
+| | Lost pings (12 points per 1%; not counted for the UDP probe) | 45 |
+| | Ping above 40 ms (1 point per 2 ms) | 20 |
+| Your line | Jitter above 3 ms to the first ISP hop (3 points per ms) | 35 |
+| | Loss to the first ISP hop (6 points per 1%) | 45 |
+| Your PC | Pauses over 100 ms in what it sends, counted per ten minutes | 45 |
+| | Send jitter above 60% of one update | 10 |
+| | Jitter or loss between router and PC | 80 |
+
+So a steady route to a server a long way off scores in the low 80s for distance alone, and a handful of short pauses in a long match costs the PC a few points. Neither is a fault.
+
+The overall score is 60% the weakest counted part and 40% a weighted average (server 45%, route 25%, line 15%, PC 15%). Grades: 85 and over Excellent, 70 Good, 50 Fair, below that Poor. When the game's own packets arrived cleanly (server 80 or more), a lower route score is shown but not counted.
+
+The verdict names the weakest part. Scoring starts when steady game traffic begins, so the wait before a match is not counted, and sessions with under a minute analysed are not judged.
 
 ## "I felt that"
 

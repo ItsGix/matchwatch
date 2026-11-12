@@ -20,6 +20,18 @@ function grade(s) {
 	if (s >= 50) return "Fair"
 	return "Poor"
 }
+# Why a score is what it is: every deduction is noted as it is made, and the largest (with the next,
+# when that one cost two points or more) becomes one short line shown under the score.
+function why_add(pts, text) { if (pts >= 0.5) { WN++; WP[WN] = pts; WT[WN] = text } }
+function why_out(score, none,    i, a, b, t) {
+	a = 0; b = 0
+	for (i = 1; i <= WN; i++) if (!a || WP[i] > WP[a]) a = i
+	for (i = 1; i <= WN; i++) if (i != a && WP[i] >= 2 && (!b || WP[i] > WP[b])) b = i
+	t = a ? WT[a] (b ? "; " tolower(substr(WT[b], 1, 1)) substr(WT[b], 2) : "") : "Nothing to fault"
+	WN = 0
+	return (score == "-") ? none : t
+}
+function plural(n, word) { return n " " word (n == 1 ? "" : "s") }
 function clean(s) { gsub(/[\t\r\n"\\]/, " ", s); return s }
 function priv(a, b) {
 	return (a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) || (a == 169 && b == 254))
@@ -473,6 +485,7 @@ function load_sum(file,    line, p) {
 }
 
 function probe_score(pfx, kind,    n, jit, loss, med, A, B, L, s) {
+	PD_j = 0; PD_l = 0; PD_m = 0
 	n = PS[pfx "_n"] + 0
 	if (n < 10) return "-"
 	jit = PS[pfx "_jit"] + 0; loss = PS[pfx "_loss"] + 0; med = PS[pfx "_med"] + 0
@@ -480,14 +493,16 @@ function probe_score(pfx, kind,    n, jit, loss, med, A, B, L, s) {
 	else if (kind == "serverudp") { A = 1; B = 6; L = 0 }   # servers ration replies to these probes, so unanswered ones say nothing about the route
 	else if (kind == "lan") { A = 0.5; B = 10; L = 15 }
 	else { A = 3; B = 3; L = 6 }          # router hops answer ping lazily: be lenient
-	s = 100 - clamp((jit - A) * B, 0, 35) - clamp(loss * L, 0, 45)
-	if (pfx == "far") s -= clamp((med - 40) / 2, 0, 20)
+	PD_j = clamp((jit - A) * B, 0, 35); PD_l = clamp(loss * L, 0, 45); PV_j = jit; PV_l = loss; PV_m = med
+	s = 100 - PD_j - PD_l
+	if (pfx == "far") { PD_m = clamp((med - 40) / 2, 0, 20); s -= PD_m }
 	return int(clamp(s, 0, 100) + 0.5)
 }
 
 function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel, dlate, dlost, dclump, dfrz, dstut, dbad, p10,
 		uhz, unom, ujit, ujrel, ustall, uhitch, upp, s_srv, s_route, s_line, s_pc, s_lan, overall, rating, reliable,
-		wsum, w, i, kk, mk, msum, dj, df, trl, code, vtext, farkind, route_ign, s_route_shown, s_pc_shown, pc_low, loc, rep, out, ip, when, note, avg, sumfile, wan_avg) {
+		wsum, w, i, kk, mk, msum, dj, df, trl, code, vtext, farkind, route_ign, s_route_shown, s_pc_shown, pc_low, loc, rep, out, ip, when, note, avg, sumfile, wan_avg,
+		y_srv, y_route, y_line, y_pc) {
 	kd = f SUBSEP "D"; ku = f SUBSEP "U"
 	ip = F_rip[f]
 	dur = F_last[f] - F_first[f]
@@ -539,6 +554,14 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	p10 = 600 / dsec
 	s_srv = 100 - clamp((djrel - 5) * 1.5, 0, 30) - clamp((dlate + dclump) * 4, 0, 25) - clamp(dlost * 12, 0, 35) - clamp(dstut * p10 / 10 * 2, 0, 30) - clamp(dfrz * p10 * 5, 0, 20) - clamp((dbad - 5) * 0.4, 0, 20)
 	s_srv = int(clamp(s_srv, 0, 100) + 0.5)
+	WN = 0
+	why_add(clamp((djrel - 5) * 1.5, 0, 30), sprintf("Uneven timing: jitter was %.0f%% of one update", djrel))
+	why_add(clamp((dlate + dclump) * 4, 0, 25), sprintf("%.1f%% of updates came late or in clumps", dlate + dclump))
+	why_add(clamp(dlost * 12, 0, 35), sprintf("%.2f%% of updates went missing", dlost))
+	why_add(clamp(dstut * p10 / 10 * 2, 0, 30), plural(dstut, "stutter") " over 50 ms")
+	why_add(clamp(dfrz * p10 * 5, 0, 20), plural(dfrz, "freeze") " over 100 ms")
+	why_add(clamp((dbad - 5) * 0.4, 0, 20), sprintf("Rough for %.0f%% of the match", dbad))
+	y_srv = why_out(s_srv, "")
 
 	# --- your PC (upstream cadence + LAN)
 	if (usec >= 10 && S_ticks[ku] > 0) {
@@ -552,7 +575,11 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		s_lan = probe_score("lan", "lan")
 		if (s_lan != "-") s_pc -= (100 - s_lan)
 		s_pc = int(clamp(s_pc, 0, 100) + 0.5)
+		why_add(clamp((ujrel - 60) * 0.3, 0, 10), sprintf("Uneven sending: jitter was %.0f%% of one update", ujrel))
+		why_add(clamp(uhitch * upp * 2, 0, 45), plural(uhitch, "pause") " over 100 ms in what it sent")
+		why_add(PD_j, sprintf("Router to PC jitter %.1f ms", PV_j)); why_add(PD_l, sprintf("%.1f%% loss between router and PC", PV_l))
 	} else { uhz = "-"; ujit = "-"; ustall = "-"; uhitch = "-"; s_pc = "-" }
+	y_pc = why_out(s_pc, "Too little was sent to judge")
 
 	s_pc_shown = s_pc
 	if (PCSCORE == 0) s_pc = "-"       # shown in the report, left out of the overall score and verdict
@@ -560,7 +587,12 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	# --- route and line (active probes, if they answered)
 	farkind = (PS["far_kind"] != "") ? PS["far_kind"] : "-"
 	s_route = probe_score("far", farkind)
+	why_add(PD_m, sprintf("Ping %.0f ms: a long way to the server", PV_m))
+	why_add(PD_j, sprintf("Ping jitter %.1f ms", PV_j)); why_add(PD_l, sprintf("%.1f%% of pings lost", PV_l))
+	y_route = why_out(s_route, "Nothing on the way answered probes")
 	s_line = probe_score("near", "hop")
+	why_add(PD_j, sprintf("Jitter %.1f ms to your provider", PV_j)); why_add(PD_l, sprintf("%.1f%% loss to your provider", PV_l))
+	y_line = why_out(s_line, "Your provider's first hop did not answer")
 
 	# --- game traffic is the ground truth: when it arrived cleanly, a rougher-looking
 	# probe (servers rate-limit and deprioritise probe replies) must not drag scores down
@@ -703,6 +735,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"wanavg\":" jn2(wan_avg) ",\"wanpeak\":" jn2(F_wpk[f] + 0) ",\"wanuppeak\":" jn2(F_wupk[f] + 0) ",\"hops\":" js(PS["hops"])
 		dj = dj ",\"s_server\":" jn2(s_srv) ",\"s_route\":" jn2(s_route) ",\"s_line\":" jn2(s_line) ",\"s_pc\":" jn2(s_pc) ",\"overall\":" overall ",\"rating\":" rating
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
+		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
 		if (QM != "") dj = dj ",\"qm\":" QM
 		dj = dj ",\"marks\":["
 		for (i = 1; i <= M_n[f] + 0; i++) dj = dj (i > 1 ? "," : "") "{\"t\":" M_t[f, i] ",\"k\":" js(M_kind[f, i]) ",\"x\":" js(M_txt[f, i]) "}"
