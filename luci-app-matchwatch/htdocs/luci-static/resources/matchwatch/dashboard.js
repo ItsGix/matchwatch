@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.26.0", reloading = false;
+var BUILT = "0.27.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -692,7 +692,19 @@ function pageMatch(id) {
 		else b.appendChild(kv([["Probed", m.farkind === "server" ? "The server itself" : m.farkind === "serverudp" ? "The server itself" : "Last hop that answers", m.farkind === "serverudp" ? "By traceroute-style probe: it ignores ping" : null],
 			["Ping", fmt(m.ping, 1) + " ms", full && m.pingp95 != null ? "Worst 5%: " + fmt(m.pingp95, 1) + " ms" : null], ["Ping jitter", fmt(m.pingjit != null ? m.pingjit : null, 2) + " ms"],
 			m.farkind === "serverudp" ? ["Probes answered", fmt(100 - (m.pingloss || 0), 0) + "%", "Servers ration these replies. Not packet loss in your game"] : ["Probe loss", fmt(m.pingloss, 1) + "%"], ["Hops", String(m.hops || "n/a")]]));
-		if (full && m.trace && m.trace.length) { var ol = h("ol", { cls: "hops" }); m.trace.forEach(function (t) { ol.appendChild(h("li", t.trim().replace(/\s+/g, "  "))); }); b.appendChild(ol); }
+		if (full && m.hopstats && m.hopstats.length) {
+			// each stop on the way, pinged all through the match
+			var worst = /starts at stop (\d+)/.exec(m.hopnote || ""), from = worst ? +worst[1] : 0;
+			var ht = table([["Stop", "num"], ["Address"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Lost %", "num"]]);
+			m.hopstats.forEach(function (x) {
+				var r = row([[String(x.n), "num"], [x.ip], [x.ping == null ? "No reply" : fmt(x.ping, 1), "num"], [x.jit == null ? "" : fmt(x.jit, 1), "num" + (from && x.n >= from && x.jit >= 4 ? " s low" : "")], [x.ping == null ? "" : String(x.loss), "num" + (from && x.n >= from && x.loss >= 5 ? " s low" : "")]]);
+				if (from && x.n === from) r.className = "hopfrom";
+				ht.lastChild.appendChild(r);
+			});
+			b.appendChild(h("p", { cls: "note" + (m.hopnote ? " low" : ""), text: m.hopnote || "Every stop on the way that answers was pinged through the match. Nothing on the way stood out: no stop was rough with every stop after it rough too." }));
+			b.appendChild(h("div", { cls: "tablewrap" }, ht));
+			b.appendChild(h("p", { cls: "note", text: "Routers answer pings when they have a moment, so one rough stop with steady stops after it means nothing. Trouble is only named when it starts at a stop and carries on to the end." }));
+		} else if (full && m.trace && m.trace.length) { var ol = h("ol", { cls: "hops" }); m.trace.forEach(function (t) { ol.appendChild(h("li", t.trim().replace(/\s+/g, "  "))); }); b.appendChild(ol); }
 		cols.appendChild(b);
 		b = h("div", null, h("h2", "Your line"));
 		if (m.nearping == null) b.appendChild(h("p", { cls: "note", text: "The first hop inside your ISP does not answer ping, so your line could not be measured separately." }));

@@ -70,6 +70,11 @@ def build(site):
                    marks=[{"t": start + 74 + 90 * k, "k": "server", "x": "server updates stalled: one arrived 249 ms late" if code == "server" else "nothing showed on the network in the six seconds before"} for k in range(marks)],
                    trace=[" 1  198.51.100.1  3.2 ms", " 2  100.64.0.64  3.1 ms", " 3  100.64.0.74  3.7 ms", " 4  192.0.2.180  5.7 ms", " 5  192.0.2.36  5.9 ms", " 6  *", " 7  *", " 8  192.0.2.201  %.1f ms" % (p - 0.4), " 9  %s  %.1f ms" % (ip, p)])
         del det["upnom_"]
+        hs = [{"n": i + 1, "ip": t.split()[1], "sent": 190, "ping": float(t.split()[2]), "jit": 0.3, "loss": 0} for i, t in enumerate(det["trace"]) if "*" not in t][:-1]
+        if code == "route":
+            for x in hs[3:]: x["jit"], x["loss"] = round(random.uniform(5.5, 8.0), 2), random.choice([6, 7, 9])
+            det["hopnote"] = "Trouble on the way starts at stop %d (%s): jitter %.1f ms, %d%% of pings lost, and it is still there at every stop after it. The 3 stops before it were steady." % (hs[3]["n"], hs[3]["ip"], hs[3]["jit"], hs[3]["loss"])
+        det["hopstats"] = hs
         det["qm"] = {"scheme": "diffserv3", "up": {"pkts": dur * 95, "drops": 0, "marks": 0, "peak": 0.3, "rpkts": dur * 410, "rdrops": 37 if code == "line" else 0, "rmarks": 212 if code == "line" else 0, "rpeak": 18.4 if code == "line" else 1.1},
                      "down": {"pkts": dur * 20, "drops": 0, "marks": 0, "peak": 0.4, "rpkts": dur * 900, "rdrops": 0, "rmarks": 0, "rpeak": 2.2}}
         json.dump(det, open(f"{data}/matches/{start}.json", "w"))
@@ -94,7 +99,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.26.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.27.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Example Arena", "ports": "7777-7800", "kind": "", "hosts": ""}, {"name": "Example Shooter", "ports": "20000-29000", "kind": "", "hosts": "examplehost,as64500"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -180,7 +185,7 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace") out = "1";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.26.0.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.27.0.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the Tools screenshots: press what a visitor would, so each picture shows a result

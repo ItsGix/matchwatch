@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.26.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.27.0.
 
 ## Layout
 
@@ -52,6 +52,8 @@ The map (0.24.0): `mapSection` on the Servers page. Leaflet 1.9.4 ships in the i
 Strict games (0.25.0, called hold in the code because `STAY_STRICT` was taken): `/etc/matchwatch/hold` lists game names (`matchwatch strict on|off <game>`, actions `holdon`/`holdoff` with the game in `name`). nftables gets `hold_ports` (those games' server ports, minus every voice label's ports) and `okay` (servers with a verdict), and one rule after the others: the device's UDP to a held port is dropped unless the server is in `okay`. The engine listens on the LAN side, so it still sees the dropped packet: `hold_seen` asks `matchwatch _hold <ip> <port>` on the first packet out, again every 4 s while nothing comes back, and stops once a reply is seen. `cmd_hold_check` lets through anything allowed, unplaceable, not labelled a game, or in the address block of a match in progress, and blocks the /24 of a game server outside the pool. `hold_apply` flushes both sets, writes `$RUN/hold.ports` (first line a serial; the engine drops its memory when it changes), waits two seconds so the engine has the ports first, then fills `hold_ports`; it runs on every pool change and at service start (six seconds after the engine). It must fail open: the init script's `stop_service` flushes `hold_ports`, and so does the start of `run`. A game is only offered when at least half its ports are left after voice ports are cut out (Roblox is not). Seen on the owner's router: the rule and sets in the live firewall, released on stop, back after start, fully undone. Not yet seen: a real new server being held and judged during matchmaking.
 
 Update notice (0.26.0): off by default (`update_check`). When on, a loop in `run` looks once a day (`update_due`, `update_note`), keeps the answer in `update.seen` (version, time), and alerts the phone once per version (`update.told`). `info.json` carries `latest` only when it is newer than the running version, and the dashboard shows it as a pill in the header (`#upd`). A manual check records the answer the same way. Tested in a sandbox against a local web folder; not yet seen with a real newer version.
+
+Hop-by-hop blame (0.27.0): `hop_loop` (started by `_probe_start` once the trace is in) pings each answering stop from the trace, fourteen at most, every six seconds into `hops.ping`; `hop_sum` (in `_probe_stop`) writes `hops.json` (per stop: sent, ping, jitter, loss) and, only when a stop is rough and every answering stop after it is rough too, one sentence in `hop.note`, which reaches the engine as `hop_note` in `sum`. The engine copies them into the match detail as `hopstats` and `hopnote`. Rough means jitter of 4 ms or more, or 5% loss, over at least five replies. It changes no score. Seen on the owner's router with real pings; the blame sentence only against invented samples.
 
 ## Rules that have bitten already
 
@@ -113,7 +115,7 @@ The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbou
 1. Play a match on a real router to prove what is left in the list above.
 2. Check the LuCI pages in a browser, then package the app (below).
 3. Match mode for the house: hold back other devices' heavy traffic during a match.
-4. Hop-by-hop blame when a route is bad.
+4. Hop-by-hop blame exists since 0.27.0. Still to do: see it name a stop in a real rough match, and tune the 4 ms and 5% lines against real routes.
 5. A voice chat check (Discord, in-game voice) rated like matches. Discord voice is labelled and protected from blocking since 0.12.0; a verdict worded for calls rather than matches is still to do.
 6. Share files exist since 0.14.0. Still to do: real game packs in `packs/` (each needs a source), a way to add a region ping host without editing `regions.local` by hand, and showing shared ratings on the Servers page beside your own.
 7. Packaging and a write-up for the OpenWrt forum. The repository is public with no licence yet: choose one before packaging.

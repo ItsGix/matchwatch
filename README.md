@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.26.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.27.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -37,6 +37,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Measures how evenly the server's updates arrive: tick rate, jitter, late, clumped and missing updates, stutters and freezes.
 - Pings the server, the first hop inside your ISP and your PC throughout the match, to split the blame.
 - Scores the server, the route, your line and your PC out of 100, says in one line what cost each its points, and names the weakest.
+- Pings every stop on the route through the match and names the one where trouble starts.
 - Has an "I felt that" button: press it when something feels off and it shows what the network was doing.
 
 **Remembers**
@@ -138,7 +139,7 @@ keeps your history and settings. Use `purge` instead of `remove` to delete those
 | Page | What is on it |
 |---|---|
 | **Live** | The match in progress: ping, update rate, jitter, late and missing updates, freezes, your PC's send rate and pauses, a two-minute chart, and the "I felt that" button. When the game starts connecting you somewhere, a banner says where, how far, and how that server has rated |
-| **Last match** | The full report for one match: verdict, the four scores with the reason for each, a chart of the whole match, every figure, the route trace, what QoSmate's queues did, and your marks |
+| **Last match** | The full report for one match: verdict, the four scores with the reason for each, a chart of the whole match, every figure, each stop on the route with where trouble started, what QoSmate's queues did, and your marks |
 | **Matches** | Every recorded match, your latest session in a sentence, and ratings by hour of the day. Flags is how many moments you marked with "I felt that" |
 | **Servers** | A map of your places and servers, your favourites by game, where each game plays, the places you stay on, datacentres, regions and servers with their ratings, and buttons to favourite, block, remove or stay |
 | **Tools** | Checks, games, sharing, updating and data. See [Tools](#tools) |
@@ -167,6 +168,14 @@ The dashboard fetches fresh data every fifteen seconds and redraws only when som
 **Your line.** One ping a second to the first hop inside your ISP.
 
 **Your PC.** Whether your PC keeps sending without pauses, measured as its packets arrive at the router, plus a ping from router to PC if the PC answers. Only pauses over 100 ms are scored; they usually mean frame drops or a loading screen. Send jitter is shown but barely scored, because games tie their send rate to frame rate. Turn off "Count your PC towards scores" in Settings to leave your PC out of the overall score and verdict.
+
+### Which stop on the way
+
+When a route is rough, the next question is where. Through every match MatchWatch pings each stop between you and the server that answers, once every six seconds, and the match report lists them under Route: typical ping, jitter and loss for each stop.
+
+If trouble starts at one stop and is still there at every stop after it, the report says so: "Trouble on the way starts at stop 7 (address): jitter 6.2 ms, and it is still there at every stop after it. The 6 stops before it were steady." If it starts at the first stop that answers, it says the trouble is at or near your own provider.
+
+Routers answer pings when they have a moment, so a single rough stop with steady stops after it means nothing, and is not blamed. This is information to act on, such as showing your provider; it does not change any score.
 
 ### The four scores, and why
 

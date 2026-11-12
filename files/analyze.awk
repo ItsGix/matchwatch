@@ -539,11 +539,14 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		sumfile = RUN "/probe." F_sid[f] "/sum"
 		load_sum(sumfile)
 		QM = ""; if ((getline QM < (RUN "/probe." F_sid[f] "/qm.json")) <= 0) QM = ""
+		HOPJ = ""; if ((getline HOPJ < (RUN "/probe." F_sid[f] "/hops.json")) <= 0) HOPJ = ""
+		close(RUN "/probe." F_sid[f] "/hops.json")
+		if (HOPJ !~ /^\[.*\]$/) HOPJ = ""
 		close(RUN "/probe." F_sid[f] "/qm.json")
 		TRN = 0
 		while ((getline trl < (RUN "/probe." F_sid[f] "/trace")) > 0) if (trl ~ /^ *[0-9]+ /) TR[++TRN] = clean(trl)
 		close(RUN "/probe." F_sid[f] "/trace")
-	} else { TRN = 0; QM = ""; if (PROBESUM != "") load_sum(PROBESUM) }
+	} else { TRN = 0; QM = ""; HOPJ = ""; if (PROBESUM != "") load_sum(PROBESUM) }
 
 	if (dsec < 20 || S_ticks[kd] + 0 == 0) {
 		print "END " F_sid[f] " " ip " too short to judge (" int(dur) "s)"
@@ -762,6 +765,8 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
 		if (QM != "") dj = dj ",\"qm\":" QM
+		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
+		if (PS["hop_note"] != "") dj = dj ",\"hopnote\":" js(PS["hop_note"])
 		dj = dj ",\"marks\":["
 		for (i = 1; i <= M_n[f] + 0; i++) dj = dj (i > 1 ? "," : "") "{\"t\":" M_t[f, i] ",\"k\":" js(M_kind[f, i]) ",\"x\":" js(M_txt[f, i]) "}"
 		dj = dj "],\"trace\":["

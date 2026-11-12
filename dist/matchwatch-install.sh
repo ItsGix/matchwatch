@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.26.0"
+VERSION="0.27.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -261,6 +261,51 @@ qm_sum() { # the match is over: what each queue carried, dropped and slowed, as 
 		}' > "$d/qm.json"
 	[ -s "$d/qm.json" ] || rm -f "$d/qm.json"
 }
+# ---- which stop on the way does trouble start at? During a match, every six seconds, one ping goes to
+# each stop from the route trace that answers (fourteen at most). Afterwards each stop gets its typical
+# ping, jitter and loss. Routers answer pings when they have a moment, so one rough stop with steady
+# stops after it means nothing; trouble is only named when it starts at a stop and is still there at
+# every stop after it, the last one included.
+hop_loop() { # server-ip
+	local list h
+	list="$(awk -v rip="$1" '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $2 != rip && c < 14 { print $1 ":" $2; c++ }' "$PD/trace" 2>/dev/null)"
+	[ -n "$list" ] || return 0
+	while [ -d "$PD" ] && [ ! -f "$PD/stop" ]; do
+		for h in $list; do
+			( r="$(ping -c 1 -W 1 "${h#*:}" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p')"; [ -d "$PD" ] && echo "${h%%:*} ${h#*:} ${r:-x}" >> "$PD/hops.ping" ) &
+		done
+		wait
+		sleep 6
+	done
+}
+hop_sum() { # -> hops.json (one line) and hop.note
+	[ -s "$PD/hops.ping" ] || return 0
+	awk -v NOTE="$PD/hop.note" '
+	{ k = $1 + 0; if (!(k in ip)) { ip[k] = $2; ord[++no] = k } att[k]++; if ($3 != "x" && n[k] < 600) { n[k]++; v[k, n[k]] = $3 + 0 } }
+	function median(m,   i, j, t) { for (i = 2; i <= m; i++) { t = W[i]; for (j = i - 1; j >= 1 && W[j] > t; j--) W[j + 1] = W[j]; W[j + 1] = t } return m ? W[int((m + 1) / 2)] : 0 }
+	END {
+		# in route order
+		for (i = 2; i <= no; i++) { t = ord[i]; for (j = i - 1; j >= 1 && ord[j] > t; j--) ord[j + 1] = ord[j]; ord[j + 1] = t }
+		printf "["
+		for (x = 1; x <= no; x++) {
+			k = ord[x]; m = n[k] + 0
+			for (i = 1; i <= m; i++) W[i] = v[k, i]
+			md = median(m)
+			for (i = 1; i <= m; i++) { d = v[k, i] - md; W[i] = (d < 0 ? -d : d) }
+			jt = median(m); ls = 100 * (att[k] - m) / att[k]
+			printf "%s{\"n\":%d,\"ip\":\"%s\",\"sent\":%d,\"ping\":%s,\"jit\":%s,\"loss\":%.0f}", (x > 1 ? "," : ""), k, ip[k], att[k], (m ? sprintf("%.1f", md) : "null"), (m ? sprintf("%.2f", jt) : "null"), ls
+			ans[x] = (m >= 5); bad[x] = (ans[x] && (jt >= 4 || ls >= 5)); J[x] = jt; LS[x] = ls
+			if (ans[x]) lastans = x
+		}
+		print "]"
+		if (!lastans || !bad[lastans]) exit
+		first = lastans
+		for (x = lastans - 1; x >= 1; x--) { if (!ans[x]) continue; if (bad[x]) first = x; else break }
+		before = 0; rough = 0; for (x = 1; x < first; x++) if (ans[x]) { before++; if (bad[x]) rough++ }
+		printf "Trouble on the way starts at stop %d (%s): jitter %.1f ms%s, and it is still there at every stop after it.%s\n", ord[first], ip[ord[first]], J[first], (LS[first] >= 1 ? sprintf(", %.0f%% of pings lost", LS[first]) : ""), (!before ? " That is the first stop that answers, so it starts at or near your own provider." : (rough ? " The stops before it were steady, apart from " rough " that answered pings unevenly while the stops after " (rough == 1 ? "it" : "them") " were fine." : " The " before " stop" (before == 1 ? "" : "s") " before it " (before == 1 ? "was" : "were") " steady.")) > NOTE
+	}' "$PD/hops.ping" > "$PD/hops.json.tmp" 2>/dev/null && mv -f "$PD/hops.json.tmp" "$PD/hops.json"
+}
+
 cmd_probe_start() {
 	local sid="$1" rip="$2" lip="$3" near last hops reached
 	is_ipv4 "$rip" || return 1
@@ -289,6 +334,8 @@ cmd_probe_start() {
 		END { print (near == "" ? "-" : near), (last == "" ? "-" : last), (reached != "" ? reached : n "+"), (reached != "" ? reached : "-") }' "$PD/trace")
 	near="$1"; last="$2"; hops="$3"; reached="$4"
 	echo "$hops" > "$PD/hops"
+	( hop_loop "$rip" ) >/dev/null 2>&1 &
+	echo $! > "$PD/hop.pid"
 	if [ "$near" != "-" ]; then echo "$near" > "$PD/near.ip"; start_ping near "$near"; fi
 	# server ignores ping? probe it by UDP if traceroute reached it, else use the last hop that answers
 	if ! grep -q '^[0-9]' "$PD/far.ping" 2>/dev/null; then
@@ -330,7 +377,9 @@ cmd_probe_stop() {
 	touch "$PD/stop"
 	for f in "$PD"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
 	qm_sum 2>/dev/null
+	hop_sum 2>/dev/null
 	{
+		[ -s "$PD/hop.note" ] && echo "hop_note=$(head -n 1 "$PD/hop.note")"
 		pstats "$PD/far.ping" far; pstats "$PD/near.ping" near; pstats "$PD/lan.ping" lan
 		echo "far_kind=$(cat "$PD/far.kind" 2>/dev/null)"
 		echo "far_ip=$(cat "$PD/far.ip" 2>/dev/null)"
@@ -2850,11 +2899,14 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		sumfile = RUN "/probe." F_sid[f] "/sum"
 		load_sum(sumfile)
 		QM = ""; if ((getline QM < (RUN "/probe." F_sid[f] "/qm.json")) <= 0) QM = ""
+		HOPJ = ""; if ((getline HOPJ < (RUN "/probe." F_sid[f] "/hops.json")) <= 0) HOPJ = ""
+		close(RUN "/probe." F_sid[f] "/hops.json")
+		if (HOPJ !~ /^\[.*\]$/) HOPJ = ""
 		close(RUN "/probe." F_sid[f] "/qm.json")
 		TRN = 0
 		while ((getline trl < (RUN "/probe." F_sid[f] "/trace")) > 0) if (trl ~ /^ *[0-9]+ /) TR[++TRN] = clean(trl)
 		close(RUN "/probe." F_sid[f] "/trace")
-	} else { TRN = 0; QM = ""; if (PROBESUM != "") load_sum(PROBESUM) }
+	} else { TRN = 0; QM = ""; HOPJ = ""; if (PROBESUM != "") load_sum(PROBESUM) }
 
 	if (dsec < 20 || S_ticks[kd] + 0 == 0) {
 		print "END " F_sid[f] " " ip " too short to judge (" int(dur) "s)"
@@ -3073,6 +3125,8 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
 		if (QM != "") dj = dj ",\"qm\":" QM
+		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
+		if (PS["hop_note"] != "") dj = dj ",\"hopnote\":" js(PS["hop_note"])
 		dj = dj ",\"marks\":["
 		for (i = 1; i <= M_n[f] + 0; i++) dj = dj (i > 1 ? "," : "") "{\"t\":" M_t[f, i] ",\"k\":" js(M_kind[f, i]) ",\"x\":" js(M_txt[f, i]) "}"
 		dj = dj "],\"trace\":["
@@ -4027,7 +4081,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.26.0", reloading = false;
+var BUILT = "0.27.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4693,7 +4747,19 @@ function pageMatch(id) {
 		else b.appendChild(kv([["Probed", m.farkind === "server" ? "The server itself" : m.farkind === "serverudp" ? "The server itself" : "Last hop that answers", m.farkind === "serverudp" ? "By traceroute-style probe: it ignores ping" : null],
 			["Ping", fmt(m.ping, 1) + " ms", full && m.pingp95 != null ? "Worst 5%: " + fmt(m.pingp95, 1) + " ms" : null], ["Ping jitter", fmt(m.pingjit != null ? m.pingjit : null, 2) + " ms"],
 			m.farkind === "serverudp" ? ["Probes answered", fmt(100 - (m.pingloss || 0), 0) + "%", "Servers ration these replies. Not packet loss in your game"] : ["Probe loss", fmt(m.pingloss, 1) + "%"], ["Hops", String(m.hops || "n/a")]]));
-		if (full && m.trace && m.trace.length) { var ol = h("ol", { cls: "hops" }); m.trace.forEach(function (t) { ol.appendChild(h("li", t.trim().replace(/\s+/g, "  "))); }); b.appendChild(ol); }
+		if (full && m.hopstats && m.hopstats.length) {
+			// each stop on the way, pinged all through the match
+			var worst = /starts at stop (\d+)/.exec(m.hopnote || ""), from = worst ? +worst[1] : 0;
+			var ht = table([["Stop", "num"], ["Address"], ["Ping ms", "num"], ["Jitter ms", "num"], ["Lost %", "num"]]);
+			m.hopstats.forEach(function (x) {
+				var r = row([[String(x.n), "num"], [x.ip], [x.ping == null ? "No reply" : fmt(x.ping, 1), "num"], [x.jit == null ? "" : fmt(x.jit, 1), "num" + (from && x.n >= from && x.jit >= 4 ? " s low" : "")], [x.ping == null ? "" : String(x.loss), "num" + (from && x.n >= from && x.loss >= 5 ? " s low" : "")]]);
+				if (from && x.n === from) r.className = "hopfrom";
+				ht.lastChild.appendChild(r);
+			});
+			b.appendChild(h("p", { cls: "note" + (m.hopnote ? " low" : ""), text: m.hopnote || "Every stop on the way that answers was pinged through the match. Nothing on the way stood out: no stop was rough with every stop after it rough too." }));
+			b.appendChild(h("div", { cls: "tablewrap" }, ht));
+			b.appendChild(h("p", { cls: "note", text: "Routers answer pings when they have a moment, so one rough stop with steady stops after it means nothing. Trouble is only named when it starts at a stop and carries on to the end." }));
+		} else if (full && m.trace && m.trace.length) { var ol = h("ol", { cls: "hops" }); m.trace.forEach(function (t) { ol.appendChild(h("li", t.trim().replace(/\s+/g, "  "))); }); b.appendChild(ol); }
 		cols.appendChild(b);
 		b = h("div", null, h("h2", "Your line"));
 		if (m.nearping == null) b.appendChild(h("p", { cls: "note", text: "The first hop inside your ISP does not answer ping, so your line could not be measured separately." }));
@@ -5632,6 +5698,8 @@ h2 + .kv { max-width: 640px; }
 .spotrow .actions { margin: 0; flex: none; }
 /* a newer version is out */
 #upd { color: var(--star); border: 1px solid var(--star); border-radius: 999px; padding: 5px 13px; font-size: 0.9rem; font-weight: 700; text-decoration: none; white-space: nowrap; margin-right: -14px; }
+/* the stop where trouble on the way starts */
+tr.hopfrom td { border-top: 2px solid var(--bad); }
 MW_FILE_END_15
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css.new"
 mv -f "$R/www/luci-static/resources/matchwatch/dashboard.css.new" "$R/www/luci-static/resources/matchwatch/dashboard.css"
