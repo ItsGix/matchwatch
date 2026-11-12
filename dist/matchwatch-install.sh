@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.21.0"
+VERSION="0.21.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -3617,7 +3617,7 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [] };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 
 // ---------- small helpers
@@ -4166,8 +4166,8 @@ function pageServers() {
 		view.appendChild(bn);
 		// which hosts the up-front refusal covers, and whether the places in the pool have any servers at all
 		var cov = h("div"); view.appendChild(cov);
-		get("coverage.json", function (c) {
-			if (page !== "servers" || !c || !c.known) return;
+		(function (c) {
+			if (!c || !c.known) return;
 			var none = (c.places || []).filter(function (p) { return !p.ranges; }), all = none.length === (c.places || []).length;
 			if (none.length) {
 				var names = none.map(function (p) { return p.name; }).join(", ");
@@ -4178,7 +4178,7 @@ function pageServers() {
 			}
 			gameCoverNotes().forEach(function (s) { cov.appendChild(h("p", { cls: "note low", text: s })); });
 			cov.appendChild(h("p", { cls: "note", text: (c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places." }));
-		});
+		})(D.cov);
 		if (stays.length > 1) {
 			var rm = h("div", { cls: "actions" });
 			stays.forEach(function (nm, i) { rm.appendChild(act("Remove " + nm, "stayrm", i + 1, {})); });
@@ -4702,24 +4702,35 @@ function setState() {
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
 // half-typed text in a box would be wiped by a redraw
 function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#place, input.keep, textarea.keep"), function (i) { return !!i.value; }); }
-function refresh(force) {
-	get("regions.json", function (x) { D.regions = x || []; });
-	get("gameplaces.json", function (x) { D.gp = x || []; });
-	var left = 6, done = function () { if (--left === 0 && (force || (!armed && !typing())) && page !== "live" && page !== "match" && page !== "tools") route(true); else if (left === 0 && page === "live") { L.ip = null; updateLive(); } };
+// Fresh data every fifteen seconds. The page is only drawn again when something in it has changed:
+// rebuilding it each time made it flicker, and anything filled in a moment later pushed the rest down.
+var lastSig = "";
+function loadAll(then) {
+	var left = 9, done = function () { if (--left === 0) then(); };
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
 	get("datacentres.json", function (x) { D.dcs = x || []; done(); });
 	get("blocklist.json", function (x) { D.blocks = x || []; done(); });
 	get("info.json", function (x) { D.info = x || {}; done(); });
 	get("favourites.json", function (x) { setFavs(x); done(); });
+	get("regions.json", function (x) { D.regions = x || []; done(); });
+	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
+	get("coverage.json", function (x) { D.cov = x || null; done(); });
+}
+function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov]); } catch (e) { return String(Date.now()); } }
+function refresh(force) {
+	loadAll(function () {
+		var sig = sigNow(), changed = sig !== lastSig;
+		lastSig = sig;
+		if (page === "live") { if (changed || force) { L.ip = null; updateLive(); } return; }
+		if (page === "match" || page === "tools") return;
+		if (force || (changed && !armed && !typing())) route(true);
+		else if (changed) lastSig = "";          // could not redraw just now (a button is armed, or a box has text in it): try again next time
+	});
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", function () { updateLive(); if (page === "match" && pageMatch.repaint) pageMatch.repaint(); });
-get("gameplaces.json", function (x) { D.gp = x || []; });
-var first = 6, boot = function () { if (--first === 0) route(); };
-get("history.json", function (x) { D.hist = x || []; boot(); }); get("servers.json", function (x) { D.servers = x || []; boot(); }); get("datacentres.json", function (x) { D.dcs = x || []; boot(); });
-get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.json", function (x) { D.info = x || {}; boot(); }); get("favourites.json", function (x) { setFavs(x); boot(); });
-get("regions.json", function (x) { D.regions = x || []; });
+loadAll(function () { lastSig = sigNow(); route(); });
 tick(); setInterval(tick, 1000); setInterval(function () { setDark(); refresh(false); }, 15000);
 };
 MW_FILE_END_14

@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.21.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.21.1.
 
 ## Layout
 
@@ -43,6 +43,7 @@ Where each game plays (0.21.0): `report.awk` MODE `gameplaces` groups game and /
 
 ## Rules that have bitten already
 
+- The dashboard fetches everything every fifteen seconds but redraws a page only when the data has changed (`sigNow`). Redrawing regardless made the Servers page flicker, and a block filled in by a later fetch shifted everything under it. Anything a page shows must be loaded in `loadAll`, not fetched inside the page function.
 - The `blocked` set applies to every device, which is fine for single servers. Whole ranges from a hosting company must never go in it: they hold ordinary web sites. They go in `away`, which only refuses the gaming device's UDP, and nothing wider than a /12 or in private space is taken from a list.
 - A range whose city cannot be placed is left alone when the pool has a city in it. Guessing would block the wrong region.
 
