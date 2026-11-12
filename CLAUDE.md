@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.19.1.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.20.1.
 
 ## Layout
 
@@ -9,6 +9,7 @@ matchwatch runs on an OpenWrt router and judges each online match: the game serv
 - `files/report.awk`: every report and JSON export built from `sessions.tsv` (history, servers, datacentres, regions, stay lookups, hours, recap, games).
 - `files/matchwatch.config`: default settings, installed as `/etc/config/matchwatch`. The script's own defaults cover anything missing.
 - `files/public.html`: shell page for the optional dashboard without login.
+- `files/geofeeds.list`: hosting companies' published address-range lists (RFC 8805 geofeeds), used by stay mode.
 - `files/*.list`: Vultr region ping hosts, countries and areas for stay mode, game labels by port.
 - `luci-app-matchwatch/htdocs/luci-static/resources/matchwatch/dashboard.js` and `.css`: the dashboard, vanilla JS, hash routes (Live, Last match, Matches, Servers, Tools). One copy, two homes. Whoever hosts it passes in how to talk to the router (`T.get`, `T.act`), and it draws inside a shadow root so the LuCI theme and the dashboard cannot disturb each other's styling.
 - `luci-app-matchwatch/htdocs/luci-static/resources/view/matchwatch/`: the LuCI pages. `dashboard.js` hosts the dashboard, reading data with `file.read` and running buttons through rpcd. `settings.js` is a native form on `/etc/config/matchwatch`.
@@ -36,7 +37,12 @@ QoSmate match record (0.18.0): `qm_loop` (started by `_probe_start`) saves cake'
 
 Unnamed ports (0.18.0): a stream on a port with no label is kept only if at least 120 s were analysed and under 15% of updates were missing; otherwise it is dropped at `session_end`, logged, and listed in `skipped.json` with a reason. The 15% line comes from a single real example (a 42 s stream at 28%), so expect to tune it. No match-started alert is sent for an unnamed port.
 
+Whole ranges (0.20.0): with stay mode on, `stay_ranges` (always started in the background; the first run does about forty city lookups) downloads the lists in `geofeeds.list` and `geofeeds.local` into `ranges.cache`, places each city with Open-Meteo (`cities.cache`), and loads every range outside the pool into the nftables set `away`. Two rules refuse UDP between `device_ip` and that set; `nft_ready` rebuilds the table when the device changes. `cmd_lobby` returns early for a server already in `away`. Seen on the router: the Vultr list downloads, the city lookup takes a country code, and an interval set with `auto-merge` accepts overlapping ranges. `ranges_cover` writes `coverage.json`: how many known ranges each place in the pool holds, and for a place with none the three nearest cities that have servers (`coverage.sug`, added with the `staysuggest` action; country centres come from `countries.list`). The owner chose a country with no servers and had no way to know. Not yet seen: whether the game then finds a match faster.
+
 ## Rules that have bitten already
+
+- The `blocked` set applies to every device, which is fine for single servers. Whole ranges from a hosting company must never go in it: they hold ordinary web sites. They go in `away`, which only refuses the gaming device's UDP, and nothing wider than a /12 or in private space is taken from a list.
+- A range whose city cannot be placed is left alone when the pool has a city in it. Guessing would block the wrong region.
 
 - Phone alerts are one short line with no addresses or host names; the full sentence goes to the log and the dashboard. The owner found five long turn-away alerts in a minute too much: a stay-mode turn-away only reaches the phone on `lobby_alert` 2, and lobby alerts are limited to one a minute.
 - In `cmd_lobby` the stay decision comes before any ping or traceroute. Measuring first let the game join the server and then threw the player out.

@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.19.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.20.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -127,6 +127,7 @@ Everything is also available over SSH:
 | `matchwatch stay add <places>` / `stay remove <n>` | Change the pool |
 | `matchwatch hours` / `recap` / `games` | Ratings by hour, the latest session, games seen |
 | `matchwatch places` | The areas you can stay on |
+| `matchwatch ranges [refresh]` | The hosting companies' address lists used to turn whole regions away |
 | `matchwatch regions [measure]` | Ping every region, nearest first |
 | `matchwatch blocklist` | What is blocked and for how long |
 | `matchwatch fav` / `fav add <ip>` / `fav remove <ip>` | Your favourite servers |
@@ -338,6 +339,21 @@ From the command line: `matchwatch fav`, `matchwatch fav add <ip>`, `matchwatch 
 
 ## Staying in a pool of places
 
+### Whole regions, ahead of time
+
+Learning servers one at a time is slow: the game tries one, waits, gives up and tries the next, and a single city can have dozens of server ranges. So when you stay on places, MatchWatch also refuses every address range it knows to be outside them, before the game tries any.
+
+It knows from lists that hosting companies publish themselves, saying which of their address ranges is in which city. One is built in: Vultr, which hosts every Call of Duty server seen so far (about 490 ranges). The router downloads the list when you start staying and once a week after; nothing about you is sent. Each city in a list is looked up once to place it on the map.
+
+- **It tells you which games this covers.** The Servers page names the hosts and the games they are known to carry ("Vultr (Call of Duty)"). Any other game is still turned away one server at a time.
+- **It warns you when a place has no servers.** Choose Turkey, say, and the Servers page says no known server for those games is there, that you will not find a match with only that place in the pool, and offers the nearest places that do have servers, each with an Add button. For a game on a host MatchWatch has no list for, it cannot know this in advance.
+- **Only your gaming device's game traffic is refused** (UDP from the device you chose to watch). Web sites on the same hosting company, and every other device in the house, are untouched. With no device chosen, this part is skipped.
+- **A range whose city cannot be placed is left alone**, and so is any range holding a match in progress.
+- **Other games and hosts**: a game hosted elsewhere is still learned one server at a time. If its host publishes such a list, add it to `/etc/matchwatch/geofeeds.local` as `name|address` and run `matchwatch ranges refresh`. `matchwatch ranges` shows what is loaded. Many hosts, including the large clouds, do not publish one in this form.
+- **Stop staying** removes all of it. "Turn whole regions away ahead of time" under Settings, Staying and blocking, switches it off.
+
+The game still decides who to match you with. A pool far from home can mean a long queue even when no time is lost on refused servers.
+
 Two things to expect. A server outside your places is turned away the moment the game first reaches for it, before MatchWatch measures it, so you are refused in the lobby and not thrown out later. And if you start staying while a match is in progress on a server outside your places, that match is left alone; its server is turned away once the match has ended.
 
 `matchwatch stay <places>`, the box on the Servers page, or a "Stay here" button keeps you to servers in the places you choose, whoever hosts them. Give one place or several, separated by commas:
@@ -396,6 +412,7 @@ Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.
 - The dashboard and every button sit behind the LuCI login. Each action is checked against the logged-in account's permissions, with looking and changing granted separately.
 - The optional dashboard without login is view only and off by default.
 - Keep LuCI on a network you trust and never expose it through a public port forward.
+- With stay mode on, address lists are downloaded from the hosting companies in `geofeeds.list` (Vultr), and the city names in them are looked up at Open-Meteo. Nothing about you or your matches is sent.
 - Server locations come from ip-api.com; only the server's IP address is sent. Turn off "Look up where servers are" to stop this (staying on places and the lobby alert need it on).
 - Nothing else leaves your router unless you set up phone alerts.
 - Share files are only ever made when you ask, are shown to you in full, and hold nothing about your home. MatchWatch never uploads one.

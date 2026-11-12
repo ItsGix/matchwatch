@@ -1,0 +1,12 @@
+# Hosting companies that publish which of their address ranges is in which city (a geofeed, RFC 8805).
+# With stay mode on, MatchWatch uses these to turn away every range outside your places ahead of time,
+# for the gaming device's game traffic only.
+#
+#   name|address of the list|games it is known to host
+#
+# The list must be plain text with lines of: range,country code,region,city,postal code
+# Add your own in /etc/matchwatch/geofeeds.local, then run: matchwatch ranges refresh
+# Only add a company whose list you have opened and read. Do not add one from memory.
+
+# Hosts every Call of Duty server seen so far. Checked 12 November 2026: about 490 ranges.
+Vultr|https://geofeed.constant.com/?csv|Call of Duty

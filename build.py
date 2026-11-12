@@ -16,6 +16,8 @@ items = [
     (f"{CORE}/public.html", f"{LIB}/public.html", "644"),
     (f"{CORE}/matchwatch.config", f"{LIB}/config.uci", "644"),
     (f"{CORE}/regions.list", f"{LIB}/regions.list", "644"),
+    (f"{CORE}/geofeeds.list", f"{LIB}/geofeeds.list", "644"),
+    (f"{CORE}/countries.list", f"{LIB}/countries.list", "644"),
     (f"{CORE}/places.list", f"{LIB}/places.list", "644"),
     (f"{CORE}/games.list", f"{LIB}/games.list", "644"),
     (f"{CORE}/matchwatch.init", "/etc/init.d/matchwatch", "755"),
@@ -61,7 +63,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir @DIRS@ 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null

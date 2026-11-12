@@ -8,7 +8,7 @@
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget fav unfav forgetmatch forgetserver forgetdc"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget fav unfav forgetmatch forgetserver forgetdc"
 
 reply() { # ok(0|1) text
 	json_init

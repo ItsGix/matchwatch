@@ -128,6 +128,11 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
+		o = s.taboption('blocking', form.Flag, 'stay_ranges', _('Turn whole regions away ahead of time'),
+			_('When you are staying on places. Hosting companies publish which of their address ranges is in which city. MatchWatch downloads those lists and refuses every range outside your places before the game tries it, which makes finding a match much quicker. Only game traffic from the device you watch is refused; web sites and other devices are untouched. Needs a device to watch, on the General tab.'));
+		o.default = '1';
+		o.rmempty = false;
+
 		o = s.taboption('blocking', form.Value, 'stay_km', _('A city reaches this far'),
 			_('In kilometres. How far from a chosen city a server may be and still count as being there.'));
 		o.datatype = 'range(10,2000)';

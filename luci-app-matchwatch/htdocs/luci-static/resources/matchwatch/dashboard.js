@@ -523,8 +523,22 @@ function pageServers() {
 	var days = D.info.block_days || 14;
 	var stays = D.info.stays || [];
 	if (stays.length) {
-		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed. Servers anywhere else are turned away as the game tries them. A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
+		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed. Servers anywhere else are turned away as the game tries them. " + "A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
 		view.appendChild(bn);
+		// which hosts the up-front refusal covers, and whether the places in the pool have any servers at all
+		var cov = h("div"); view.appendChild(cov);
+		get("coverage.json", function (c) {
+			if (page !== "servers" || !c || !c.known) return;
+			var none = (c.places || []).filter(function (p) { return !p.ranges; }), all = none.length === (c.places || []).length;
+			if (none.length) {
+				var names = none.map(function (p) { return p.name; }).join(", ");
+				var w = h("div", { cls: "banner bad" }, h("p", null, h("b", all ? "You will not find a match like this. " : "No servers found in " + names + ". "),
+					(all ? "None of the places you are staying on has" : "That place has no") + " a server that MatchWatch knows of for " + c.hosts + "." + (all && c.refusing ? " Every region that does is being refused, so those games cannot connect." : "") + (c.suggest && c.suggest.length ? " The nearest places with servers:" : " Add a place that has servers, or stop staying.")));
+				(c.suggest || []).forEach(function (s) { w.appendChild(act("Add " + s.name + " (about " + s.km + " km)", "staysuggest", s.n, { solid: true })); });
+				cov.appendChild(w);
+			}
+			cov.appendChild(h("p", { cls: "note", text: (c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places." }));
+		});
 		if (stays.length > 1) {
 			var rm = h("div", { cls: "actions" });
 			stays.forEach(function (nm, i) { rm.appendChild(act("Remove " + nm, "stayrm", i + 1, {})); });

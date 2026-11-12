@@ -13,12 +13,12 @@ luci_refresh() {
 if [ "$1" = remove ] || [ "$1" = purge ]; then
 	[ -z "$R" ] && [ -x /etc/init.d/matchwatch ] && { /etc/init.d/matchwatch stop; /etc/init.d/matchwatch disable; }
 	[ -z "$R" ] && nft delete table inet matchwatch 2>/dev/null
-	rm -f "$R/usr/bin/matchwatch" "$R/usr/lib/matchwatch/analyze.awk" "$R/usr/lib/matchwatch/report.awk" "$R/usr/lib/matchwatch/public.html" "$R/usr/lib/matchwatch/config.uci" "$R/usr/lib/matchwatch/regions.list" "$R/usr/lib/matchwatch/places.list" "$R/usr/lib/matchwatch/games.list" "$R/etc/init.d/matchwatch" "$R/usr/libexec/rpcd/luci.matchwatch" "$R/usr/share/luci/menu.d/luci-app-matchwatch.json" "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json" "$R/www/luci-static/resources/matchwatch/dashboard.js" "$R/www/luci-static/resources/matchwatch/dashboard.css" "$R/www/luci-static/resources/view/matchwatch/dashboard.js" "$R/www/luci-static/resources/view/matchwatch/settings.js"
+	rm -f "$R/usr/bin/matchwatch" "$R/usr/lib/matchwatch/analyze.awk" "$R/usr/lib/matchwatch/report.awk" "$R/usr/lib/matchwatch/public.html" "$R/usr/lib/matchwatch/config.uci" "$R/usr/lib/matchwatch/regions.list" "$R/usr/lib/matchwatch/geofeeds.list" "$R/usr/lib/matchwatch/countries.list" "$R/usr/lib/matchwatch/places.list" "$R/usr/lib/matchwatch/games.list" "$R/etc/init.d/matchwatch" "$R/usr/libexec/rpcd/luci.matchwatch" "$R/usr/share/luci/menu.d/luci-app-matchwatch.json" "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json" "$R/www/luci-static/resources/matchwatch/dashboard.js" "$R/www/luci-static/resources/matchwatch/dashboard.css" "$R/www/luci-static/resources/view/matchwatch/dashboard.js" "$R/www/luci-static/resources/view/matchwatch/settings.js"
 	rm -f "$R/usr/lib/matchwatch/index.html" "$R/usr/lib/matchwatch/config.default" "$R/www/cgi-bin/matchwatch-api" "$R/www/matchwatch/index.html" "$R/www/matchwatch/data" "$R/www/cgi-bin/matchwatch-mark"
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.19.1"
+VERSION="0.20.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -82,6 +82,7 @@ LOBBY_ALERT=1
 LOBBY_MARGIN_MS=4
 STAY_STRICT=1
 STAY_KM=150
+STAY_RANGES=1
 DATA_DIR="/etc/matchwatch"
 WEB=0
 if [ -n "$CONF" ]; then
@@ -111,6 +112,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get LOBBY_MARGIN_MS main lobby_margin_ms "$LOBBY_MARGIN_MS"
 	config_get STAY_STRICT main stay_strict "$STAY_STRICT"
 	config_get STAY_KM main stay_km "$STAY_KM"
+	config_get STAY_RANGES main stay_ranges "$STAY_RANGES"
 	config_get DATA_DIR main data_dir "$DATA_DIR"
 	config_get WEB main web "$WEB"
 fi
@@ -353,7 +355,7 @@ export_json() {
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -391,27 +393,33 @@ cmd_after() { # note overall
 
 # ---- blocking (own nftables table; fw4 is left alone)
 nft_ready() {
+	local t ok=1
 	have nft || { echo "matchwatch: nft not found (blocking needs OpenWrt 22.03 or newer)" >&2; return 1; }
-	if nft list table inet matchwatch >/dev/null 2>&1; then
-		nft list set inet matchwatch blocked 2>/dev/null | grep -q interval && return 0
-		nft delete table inet matchwatch       # table from an older version: rebuild it
+	is_ipv4 "$DEVICE_IP" || DEVICE_IP=""
+	t="$(nft list table inet matchwatch 2>/dev/null)"
+	if [ -n "$t" ]; then
+		echo "$t" | grep -q 'flags interval,timeout\|flags interval, timeout' || ok=0
+		echo "$t" | grep -q 'set away' || ok=0
+		# the rules for whole ranges name the gaming device, so they are rebuilt when it changes
+		if [ -n "$DEVICE_IP" ]; then echo "$t" | grep -q "ip saddr $DEVICE_IP ip daddr @away" || ok=0
+		else echo "$t" | grep -q '@away' && ok=0; fi
+		[ "$ok" = 1 ] && return 0
+		nft delete table inet matchwatch       # table from an older version, or for another device: rebuild it
 	fi
-	nft -f - <<'EOF'
-table inet matchwatch {
-	set blocked {
-		type ipv4_addr
-		flags interval, timeout
-	}
-	chain forward {
-		type filter hook forward priority -5; policy accept;
-		ip daddr @blocked counter drop
-		ip saddr @blocked counter drop
-	}
-}
-EOF
+	# blocked: single servers and their address blocks, for every device, as before.
+	# away: whole ranges outside the places being stayed on. Only the gaming device's UDP is refused, so
+	# web sites and other devices that happen to use the same hosting company are untouched.
+	{
+		printf 'table inet matchwatch {\n\tset blocked {\n\t\ttype ipv4_addr\n\t\tflags interval, timeout\n\t}\n\tset away {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n'
+		printf '\tchain forward {\n\t\ttype filter hook forward priority -5; policy accept;\n\t\tip daddr @blocked counter drop\n\t\tip saddr @blocked counter drop\n'
+		[ -n "$DEVICE_IP" ] && printf '\t\tip saddr %s ip daddr @away meta l4proto udp counter drop\n\t\tip daddr %s ip saddr @away meta l4proto udp counter drop\n' "$DEVICE_IP" "$DEVICE_IP"
+		printf '\t}\n}\n'
+	} | nft -f - || return 1
 	[ "$NFT_FILLING" = 1 ] || { NFT_FILLING=1; fill_blocklist; NFT_FILLING=0; }
+	[ -s "$DATA/stay" ] && [ "$RANGES_RUNNING" != 1 ] && ( stay_ranges >/dev/null 2>&1 & )
 	return 0
 }
+in_away() { nft get element inet matchwatch away "{ $1 }" >/dev/null 2>&1; }
 nft_add() { # ip seconds(0 = permanent)
 	nft delete element inet matchwatch blocked "{ $1 }" 2>/dev/null
 	if [ "$2" -gt 0 ]; then nft add element inet matchwatch blocked "{ $1 timeout ${2}s }" 2>/dev/null
@@ -498,6 +506,10 @@ cmd_lobby() { # server-ip port device-ip
 	local where short want=0 now last
 	is_ipv4 "$ip" || return 1
 	mkdir -p "$RUN/www"
+	if [ -s "$DATA/stay" ] && in_away "$ip"; then
+		printf '{"ts":%s,"ip":"%s","port":%s,"loc":"","org":"","ping":null,"verdict":"good","blocked":true,"msg":"A server in a region outside the places you stay on. Its whole range is turned away, so the game should move on quickly."}\n' "$(date +%s)" "$ip" "${port:-0}" > "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
+		return 0
+	fi
 	g="$(geo_lookup "$ip")"
 	IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
 $g
@@ -607,6 +619,186 @@ regions_stale() { # true when there is no measurement, or it is over six hours o
 	[ $(( $(date +%s) - $(head -n 1 "$DATA/regions.tsv" | cut -f11) )) -gt 21600 ]
 }
 
+# ---- turn whole regions away ahead of time
+# Learning servers one at a time is slow: the game tries one, waits, gives up, tries the next. Hosting
+# companies publish which of their address ranges is in which city (a "geofeed", RFC 8805). With those
+# lists every range outside the pool can be refused before the game ever tries it.
+# Only the gaming device's UDP is refused, and a range whose place cannot be worked out is left alone.
+feed_list() { cat "$LIB/geofeeds.list" "$DATA/geofeeds.local" 2>/dev/null | awk -F'|' '!/^#/ && $2 ~ /^https?:\/\/[A-Za-z0-9.\/?=_&%-]+$/ { gsub(/[^A-Za-z0-9 .-]/, "", $1); gsub(/[^A-Za-z0-9 .,:-]/, "", $3); print $1 "|" $2 "|" $3 }'; }
+ranges_fetch() { # [force] : refresh the list of ranges when it is missing or over a week old. A failed download keeps the old one
+	local name url games tmp="$RUN/ranges.$$" age=999999999
+	[ -s "$DATA/ranges.cache" ] && age=$(( $(date +%s) - $(date -r "$DATA/ranges.cache" +%s 2>/dev/null || echo 0) ))
+	if [ "$age" -ge 604800 ] || [ "$1" = force ]; then
+		mkdir -p "$RUN"; : > "$tmp"
+		feed_list | while IFS="|" read -r name url games; do
+			fetch "$url" | awk -F',' -v h="$name" '
+				/^#/ { next }
+				$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ && $2 ~ /^[A-Z][A-Z]$/ {
+					split($1, a, "/"); split(a[1], o, ".")
+					if (a[2] + 0 < 12 || a[2] + 0 > 32) next          # nothing wider than a /12 is ever taken from a list
+					if (o[1] == 10 || o[1] == 127 || o[1] == 0 || o[1] >= 224 || (o[1] == 172 && o[2] >= 16 && o[2] <= 31) || (o[1] == 192 && o[2] == 168) || (o[1] == 169 && o[2] == 254) || (o[1] == 100 && o[2] >= 64 && o[2] <= 127)) next
+					c = $4; gsub(/[^A-Za-z .-]/, "", c)
+					printf "%s\t%s\t%s\t%s\n", $1, $2, c, h
+				}' >> "$tmp"
+		done
+		[ -s "$tmp" ] && head -n 20000 "$tmp" > "$DATA/ranges.cache.tmp" && mv -f "$DATA/ranges.cache.tmp" "$DATA/ranges.cache"
+		rm -f "$tmp"
+	fi
+	[ -s "$DATA/ranges.cache" ]
+}
+ranges_cities() { # put every city named in the lists on the map, once: "city|CC <tab> lat <tab> lon", or "-" when it cannot be found
+	local cc city q json lat lon got
+	touch "$DATA/cities.cache"
+	cut -f2,3 "$DATA/ranges.cache" | sort -u | while IFS="$TAB" read -r cc city; do
+		[ -n "$city" ] || continue
+		awk -F'\t' -v k="$city|$cc" '$1 == k { f = 1 } END { exit !f }' "$DATA/cities.cache" && continue
+		lat=""; lon=""; got=0
+		# the name as given, then without a suffix such as "-ku", then its first word
+		for q in "$city" "${city%%-*}" "${city%% *}"; do
+			json="$(fetch "https://geocoding-api.open-meteo.com/v1/search?name=$(printf '%s' "$q" | sed 's/ /%20/g')&count=1&language=en&format=json&countryCode=$cc")" || continue
+			got=1
+			lat="$(jnum "$json" latitude)"; lon="$(jnum "$json" longitude)"
+			[ -n "$lat" ] && [ -n "$lon" ] && break
+			lat=""; lon=""
+		done
+		[ "$got" = 1 ] && printf '%s|%s\t%s\t%s\n' "$city" "$cc" "${lat:--}" "${lon:--}" >> "$DATA/cities.cache"
+	done
+}
+ranges_outside() { # addresses of matches in progress -> the ranges that lie outside every place in the pool
+	awk -F'\t' -v LIVE="$1" '
+		function ipn(s,   a) { split(s, a, "."); return ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4] }
+		BEGIN { nl = split(LIVE, L, " ") }
+		FILENAME == ARGV[1] { if (NF >= 4) { n++; for (i = 1; i <= 5; i++) SP[n, i] = $i; if ($5 == "" || $5 == "-") hascity = 1 } next }
+		FILENAME == ARGV[2] { C[$1] = $2 "\t" $3; next }
+		{
+			cc = $2; ok = 0; lat = "-"; lon = "-"
+			if (($3 "|" cc) in C) { split(C[$3 "|" cc], q, "\t"); lat = q[1]; lon = q[2] }
+			for (i = 1; i <= n; i++) {
+				if (SP[i, 5] != "" && SP[i, 5] != "-") { if (index("," SP[i, 5] ",", "," cc ",") > 0) ok = 1; continue }
+				if (lat == "-") continue
+				x = (lat + SP[i, 2]) / 2 * 0.0174533; x2 = x * x; cs = 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720
+				dy = (lat - SP[i, 2]) * 111.2; dx = (lon - SP[i, 3]) * 111.2 * cs
+				if (dx * dx + dy * dy <= SP[i, 4] * SP[i, 4]) ok = 1
+			}
+			if (ok || n == 0) next
+			if (lat == "-" && hascity) next                    # could be inside a city in the pool: not known, so left alone
+			split($1, pr, "/"); base = ipn(pr[1]); size = 2 ^ (32 - pr[2])
+			for (i = 1; i <= nl; i++) { v = ipn(L[i]); if (v >= base && v < base + size) next }   # never cut off a match in progress
+			print $1
+		}' "$DATA/stay" "$DATA/cities.cache" "$DATA/ranges.cache"
+}
+stay_ranges() { # fill, or empty, the set of whole ranges. The first run looks cities up, so it is always started in the background
+	local live n=0 f="$RUN/away.$$"
+	RANGES_RUNNING=1
+	mkdir -p "$RUN"
+	# one at a time: two runs side by side would look the same cities up twice
+	if [ -f "$RUN/away.lock" ] && [ $(( $(date +%s) - $(cat "$RUN/away.lock") )) -lt 180 ]; then return 0; fi
+	date +%s > "$RUN/away.lock"
+	stay_ranges_run; n=$?
+	rm -f "$RUN/away.lock"
+	return $n
+}
+stay_ranges_run() {
+	local live n=0 f="$RUN/away.$$" refuse=1
+	nft_ready || return 1
+	if [ ! -s "$DATA/stay" ]; then
+		nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count" "$RUN/www/coverage.json" "$RUN/coverage.sug"; export_json; return 0
+	fi
+	[ "$STAY_RANGES" = 1 ] && [ -n "$DEVICE_IP" ] || refuse=0
+	if ! ranges_fetch; then nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count" "$RUN/www/coverage.json"; export_json; return 1; fi
+	ranges_cities
+	if [ "$refuse" = 1 ]; then
+		live="$(grep -o '"ip":"[0-9.]*"' "$RUN/www/status.json" 2>/dev/null | sed 's/"ip":"//; s/"//' | tr '\n' ' ')"
+		ranges_outside "$live" > "$f.list"
+		n="$(cnt "$f.list")"
+		{
+			echo "flush set inet matchwatch away"
+			if [ "$n" -gt 0 ]; then printf 'add element inet matchwatch away { '; tr '\n' ',' < "$f.list" | sed 's/,$//'; echo ' }'; fi
+		} > "$f"
+		nft -f "$f" 2>/dev/null || n=0
+		rm -f "$f" "$f.list"
+		echo "$n" > "$RUN/away.count"
+		logger -t matchwatch "Turning away $n whole address range(s) outside the places you stay on, for the gaming device's game traffic" 2>/dev/null
+	else
+		nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count"
+	fi
+	ranges_cover "$n" "$refuse"
+	export_json
+}
+# Which places in the pool have servers we know of? A place with none can never give a match from the
+# hosts on the list, and the player should be told, with the nearest places that do have servers.
+ranges_cover() { # ranges-refused refusing(1|0) -> coverage.json for the Servers page, and the suggestions the Add buttons use
+	local hosts
+	hosts="$(feed_list | awk -F'|' '{ printf "%s%s%s", (NR > 1 ? ", " : ""), $1, ($3 != "" ? " (" $3 ")" : "") }')"
+	mkdir -p "$RUN/www"; touch "$DATA/cities.cache" "$LIB/countries.list" 2>/dev/null
+	awk -F'\t' -v SUG="$RUN/coverage.sug" -v HOSTS="$hosts" -v REF="${1:-0}" -v ON="${2:-0}" '
+		function d2(la1, lo1, la2, lo2,   x, x2, cs, dy, dx) {
+			x = (la1 + la2) / 2 * 0.0174533; x2 = x * x; cs = 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720
+			dy = (la1 - la2) * 111.2; dx = (lo1 - lo2) * 111.2 * cs
+			return dx * dx + dy * dy
+		}
+		function root(x,   g, k) { if (x <= 0) return 0; g = x; for (k = 0; k < 40; k++) g = (g + x / g) / 2; return g }   # some awk builds have no sqrt
+		function q(s) { gsub(/["\\]/, " ", s); return "\"" s "\"" }
+		FILENAME == ARGV[1] { if (NF >= 4) { n++; for (i = 1; i <= 5; i++) SP[n, i] = $i } next }
+		FILENAME == ARGV[2] { if ($2 != "-") { CLA[$1] = $2; CLO[$1] = $3 } next }
+		FILENAME == ARGV[3] { if (split($0, c, "|") == 3 && $0 !~ /^#/) { KLA[c[1]] = c[2]; KLO[c[1]] = c[3] } next }
+		{
+			known++; cc = $2; key = $3 "|" cc
+			if (!(key in SEEN)) { SEEN[key] = 1; CITY[++nc] = key }
+			for (i = 1; i <= n; i++) {
+				if (SP[i, 5] != "" && SP[i, 5] != "-") { if (index("," SP[i, 5] ",", "," cc ",") > 0) { cnt[i]++; IN[key] = 1 } continue }
+				if ((key in CLA) && d2(CLA[key], CLO[key], SP[i, 2], SP[i, 3]) <= SP[i, 4] * SP[i, 4]) { cnt[i]++; IN[key] = 1 }
+			}
+		}
+		END {
+			printf "" > SUG
+			printf "{\"hosts\":%s,\"known\":%d,\"refusing\":%s,\"refused\":%d,\"places\":[", q(HOSTS), known, (ON == 1 ? "true" : "false"), REF
+			for (i = 1; i <= n; i++) printf "%s{\"name\":%s,\"ranges\":%d}", (i > 1 ? "," : ""), q(SP[i, 1]), cnt[i]
+			printf "],\"suggest\":["
+			for (i = 1; i <= n && known > 0; i++) {
+				if (cnt[i] > 0) continue
+				# where is this place? a city has its own spot; a country or area takes the middle of its countries
+				la = ""; lo = ""
+				if (SP[i, 5] == "" || SP[i, 5] == "-") { la = SP[i, 2]; lo = SP[i, 3] }
+				else { k = split(SP[i, 5], cs, ","); m = 0; sa = 0; so = 0; for (j = 1; j <= k; j++) if (cs[j] in KLA) { sa += KLA[cs[j]]; so += KLO[cs[j]]; m++ } if (m) { la = sa / m; lo = so / m } }
+				if (la == "") continue
+				for (pick = 1; pick <= 3; pick++) {
+					best = ""; bd = 0
+					for (j = 1; j <= nc; j++) {
+						key = CITY[j]; if ((key in IN) || (key in USED) || !(key in CLA)) continue
+						d = d2(la, lo, CLA[key], CLO[key]); if (best == "" || d < bd) { best = key; bd = d }
+					}
+					if (best == "") break
+					USED[best] = 1; ns++
+					split(best, b, "|"); nm = b[1] ", " b[2]
+					printf "%s\t%s\t%s\n", nm, CLA[best], CLO[best] >> SUG
+					printf "%s{\"n\":%d,\"name\":%s,\"km\":%d,\"near\":%s}", (ns > 1 ? "," : ""), ns, q(nm), int(root(bd) / 50 + 0.5) * 50, q(SP[i, 1])
+				}
+			}
+			print "]}"
+		}' "$DATA/stay" "$DATA/cities.cache" "$LIB/countries.list" "$DATA/ranges.cache" > "$RUN/www/coverage.json.tmp" && mv -f "$RUN/www/coverage.json.tmp" "$RUN/www/coverage.json"
+}
+cmd_stay_suggest() { # n : add one of the suggested places with servers to the pool
+	local line
+	case "$1" in ""|*[!0-9]*) die "choose one of the suggested places" ;; esac
+	line="$(sed -n "${1}p" "$RUN/coverage.sug" 2>/dev/null)"
+	[ -n "$line" ] || die "that suggestion is no longer on offer. Reload the page."
+	touch "$DATA/stay" "$DATA/sessions.tsv" "$DATA/blocklist"
+	awk -F'\t' -v p="$(echo "$line" | cut -f1)" '$1 == p { f = 1 } END { exit !f }' "$DATA/stay" || printf '%s\t%s\t-\n' "$line" "${STAY_KM:-150}" >> "$DATA/stay"
+	stay_report "$(stay_apply)"
+}
+cmd_ranges() { # (nothing) = what is known | refresh
+	touch "$DATA/ranges.cache"
+	if [ "$1" = refresh ]; then ranges_fetch force || die "the lists could not be downloaded"; [ -s "$DATA/stay" ] && stay_ranges; fi
+	if [ "$1" = list ]; then [ -s "$DATA/stay" ] || die "stay mode is off, so nothing is turned away"; touch "$DATA/cities.cache"; ranges_outside ""; return 0; fi
+	echo "Lists of address ranges by city, from hosting companies:"
+	feed_list | awk -F'|' '{ printf "  %s%s  %s\n", $1, ($3 != "" ? " (" $3 ")" : ""), $2 }'
+	echo "Ranges known: $(cnt "$DATA/ranges.cache")$(awk -F'\t' '{ c[$4]++ } END { for (h in c) printf "  (%s: %d)", h, c[h] }' "$DATA/ranges.cache")"
+	echo "Turned away now for the gaming device: $(cat "$RUN/away.count" 2>/dev/null || echo 0)"
+	[ -n "$DEVICE_IP" ] || echo "No device is chosen to watch, so whole ranges are not turned away. Choose one in Settings."
+	echo "Add a list of your own in $DATA/geofeeds.local, one per line: name|address of the list. Then: matchwatch ranges refresh"
+}
+
 # ---- stay on one datacentre
 stay_off() {
 	local ip
@@ -614,6 +806,7 @@ stay_off() {
 	awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist" | while read -r ip; do nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null; done
 	awk -F'\t' '$4 != "stay"' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
 	rm -f "$DATA/stay"
+	nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count" "$RUN/www/coverage.json" "$RUN/coverage.sug"
 	export_json
 }
 stay_vars() { # awk variable naming the file of places being kept to (nothing when stay mode is off)
@@ -694,6 +887,7 @@ stay_apply() { # make the blocks match the pool. Prints how many address blocks 
 		grep -q "^$p$TAB" "$DATA/blocklist" && continue
 		MW_QUIET=1 cmd_block "$p" 0 stay; n=$((n + 1))
 	done
+	( stay_ranges >/dev/null 2>&1 & )
 	export_json
 	echo "$n"
 }
@@ -701,6 +895,9 @@ stay_report() {
 	echo "Staying on: $(stay_names)"
 	[ -f "$RUN/stay.spared" ] && echo "The match you are in now is on a server outside these places. It is left alone until the match ends."
 	echo "Any server in any of these places is allowed, whoever hosts it. $1 address block(s) elsewhere are turned away now; others are turned away as the game tries them."
+	if [ "$STAY_RANGES" != 1 ]; then :
+	elif [ -z "$DEVICE_IP" ]; then echo "Whole regions cannot be turned away ahead of time until you choose a device to watch, in Settings."
+	else echo "Whole regions outside these places are also being turned away ahead of time for your gaming device. This covers games hosted by: $(feed_list | awk -F'|' '{ printf "%s%s%s", (NR > 1 ? ", " : ""), $1, ($3 != "" ? " (" $3 ")" : "") }'). Other games are turned away one server at a time. The Servers page will say within a minute whether your places have servers at all."; fi
 	echo "The game still decides which of them to offer you. A place is dropped from the pool if its last three matches average under $WARN_SCORE."
 }
 cmd_stay() { # <places> | add <places> | remove <n> | off | (nothing = status)
@@ -1266,6 +1463,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		stayoff) cmd_stay off ;;
 		stayadd) cmd_stay add "$region" ;;
 		stayrm) cmd_stay remove "$arg" ;;
+		staysuggest) cmd_stay_suggest "$arg" ;;
 		qos) cmd_qos ;;
 		qosfix) cmd_qos_fix ;;
 		qosunfix) cmd_qos_unfix ;;
@@ -1315,7 +1513,7 @@ cmd_migrate() {
 		put warn_score "$WARN_SCORE"; put pc_score "$PC_SCORE"
 		put autoblock "$AUTOBLOCK"; put autoblock_score "$AUTOBLOCK_SCORE"; put autoblock_matches "$AUTOBLOCK_MATCHES"
 		put block_days "$BLOCK_DAYS"; put lobby_alert "$LOBBY_ALERT"; put lobby_margin_ms "$LOBBY_MARGIN_MS"
-		put stay_strict "$STAY_STRICT"; put stay_km "$STAY_KM"; put data_dir "$DATA_DIR"; put web "$WEB"
+		put stay_strict "$STAY_STRICT"; put stay_km "$STAY_KM"; put stay_ranges "$STAY_RANGES"; put data_dir "$DATA_DIR"; put web "$WEB"
 		uci commit matchwatch
 	) || return 1
 	mv -f "$old" "$old.imported"
@@ -1599,6 +1797,7 @@ cmd_run() {
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	find_ifaces; build_filter
 	apply_blocklist
+	[ -s "$DATA/stay" ] && ( sleep 3; stay_ranges >/dev/null 2>&1 ) &
 	web_setup; export_json
 	echo '{"ts":0,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
 	echo "Starting up..." > "$RUN/status.txt"
@@ -1673,6 +1872,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch stay <places>     keep to a pool of places, separated by commas: cities (milan),
                                countries (france, germany, spain), areas (see 'matchwatch places')
   matchwatch stay add <places> | remove <n> | off     change or end the pool
+  matchwatch ranges [refresh]  the hosting companies' address lists used to turn whole regions away
   matchwatch hours             how your matches rate at each hour of the day
   matchwatch recap             summary of your latest session
   matchwatch games             games seen; 'matchwatch game name <port or lo-hi> <name>' adds or names one,
@@ -1724,6 +1924,7 @@ case "$1" in
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
 	fav) cmd_fav "$2" "$3" ;;
+	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
 	forget) cmd_forget "$2" "$3" ;;
@@ -2947,7 +3148,83 @@ syd-au|Sydney|AU|Oceania|-33.87|151.21|syd-au-ping.vultr.com
 mel-au|Melbourne|AU|Oceania|-37.81|144.96|mel-au-ping.vultr.com
 MW_FILE_END_5
 chmod 644 "$R/usr/lib/matchwatch/regions.list"
-cat > "$R/usr/lib/matchwatch/places.list" <<'MW_FILE_END_6'
+cat > "$R/usr/lib/matchwatch/geofeeds.list" <<'MW_FILE_END_6'
+# Hosting companies that publish which of their address ranges is in which city (a geofeed, RFC 8805).
+# With stay mode on, MatchWatch uses these to turn away every range outside your places ahead of time,
+# for the gaming device's game traffic only.
+#
+#   name|address of the list|games it is known to host
+#
+# The list must be plain text with lines of: range,country code,region,city,postal code
+# Add your own in /etc/matchwatch/geofeeds.local, then run: matchwatch ranges refresh
+# Only add a company whose list you have opened and read. Do not add one from memory.
+
+# Hosts every Call of Duty server seen so far. Checked 12 November 2026: about 490 ranges.
+Vultr|https://geofeed.constant.com/?csv|Call of Duty
+MW_FILE_END_6
+chmod 644 "$R/usr/lib/matchwatch/geofeeds.list"
+cat > "$R/usr/lib/matchwatch/countries.list" <<'MW_FILE_END_7'
+# Rough centre of each country that can be stayed on: country code|latitude|longitude
+# Only used to suggest the nearest places with servers when a country in the pool has none.
+# Approximate on purpose: nothing is blocked or allowed from these figures.
+GB|54.0|-2.5
+IE|53.2|-8.0
+FR|46.6|2.4
+BE|50.6|4.6
+NL|52.2|5.3
+LU|49.8|6.1
+DE|51.1|10.4
+CH|46.8|8.2
+AT|47.6|14.1
+ES|40.2|-3.6
+PT|39.6|-8.0
+IT|42.8|12.6
+GR|39.0|22.0
+SE|62.0|15.0
+NO|62.0|10.0
+DK|56.0|10.0
+FI|64.0|26.0
+IS|65.0|-18.5
+PL|52.1|19.4
+CZ|49.8|15.5
+HU|47.2|19.4
+RO|45.9|25.0
+BG|42.7|25.5
+HR|45.1|15.5
+RS|44.0|20.9
+UA|49.0|31.4
+TR|39.0|35.2
+RU|55.8|37.6
+US|39.8|-98.6
+CA|50.0|-97.0
+MX|23.6|-102.5
+BR|-10.8|-52.9
+AR|-34.6|-64.0
+CL|-33.5|-70.7
+CO|4.6|-74.1
+PE|-9.2|-75.0
+AE|24.3|54.3
+SA|24.0|45.0
+BH|26.0|50.6
+QA|25.3|51.2
+IL|31.5|34.9
+ZA|-29.0|24.7
+EG|27.0|30.0
+IN|21.0|78.0
+JP|36.2|138.3
+KR|36.5|127.9
+SG|1.35|103.8
+HK|22.3|114.2
+TW|23.7|121.0
+TH|15.0|101.0
+MY|4.0|102.0
+ID|-2.5|118.0
+PH|12.9|121.8
+AU|-25.3|133.8
+NZ|-41.5|173.0
+MW_FILE_END_7
+chmod 644 "$R/usr/lib/matchwatch/countries.list"
+cat > "$R/usr/lib/matchwatch/places.list" <<'MW_FILE_END_8'
 # Wider places to stay on, by country code. kind|code|name|country codes (comma separated)
 # kind "area" = a named group of countries; kind "country" = one country.
 area|uk-ireland|UK and Ireland|GB,IE
@@ -3018,9 +3295,9 @@ country|id|Indonesia|ID
 country|ph|Philippines|PH
 country|au|Australia|AU
 country|nz|New Zealand|NZ
-MW_FILE_END_6
+MW_FILE_END_8
 chmod 644 "$R/usr/lib/matchwatch/places.list"
-cat > "$R/usr/lib/matchwatch/games.list" <<'MW_FILE_END_7'
+cat > "$R/usr/lib/matchwatch/games.list" <<'MW_FILE_END_9'
 # Labels for game servers and voice chat:   name|ports|kind|hosts
 #
 #   ports  the SERVER's UDP port: single ports or ranges, separated by commas
@@ -3088,9 +3365,9 @@ Call of Duty|30000-45000
 
 # ---- everything else on high ports is taken to be voice chat (Discord uses 50000-65535)
 Discord voice|50000-65535|voice
-MW_FILE_END_7
+MW_FILE_END_9
 chmod 644 "$R/usr/lib/matchwatch/games.list"
-cat > "$R/etc/init.d/matchwatch" <<'MW_FILE_END_8'
+cat > "$R/etc/init.d/matchwatch" <<'MW_FILE_END_10'
 #!/bin/sh /etc/rc.common
 # matchwatch service
 
@@ -3117,9 +3394,9 @@ reload_service() {
 	stop
 	start
 }
-MW_FILE_END_8
+MW_FILE_END_10
 chmod 755 "$R/etc/init.d/matchwatch"
-cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_9'
+cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_11'
 #!/bin/sh
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
@@ -3130,7 +3407,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch" <<'MW_FILE_END_9'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget fav unfav forgetmatch forgetserver forgetdc"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget fav unfav forgetmatch forgetserver forgetdc"
 
 reply() { # ok(0|1) text
 	json_init
@@ -3170,9 +3447,9 @@ case "$1" in
 		fi
 		;;
 esac
-MW_FILE_END_9
+MW_FILE_END_11
 chmod 755 "$R/usr/libexec/rpcd/luci.matchwatch"
-cat > "$R/usr/share/luci/menu.d/luci-app-matchwatch.json" <<'MW_FILE_END_10'
+cat > "$R/usr/share/luci/menu.d/luci-app-matchwatch.json" <<'MW_FILE_END_12'
 {
 	"admin/services/matchwatch": {
 		"title": "MatchWatch",
@@ -3201,9 +3478,9 @@ cat > "$R/usr/share/luci/menu.d/luci-app-matchwatch.json" <<'MW_FILE_END_10'
 		}
 	}
 }
-MW_FILE_END_10
+MW_FILE_END_12
 chmod 644 "$R/usr/share/luci/menu.d/luci-app-matchwatch.json"
-cat > "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json" <<'MW_FILE_END_11'
+cat > "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json" <<'MW_FILE_END_13'
 {
 	"luci-app-matchwatch": {
 		"description": "Grant access to MatchWatch",
@@ -3227,9 +3504,9 @@ cat > "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json" <<'MW_FILE_END_11'
 		}
 	}
 }
-MW_FILE_END_11
+MW_FILE_END_13
 chmod 644 "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json"
-cat > "$R/www/luci-static/resources/matchwatch/dashboard.js" <<'MW_FILE_END_12'
+cat > "$R/www/luci-static/resources/matchwatch/dashboard.js" <<'MW_FILE_END_14'
 // matchwatch dashboard. One copy serves two homes: the LuCI page (Services > MatchWatch)
 // and the optional page that needs no login. Each home supplies T, how to talk to the router:
 //   T.css       address of dashboard.css
@@ -3755,8 +4032,22 @@ function pageServers() {
 	var days = D.info.block_days || 14;
 	var stays = D.info.stays || [];
 	if (stays.length) {
-		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed. Servers anywhere else are turned away as the game tries them. A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
+		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed. Servers anywhere else are turned away as the game tries them. " + "A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
 		view.appendChild(bn);
+		// which hosts the up-front refusal covers, and whether the places in the pool have any servers at all
+		var cov = h("div"); view.appendChild(cov);
+		get("coverage.json", function (c) {
+			if (page !== "servers" || !c || !c.known) return;
+			var none = (c.places || []).filter(function (p) { return !p.ranges; }), all = none.length === (c.places || []).length;
+			if (none.length) {
+				var names = none.map(function (p) { return p.name; }).join(", ");
+				var w = h("div", { cls: "banner bad" }, h("p", null, h("b", all ? "You will not find a match like this. " : "No servers found in " + names + ". "),
+					(all ? "None of the places you are staying on has" : "That place has no") + " a server that MatchWatch knows of for " + c.hosts + "." + (all && c.refusing ? " Every region that does is being refused, so those games cannot connect." : "") + (c.suggest && c.suggest.length ? " The nearest places with servers:" : " Add a place that has servers, or stop staying.")));
+				(c.suggest || []).forEach(function (s) { w.appendChild(act("Add " + s.name + " (about " + s.km + " km)", "staysuggest", s.n, { solid: true })); });
+				cov.appendChild(w);
+			}
+			cov.appendChild(h("p", { cls: "note", text: (c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places." }));
+		});
 		if (stays.length > 1) {
 			var rm = h("div", { cls: "actions" });
 			stays.forEach(function (nm, i) { rm.appendChild(act("Remove " + nm, "stayrm", i + 1, {})); });
@@ -4293,9 +4584,9 @@ get("blocklist.json", function (x) { D.blocks = x || []; boot(); }); get("info.j
 get("regions.json", function (x) { D.regions = x || []; });
 tick(); setInterval(tick, 1000); setInterval(function () { setDark(); refresh(false); }, 15000);
 };
-MW_FILE_END_12
+MW_FILE_END_14
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.js"
-cat > "$R/www/luci-static/resources/matchwatch/dashboard.css" <<'MW_FILE_END_13'
+cat > "$R/www/luci-static/resources/matchwatch/dashboard.css" <<'MW_FILE_END_15'
 :host { display: block; }
 /* Colours. --soft is the quiet fill for buttons and hovers; --grid is every hairline. The chart reads these too. */
 .mw {
@@ -4487,9 +4778,9 @@ summary.pickhead .pickcount { margin-left: 8px; }
 .filepick input { font: inherit; color: var(--ink); max-width: 100%; }
 
 h2 + .kv { max-width: 640px; }
-MW_FILE_END_13
+MW_FILE_END_15
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css"
-cat > "$R/www/luci-static/resources/view/matchwatch/dashboard.js" <<'MW_FILE_END_14'
+cat > "$R/www/luci-static/resources/view/matchwatch/dashboard.js" <<'MW_FILE_END_16'
 'use strict';
 'require view';
 'require rpc';
@@ -4567,9 +4858,9 @@ return view.extend({
 		return host;
 	}
 });
-MW_FILE_END_14
+MW_FILE_END_16
 chmod 644 "$R/www/luci-static/resources/view/matchwatch/dashboard.js"
-cat > "$R/www/luci-static/resources/view/matchwatch/settings.js" <<'MW_FILE_END_15'
+cat > "$R/www/luci-static/resources/view/matchwatch/settings.js" <<'MW_FILE_END_17'
 'use strict';
 'require view';
 'require form';
@@ -4700,6 +4991,11 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
+		o = s.taboption('blocking', form.Flag, 'stay_ranges', _('Turn whole regions away ahead of time'),
+			_('When you are staying on places. Hosting companies publish which of their address ranges is in which city. MatchWatch downloads those lists and refuses every range outside your places before the game tries it, which makes finding a match much quicker. Only game traffic from the device you watch is refused; web sites and other devices are untouched. Needs a device to watch, on the General tab.'));
+		o.default = '1';
+		o.rmempty = false;
+
 		o = s.taboption('blocking', form.Value, 'stay_km', _('A city reaches this far'),
 			_('In kilometres. How far from a chosen city a server may be and still count as being there.'));
 		o.datatype = 'range(10,2000)';
@@ -4741,7 +5037,7 @@ return view.extend({
 		return m.render();
 	}
 });
-MW_FILE_END_15
+MW_FILE_END_17
 chmod 644 "$R/www/luci-static/resources/view/matchwatch/settings.js"
 
 rm -f "$R/usr/lib/matchwatch/index.html" "$R/usr/lib/matchwatch/config.default" "$R/www/cgi-bin/matchwatch-api"
