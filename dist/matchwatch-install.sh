@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.28.0"
+VERSION="0.28.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1483,15 +1483,16 @@ cmd_allow() { # add <ip> | remove <ip> | (nothing = list)
 # drops the gaming device's UDP to a held port unless the server is in okay. The engine sees the device's
 # packets before that rule (it listens on the LAN side) and asks for a verdict with _hold.
 # Everything fails open: no stay pool, no device, a stopped service or a failed lookup all mean no holding.
-label_kind() { # server-port "isp org asn" -> game | voice | nothing. First matching label wins, as in the engine
+label_kind() { # server-port "isp org asn" [name] -> game | voice | nothing (or the label's name). First matching label wins, as in the engine
 	touch "$DATA/games.local" 2>/dev/null
-	awk -F'|' -v p="$1" -v info="$(echo "$2" | tr 'A-Z' 'a-z')" '
+	awk -F'|' -v p="$1" -v want="$3" -v info="$(echo "$2" | tr 'A-Z' 'a-z')" '
 		/^#/ || $0 == "" { next }
 		{ n = split($2, a, ","); hit = 0
 		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } if (p + 0 >= lo + 0 && p + 0 <= hi + 0) hit = 1 }
 		  if (!hit) next
 		  if ($4 != "") { m = 0; k = split(tolower($4), w, ","); for (i = 1; i <= k; i++) if (w[i] != "" && index(info, w[i]) > 0) m = 1; if (!m) next }
-		  print ($3 == "voice" ? "voice" : "game"); exit }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
+		  if (want == "name") { if ($3 != "voice") print $1 } else print ($3 == "voice" ? "voice" : "game")
+		  exit }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
 }
 hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports, the ports that would be held
 	touch "$DATA/games.local" "$DATA/hold" 2>/dev/null
@@ -1560,6 +1561,32 @@ EOF
 	fi
 	return 0
 }
+# A server on a port-only game's ports, where no match has been played yet, is not turned away: the port
+# alone does not prove it is that game. When it is outside the places being stayed on, say so on the Live
+# page, with the way to close the gap. Nothing is blocked here and the phone is not told.
+cmd_unseen() { # server-ip port
+	local ip="$1" port="$2" g cc country city lat lon isp org asn name
+	is_ipv4 "$ip" || return 1
+	[ -s "$DATA/stay" ] || return 0
+	is_allowed "$ip" && return 0
+	nft get element inet matchwatch blocked "{ $ip }" >/dev/null 2>&1 && return 0
+	g="$(geo_lookup "$ip")"
+	IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
+$g
+EOF
+	[ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && outside_stay "$lat" "$lon" "$cc" || return 0
+	name="$(label_kind "$port" "$isp $org $asn" name)"
+	[ -n "$name" ] || return 0
+	grep -qxF "$name" "$DATA/hold" 2>/dev/null && return 0
+	mkdir -p "$RUN/www"
+	printf '{"ts":%s,"ip":"%s","port":%s,"loc":"%s","org":"%s","ping":null,"verdict":"far","blocked":false,"strictname":"%s","msg":"%s"}\n' \
+		"$(date +%s)" "$ip" "${port:-0}" "$(jesc "${city:+$city, }$cc")" "$(jesc "$org")" "$(jesc "$name")" \
+		"$(jesc "This server is in ${city:+$city, }$cc, outside your places, and was let through. $name is known by its port alone, and you have not played a match on this port or address block yet, so MatchWatch cannot be sure it is the game. Make $name strict and servers like this are held and turned away before they connect.")" \
+		> "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
+	logger -t matchwatch "let through a server in ${city:+$city, }$cc, outside your places: $name is known by port alone and no match has been played there yet. Make it strict to hold such servers." 2>/dev/null
+	return 0
+}
+
 cmd_hold() { # on <game> | off <game> | (nothing = list)
 	local name="$2" row
 	mkdir -p "$DATA"; touch "$DATA/hold"
@@ -2337,6 +2364,7 @@ case "$1" in
 	allow) cmd_allow "$2" "$3" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
+	_unseen) cmd_unseen "$2" "$3" ;;
 	_updatetick) update_due && { update_note; export_json; } ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
@@ -2647,7 +2675,14 @@ function lobby_check(f,    ip) {
 	if (F_pk[f] < 400 && hostpending(F_rport[f], ip)) { hostinfo(ip); return }
 	F_lobby[f] = 1
 	if (!isgame(F_rport[f], ip)) return
-	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
+	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) {
+		# left alone, but the owner is told if it turns out to be outside the places they stay on
+		if (!((ip in LOB_t) && cursec - LOB_t[ip] < 120)) {
+			LOB_t[ip] = cursec
+			if (!REPLAY) system(SELF " _unseen " ip " " (F_rport[f] + 0) " >/dev/null 2>&1 &"); else print "UNSEEN " ip ":" F_rport[f]
+		}
+		return
+	}
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
 	print "LOBBY " ip ":" F_rport[f]
@@ -4101,7 +4136,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.28.0", reloading = false;
+var BUILT = "0.28.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4564,12 +4599,13 @@ function mapSync() {
 }
 // Strict, per game: hold every new server of a game until it has been placed. Offered for the games you have
 // played, and only where the game's ports are not shared with voice chat.
+var allGames = false;
 function strictSection() {
 	if (RO) return null;
-	var played = {}, rows = [];
+	var played = {}, rows = [], more = 0;
 	D.hist.forEach(function (m) { if (m.game) played[m.game] = 1; });
-	(D.hold || []).forEach(function (g) { if (g.on || played[g.name]) rows.push(g); });
-	if (!rows.length) return null;
+	(D.hold || []).forEach(function (g) { if (g.on || played[g.name] || allGames) rows.push(g); else more++; });
+	if (!rows.length && !more) return null;
 	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "How each game is filtered"));
 	box.appendChild(h("p", { cls: "note", text: "A game MatchWatch knows by its port and by who hosts it is filtered from the first server it tries. One it knows by port alone is only filtered on ports and address blocks where you have played a match, because other things use those ports too. Make a game strict and every new server on its ports is held for a moment and judged before it can connect, whichever kind it is. All of this applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
 	var t = table([["Game"], ["Server ports"], ["Servers outside your places"], ["", ""]]);
@@ -4580,7 +4616,14 @@ function strictSection() {
 		else td.appendChild(act("Make strict", "holdon", null, { extra: "&name=" + g.name }));
 		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], [g.on ? "Held, then turned away before they connect" : g.host ? "Turned away from the first one" : "Turned away once you have played a match there"], td]));
 	});
-	box.appendChild(h("div", { cls: "tablewrap" }, t));
+	if (rows.length) box.appendChild(h("div", { cls: "tablewrap" }, t));
+	// every other game MatchWatch recognises: worth a look before the first match of a new one
+	if (more || allGames) {
+		var tog = h("button", { type: "button", text: allGames ? "Show only games I have played" : "Show all " + (rows.length + more) + " games" });
+		tog.addEventListener("click", function () { var y = window.scrollY; allGames = !allGames; pageServers(); window.scrollTo(0, y); });
+		box.appendChild(h("div", { cls: "actions" }, tog));
+		if (!allGames) box.appendChild(h("p", { cls: "note", text: (rows.length ? "These are the games you have played. " : "") + "About to play something new? Show all games to see how it will be filtered, and make it strict before your first match if it is one that needs a match first." }));
+	}
 	return box;
 }
 function favSection() {
@@ -4639,6 +4682,7 @@ function updateLive() {
 	if (lb && now - lb.ts < 180 && (!s || (s.ip === lb.ip && s.age < 60))) {
 		var bn = h("div", { cls: "banner " + (lb.verdict === "good" ? "" : lb.verdict) }, h("p", null, h("b", lb.blocked ? "Turned away. " : "Connecting. "), lb.msg));
 		if (!lb.blocked && !isBlocked(lb.ip)) bn.appendChild(act("Block this server", "block", lb.ip, { danger: true, confirm: "Confirm: block it now" }));
+		if (lb.strictname && /^[A-Za-z0-9 .:-]{1,40}$/.test(lb.strictname) && (D.hold || []).some(function (g) { return g.name === lb.strictname && g.ok && !g.on; })) bn.appendChild(act("Make " + lb.strictname + " strict", "holdon", null, { solid: true, extra: "&name=" + lb.strictname }));
 		L.banner.appendChild(bn);
 	}
 	L.felt.disabled = !s;

@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.28.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.28.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -322,6 +322,8 @@ How soon staying on places acts on a game depends on how sure MatchWatch is that
 | Known by port alone (Fortnite, Apex Legends, Rocket League and most others) | Only on a port or address block where you have already played a match | Play one match, or make the game strict |
 | Any named game you made strict | Before it can connect, every time | Press Make strict |
 | Not named ("Game on port N") | Never | Name it first |
+
+The table on the Servers page lists the games you have played; **Show all games** lists every game MatchWatch recognises, so you can check a new one, and make it strict, before your first match. And when a server outside your places is let through because its game is known by port alone, the Live page says so, with a button to make that game strict.
 
 The middle row exists because other traffic uses the same ports. A port alone is not proof of a game, so MatchWatch waits for a match there before refusing anything, unless you tell it to be strict.
 

@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.28.0", reloading = false;
+var BUILT = "0.28.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -489,12 +489,13 @@ function mapSync() {
 }
 // Strict, per game: hold every new server of a game until it has been placed. Offered for the games you have
 // played, and only where the game's ports are not shared with voice chat.
+var allGames = false;
 function strictSection() {
 	if (RO) return null;
-	var played = {}, rows = [];
+	var played = {}, rows = [], more = 0;
 	D.hist.forEach(function (m) { if (m.game) played[m.game] = 1; });
-	(D.hold || []).forEach(function (g) { if (g.on || played[g.name]) rows.push(g); });
-	if (!rows.length) return null;
+	(D.hold || []).forEach(function (g) { if (g.on || played[g.name] || allGames) rows.push(g); else more++; });
+	if (!rows.length && !more) return null;
 	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "How each game is filtered"));
 	box.appendChild(h("p", { cls: "note", text: "A game MatchWatch knows by its port and by who hosts it is filtered from the first server it tries. One it knows by port alone is only filtered on ports and address blocks where you have played a match, because other things use those ports too. Make a game strict and every new server on its ports is held for a moment and judged before it can connect, whichever kind it is. All of this applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.") }));
 	var t = table([["Game"], ["Server ports"], ["Servers outside your places"], ["", ""]]);
@@ -505,7 +506,14 @@ function strictSection() {
 		else td.appendChild(act("Make strict", "holdon", null, { extra: "&name=" + g.name }));
 		t.lastChild.appendChild(row([[g.name], [g.ports.replace(/ /g, ", ")], [g.on ? "Held, then turned away before they connect" : g.host ? "Turned away from the first one" : "Turned away once you have played a match there"], td]));
 	});
-	box.appendChild(h("div", { cls: "tablewrap" }, t));
+	if (rows.length) box.appendChild(h("div", { cls: "tablewrap" }, t));
+	// every other game MatchWatch recognises: worth a look before the first match of a new one
+	if (more || allGames) {
+		var tog = h("button", { type: "button", text: allGames ? "Show only games I have played" : "Show all " + (rows.length + more) + " games" });
+		tog.addEventListener("click", function () { var y = window.scrollY; allGames = !allGames; pageServers(); window.scrollTo(0, y); });
+		box.appendChild(h("div", { cls: "actions" }, tog));
+		if (!allGames) box.appendChild(h("p", { cls: "note", text: (rows.length ? "These are the games you have played. " : "") + "About to play something new? Show all games to see how it will be filtered, and make it strict before your first match if it is one that needs a match first." }));
+	}
 	return box;
 }
 function favSection() {
@@ -564,6 +572,7 @@ function updateLive() {
 	if (lb && now - lb.ts < 180 && (!s || (s.ip === lb.ip && s.age < 60))) {
 		var bn = h("div", { cls: "banner " + (lb.verdict === "good" ? "" : lb.verdict) }, h("p", null, h("b", lb.blocked ? "Turned away. " : "Connecting. "), lb.msg));
 		if (!lb.blocked && !isBlocked(lb.ip)) bn.appendChild(act("Block this server", "block", lb.ip, { danger: true, confirm: "Confirm: block it now" }));
+		if (lb.strictname && /^[A-Za-z0-9 .:-]{1,40}$/.test(lb.strictname) && (D.hold || []).some(function (g) { return g.name === lb.strictname && g.ok && !g.on; })) bn.appendChild(act("Make " + lb.strictname + " strict", "holdon", null, { solid: true, extra: "&name=" + lb.strictname }));
 		L.banner.appendChild(bn);
 	}
 	L.felt.disabled = !s;

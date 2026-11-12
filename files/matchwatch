@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.28.0"
+VERSION="0.28.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1433,15 +1433,16 @@ cmd_allow() { # add <ip> | remove <ip> | (nothing = list)
 # drops the gaming device's UDP to a held port unless the server is in okay. The engine sees the device's
 # packets before that rule (it listens on the LAN side) and asks for a verdict with _hold.
 # Everything fails open: no stay pool, no device, a stopped service or a failed lookup all mean no holding.
-label_kind() { # server-port "isp org asn" -> game | voice | nothing. First matching label wins, as in the engine
+label_kind() { # server-port "isp org asn" [name] -> game | voice | nothing (or the label's name). First matching label wins, as in the engine
 	touch "$DATA/games.local" 2>/dev/null
-	awk -F'|' -v p="$1" -v info="$(echo "$2" | tr 'A-Z' 'a-z')" '
+	awk -F'|' -v p="$1" -v want="$3" -v info="$(echo "$2" | tr 'A-Z' 'a-z')" '
 		/^#/ || $0 == "" { next }
 		{ n = split($2, a, ","); hit = 0
 		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } if (p + 0 >= lo + 0 && p + 0 <= hi + 0) hit = 1 }
 		  if (!hit) next
 		  if ($4 != "") { m = 0; k = split(tolower($4), w, ","); for (i = 1; i <= k; i++) if (w[i] != "" && index(info, w[i]) > 0) m = 1; if (!m) next }
-		  print ($3 == "voice" ? "voice" : "game"); exit }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
+		  if (want == "name") { if ($3 != "voice") print $1 } else print ($3 == "voice" ? "voice" : "game")
+		  exit }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
 }
 hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports, the ports that would be held
 	touch "$DATA/games.local" "$DATA/hold" 2>/dev/null
@@ -1510,6 +1511,32 @@ EOF
 	fi
 	return 0
 }
+# A server on a port-only game's ports, where no match has been played yet, is not turned away: the port
+# alone does not prove it is that game. When it is outside the places being stayed on, say so on the Live
+# page, with the way to close the gap. Nothing is blocked here and the phone is not told.
+cmd_unseen() { # server-ip port
+	local ip="$1" port="$2" g cc country city lat lon isp org asn name
+	is_ipv4 "$ip" || return 1
+	[ -s "$DATA/stay" ] || return 0
+	is_allowed "$ip" && return 0
+	nft get element inet matchwatch blocked "{ $ip }" >/dev/null 2>&1 && return 0
+	g="$(geo_lookup "$ip")"
+	IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
+$g
+EOF
+	[ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && outside_stay "$lat" "$lon" "$cc" || return 0
+	name="$(label_kind "$port" "$isp $org $asn" name)"
+	[ -n "$name" ] || return 0
+	grep -qxF "$name" "$DATA/hold" 2>/dev/null && return 0
+	mkdir -p "$RUN/www"
+	printf '{"ts":%s,"ip":"%s","port":%s,"loc":"%s","org":"%s","ping":null,"verdict":"far","blocked":false,"strictname":"%s","msg":"%s"}\n' \
+		"$(date +%s)" "$ip" "${port:-0}" "$(jesc "${city:+$city, }$cc")" "$(jesc "$org")" "$(jesc "$name")" \
+		"$(jesc "This server is in ${city:+$city, }$cc, outside your places, and was let through. $name is known by its port alone, and you have not played a match on this port or address block yet, so MatchWatch cannot be sure it is the game. Make $name strict and servers like this are held and turned away before they connect.")" \
+		> "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
+	logger -t matchwatch "let through a server in ${city:+$city, }$cc, outside your places: $name is known by port alone and no match has been played there yet. Make it strict to hold such servers." 2>/dev/null
+	return 0
+}
+
 cmd_hold() { # on <game> | off <game> | (nothing = list)
 	local name="$2" row
 	mkdir -p "$DATA"; touch "$DATA/hold"
@@ -2287,6 +2314,7 @@ case "$1" in
 	allow) cmd_allow "$2" "$3" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
+	_unseen) cmd_unseen "$2" "$3" ;;
 	_updatetick) update_due && { update_note; export_json; } ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;

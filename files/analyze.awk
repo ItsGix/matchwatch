@@ -286,7 +286,14 @@ function lobby_check(f,    ip) {
 	if (F_pk[f] < 400 && hostpending(F_rport[f], ip)) { hostinfo(ip); return }
 	F_lobby[f] = 1
 	if (!isgame(F_rport[f], ip)) return
-	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) return
+	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) {
+		# left alone, but the owner is told if it turns out to be outside the places they stay on
+		if (!((ip in LOB_t) && cursec - LOB_t[ip] < 120)) {
+			LOB_t[ip] = cursec
+			if (!REPLAY) system(SELF " _unseen " ip " " (F_rport[f] + 0) " >/dev/null 2>&1 &"); else print "UNSEEN " ip ":" F_rport[f]
+		}
+		return
+	}
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
 	print "LOBBY " ip ":" F_rport[f]
