@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.23.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.23.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -285,7 +285,7 @@ What to expect:
 
 ### Single servers in the pool
 
-Sometimes one server outside your places is worth keeping: a favourite, or one you played well on last night. While you are staying on places, **Add to pool** appears beside every server in your favourites and the server list, and on each match report. It lets that one server through, whatever region it is in. The region lock itself is unchanged: everything else outside your places is still turned away.
+Sometimes one server outside your places is worth keeping: a favourite, or one you played well on last night. While you are staying on places, **Add to pool** appears beside every server in your favourites and the server list, and on each match report. It lets that one server through, whatever region it is in. A server already inside your places shows "In your places" instead, since there is nothing to add. The region lock itself is unchanged: everything else outside your places is still turned away.
 
 - Only the exact address is allowed. Its neighbours in the same datacentre are still refused, so nothing you did not choose gets in. Games do move players between neighbouring addresses, so you may not be offered the same one often.
 - The servers you have added are listed under your places at the top of the Servers page, each with a Remove button.

@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.23.0", reloading = false;
+var BUILT = "0.23.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -309,6 +309,9 @@ function isAllowed(ip) { return (D.info.allowed || []).indexOf(ip) >= 0; }
 function allowBtn(ip) {
 	if (isAllowed(ip)) return h("span", { cls: "tag keep", title: "Let through the places you stay on. Remove it under the places, at the top of the Servers page.", text: "In the pool" });
 	if (RO || !(D.info.stays || []).length) return null;
+	// already inside the places being stayed on: nothing to add, and a button that does nothing misleads
+	var known = D.servers.filter(function (x) { return x.ip === ip; })[0];
+	if (known && known["in"] === true) return h("span", { cls: "kept", title: "This server is inside the places you stay on, so it is already allowed.", text: "In your places" });
 	var b = act("Add to pool", "allow", ip, {});
 	b.title = "Let this one server through, whatever region it is in";
 	return b;
