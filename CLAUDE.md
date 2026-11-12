@@ -73,11 +73,11 @@ The commands behind the dashboard buttons, each run and then undone: block and u
 
 0.10.0: the installer, the one-time settings import, the rpcd backend through `ubus call` (checks, block and unblock, stay on and off, refusal of a changing action through `read`, rejection of shell characters in arguments), `file.read` of the data files, and the no-login page.
 
-Phone alerts through ntfy and the match-started alert were seen working on a real phone on 12 November 2026.
+Phone alerts through ntfy and the match-started alert were seen working on a real phone on 12 November 2026. The same night the engine's lobby check fired on a real Call of Duty lobby (a `LOBBY` line in `engine.log`, confirmed by the owner as a Call of Duty lobby). The owner has used the LuCI dashboard pages daily since 0.15.0, including the Servers, Matches and Tools pages and their buttons.
 
 ## Not yet run on a real router
 
-The LuCI pages in a browser (menu entry, Dashboard, Settings, Save & Apply restarting the service). The lobby alert, stay mode against real matchmaking, the QoSmate check during a match on this version, the whole-match chart and match report page.
+The Settings page's Save & Apply restarting the service. The lobby alert's message reaching the Live page or the phone (it only goes to the phone when the server is far or badly rated), stay mode against real matchmaking, the QoSmate check during a match on this version. From 0.18.0: the ping in the match-started alert, the unnamed-port filter and the "QoSmate in this match" report section on a real match.
 
 The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbound` and `Game_Inbound` (made from commands an older version printed) by renaming them, so unfix afterwards deletes them and leaves the game unprioritised.
 
