@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.22.3 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.23.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -48,7 +48,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 
 **Acts, when you ask**
 
-- Blocks a bad server or datacentre, or keeps you to a pool of places you choose, turning whole regions away before the game tries them.
+- Blocks a bad server or datacentre, or keeps you to a pool of places you choose, turning whole regions away before the game tries them. Single servers from anywhere can be let through.
 - Alerts your phone through ntfy: when a match starts, when a poor server is ahead, after a bad match.
 - Tests your line before you queue, traces the route to a server, and grades both from A+ to F.
 - Checks that QoSmate is prioritising your game, and reports what its queues did in each match.
@@ -283,6 +283,17 @@ What to expect:
 - Server locations come from a public lookup and are occasionally wrong.
 - A place is dropped from the pool, and you are told, if its last three counted matches average under the warning rating. When the pool is empty, staying ends.
 
+### Single servers in the pool
+
+Sometimes one server outside your places is worth keeping: a favourite, or one you played well on last night. While you are staying on places, **Add to pool** appears beside every server in your favourites and the server list, and on each match report. It lets that one server through, whatever region it is in. The region lock itself is unchanged: everything else outside your places is still turned away.
+
+- Only the exact address is allowed. Its neighbours in the same datacentre are still refused, so nothing you did not choose gets in. Games do move players between neighbouring addresses, so you may not be offered the same one often.
+- The servers you have added are listed under your places at the top of the Servers page, each with a Remove button.
+- An allowed server is never blocked automatically. Blocking it yourself takes it back out of the pool.
+- The game still decides. Allowing a server means it will not be refused, not that you will be sent to it.
+
+From the command line: `matchwatch allow`, `matchwatch allow add <ip>`, `matchwatch allow remove <ip>`.
+
 ### Whole regions, ahead of time
 
 Learning servers one at a time is slow: the game tries one, waits, gives up and tries the next, and a single city can have dozens of server ranges. So when you stay on places, MatchWatch also refuses every address range it knows to be outside them, before the game tries any.
@@ -476,6 +487,7 @@ Everything is also available over SSH:
 | `matchwatch fav` / `fav add <ip>` / `fav remove <ip>` | Your favourite servers |
 | `matchwatch stay <places>` / `stay off` | Keep to a pool of places, separated by commas |
 | `matchwatch stay add <places>` / `stay remove <n>` | Change the pool |
+| `matchwatch allow` / `allow add <ip>` / `allow remove <ip>` | Single servers let through the places you stay on |
 | `matchwatch places` | The areas you can stay on |
 | `matchwatch ranges [refresh]` | The hosting companies' address lists used to turn whole regions away |
 | `matchwatch regions [measure]` | Ping every region, nearest first |

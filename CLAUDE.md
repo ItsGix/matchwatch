@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.22.3.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.23.0.
 
 ## Layout
 
@@ -44,6 +44,8 @@ Where each game plays (0.21.0): `report.awk` MODE `gameplaces` groups game and /
 Updating (0.22.0): `matchwatch update` reads `dist/version` from the raw GitHub address of `main` and compares; `update now` (action `update`, a slow tool writing `update.json`) downloads the installer, refuses it unless its SHA-256 matches that line, and runs it. It refuses during a match. Nothing is fetched until the owner asks. Whatever is pushed to `main` in `dist/` is what every router installs, so never push a `dist/` that has not been installed on the test router first. The installer writes each file as `<name>.new` and moves it into place, because the updater runs from the script being replaced. `MW_UPDATE_URL` points it elsewhere for tests, with `MW_ROOT` so the installer writes into a sandbox.
 
 Reasons and grades (0.22.1): the engine notes every deduction as it scores (`why_add`) and writes the largest one or two per part into the match detail as `why` (`server`, `route`, `line`, `pc`); the dashboard prints them under the four scores. Matches from before 0.22.1 have none. Change a scoring formula and its `why_add` line together, and the table in the README. Tests get letters in the dashboard only: `letter(score)` for the line test (`score` in `linetest.json`), `pingLetter(ms)` for a trace and the region table.
+
+Single servers in the pool (0.23.0): `/etc/matchwatch/allow` holds exact addresses (`matchwatch allow add|remove`, actions `allow`/`unallow`, at most 100). The nftables set `allowed` is accepted at the top of the chain, before `blocked` and `away`, so the region lock itself is unchanged and an allowed server passes it. `cmd_lobby` skips the stay decision for one, an automatic block skips it, and blocking one by hand takes it out of the list. `nft_ready` rebuilds a table that has no `allowed` set. The owner chose exact addresses over /24s so nothing unvetted gets in; expect to revisit if games rarely offer the same address twice. Not yet seen on a real match.
 
 ## Rules that have bitten already
 

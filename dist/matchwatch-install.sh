@@ -18,7 +18,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.22.3"
+VERSION="0.23.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -355,7 +355,7 @@ export_json() {
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -402,6 +402,7 @@ nft_ready() {
 	if [ -n "$t" ]; then
 		echo "$t" | grep -q 'flags interval,timeout\|flags interval, timeout' || ok=0
 		echo "$t" | grep -q 'set away' || ok=0
+		echo "$t" | grep -q 'set allowed' || ok=0
 		# the rules for whole ranges name the gaming device, so they are rebuilt when it changes
 		if [ -n "$DEVICE_IP" ]; then echo "$t" | grep -q "ip saddr $DEVICE_IP ip daddr @away" || ok=0
 		else echo "$t" | grep -q '@away' && ok=0; fi
@@ -412,12 +413,14 @@ nft_ready() {
 	# away: whole ranges outside the places being stayed on. Only the gaming device's UDP is refused, so
 	# web sites and other devices that happen to use the same hosting company are untouched.
 	{
-		printf 'table inet matchwatch {\n\tset blocked {\n\t\ttype ipv4_addr\n\t\tflags interval, timeout\n\t}\n\tset away {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n'
-		printf '\tchain forward {\n\t\ttype filter hook forward priority -5; policy accept;\n\t\tip daddr @blocked counter drop\n\t\tip saddr @blocked counter drop\n'
+		printf 'table inet matchwatch {\n\tset blocked {\n\t\ttype ipv4_addr\n\t\tflags interval, timeout\n\t}\n\tset away {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t}\n\tset allowed {\n\t\ttype ipv4_addr\n\t}\n'
+		# allowed comes first: a server the owner let through is never refused by the two sets below
+		printf '\tchain forward {\n\t\ttype filter hook forward priority -5; policy accept;\n\t\tip daddr @allowed accept\n\t\tip saddr @allowed accept\n\t\tip daddr @blocked counter drop\n\t\tip saddr @blocked counter drop\n'
 		[ -n "$DEVICE_IP" ] && printf '\t\tip saddr %s ip daddr @away meta l4proto udp counter drop\n\t\tip daddr %s ip saddr @away meta l4proto udp counter drop\n' "$DEVICE_IP" "$DEVICE_IP"
 		printf '\t}\n}\n'
 	} | nft -f - || return 1
 	[ "$NFT_FILLING" = 1 ] || { NFT_FILLING=1; fill_blocklist; NFT_FILLING=0; }
+	allow_fill
 	[ -s "$DATA/stay" ] && [ "$RANGES_RUNNING" != 1 ] && ( stay_ranges >/dev/null 2>&1 & )
 	return 0
 }
@@ -446,6 +449,11 @@ cmd_block() { # ip [days|auto] [reason]
 	local ip="$1" days="${2:-$BLOCK_DAYS}" reason="${3:-manual}" now exp
 	is_target "$ip" || die "usage: matchwatch block <server-ip or block like 1.2.3.0/24> [days, 0 = until unblocked] [reason]"
 	is_private "$ip" && die "refusing to block a private address"
+	if is_allowed "$ip"; then
+		# a server the owner let through is not blocked automatically; blocking it by hand takes it back out
+		if [ "$days" = auto ]; then logger -t matchwatch "not blocking $ip automatically: you let it through" 2>/dev/null; return 0; fi
+		[ "$reason" = stay ] || allow_drop "$ip"
+	fi
 	if [ "$days" = auto ]; then
 		# a favourite is never blocked automatically
 		if is_fav "$ip"; then logger -t matchwatch "not blocking $ip automatically: it is one of your favourites" 2>/dev/null; return 0; fi
@@ -508,7 +516,7 @@ cmd_lobby() { # server-ip port device-ip
 	local where short want=0 now last
 	is_ipv4 "$ip" || return 1
 	mkdir -p "$RUN/www"
-	if [ -s "$DATA/stay" ] && in_away "$ip"; then
+	if [ -s "$DATA/stay" ] && ! is_allowed "$ip" && in_away "$ip"; then
 		printf '{"ts":%s,"ip":"%s","port":%s,"loc":"","org":"","ping":null,"verdict":"good","blocked":true,"msg":"A server in a region outside the places you stay on. Its whole range is turned away, so the game should move on quickly."}\n' "$(date +%s)" "$ip" "${port:-0}" > "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
 		return 0
 	fi
@@ -520,7 +528,7 @@ EOF
 	tried_note "$ip" "${port:-0}" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
 	# Staying somewhere? Decide first. Every second spent measuring is a second the game spends joining
 	# this server, and turning it away late throws the player out of a lobby they had already reached.
-	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ]; then
+	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && ! is_allowed "$ip"; then
 		if outside_stay "$lat" "$lon" "$cc"; then MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay && blocked=true; fi
 	fi
 	if [ "$blocked" != true ]; then
@@ -1330,6 +1338,49 @@ EOF
 # ---- favourites: servers worth finding again. The dashboard groups them by game.
 # A favourite is never blocked automatically, and the lobby alert says when you land on one.
 is_fav() { [ -f "$DATA/favourites" ] && awk -v ip="$1" '$1 == ip { f = 1 } END { exit !f }' "$DATA/favourites"; }
+# ---- single servers let through the places being stayed on. /etc/matchwatch/allow holds one address a
+# line; the nftables set "allowed" is matched before anything is refused, so a server in it gets through
+# whatever its region. Exact addresses only: nothing the owner did not choose is ever let in.
+is_allowed() { [ -s "$DATA/allow" ] && grep -qxF "$1" "$DATA/allow"; }
+allow_fill() {
+	local ip
+	[ -s "$DATA/allow" ] || return 0
+	while read -r ip; do is_ipv4 "$ip" && nft add element inet matchwatch allowed "{ $ip }" 2>/dev/null; done < "$DATA/allow"
+	return 0
+}
+allow_drop() { # ip : take one address back out, quietly
+	[ -f "$DATA/allow" ] || return 0
+	grep -vxF "$1" "$DATA/allow" > "$DATA/allow.tmp"; mv -f "$DATA/allow.tmp" "$DATA/allow"
+	nft delete element inet matchwatch allowed "{ $1 }" 2>/dev/null
+	return 0
+}
+cmd_allow() { # add <ip> | remove <ip> | (nothing = list)
+	local ip="$2"
+	mkdir -p "$DATA"; touch "$DATA/allow" "$DATA/blocklist"
+	case "$1" in
+		""|list) if [ -s "$DATA/allow" ]; then cat "$DATA/allow"; else echo "No single servers are let through. Add one with: matchwatch allow add <server-ip>"; fi; return 0 ;;
+		add|remove) ;;
+		*) die "usage: matchwatch allow [add|remove <server-ip>]" ;;
+	esac
+	is_ipv4 "$ip" || die "usage: matchwatch allow $1 <server-ip>"
+	is_private "$ip" && die "that is not a game server"
+	if [ "$1" = remove ]; then
+		is_allowed "$ip" || die "$ip is not one of the servers you let through"
+		allow_drop "$ip"; export_json
+		echo "$ip is no longer let through. It is treated like any other server again."
+		return 0
+	fi
+	is_allowed "$ip" && { echo "$ip is already let through."; return 0; }
+	[ "$(wc -l < "$DATA/allow")" -lt 100 ] || die "100 servers are let through already. Remove one first."
+	awk -F'\t' -v ip="$ip" '$1 == ip && $4 != "stay" { f = 1 } END { exit !f }' "$DATA/blocklist" && die "you have blocked $ip. Unblock it first."
+	nft_ready || exit 1
+	echo "$ip" >> "$DATA/allow"
+	nft add element inet matchwatch allowed "{ $ip }" 2>/dev/null
+	export_json
+	if [ -s "$DATA/stay" ]; then echo "$ip is now let through, whatever region it is in. The game still decides whether to offer it to you."
+	else echo "$ip will be let through when you stay on places. You are not staying anywhere at the moment."; fi
+}
+
 cmd_fav() { # add <ip> | remove <ip> | (nothing = list)
 	local ip="$2"
 	mkdir -p "$DATA"; touch "$DATA/favourites"
@@ -1592,6 +1643,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 			if [ "$action" = sharecheck ]; then ( cmd_share_check "$f" ); else ( cmd_share_import "$f" $arg ); fi; rc=$?
 			rm -f "$f"; return $rc ;;
 		fav) cmd_fav add "$arg" ;;
+		allow) cmd_allow add "$arg" ;;
+		unallow) cmd_allow remove "$arg" ;;
 		unfav) cmd_fav remove "$arg" ;;
 		shareundo) cmd_share_undo ;;
 		shareforget) cmd_share_forget "$arg" ;;
@@ -1995,6 +2048,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch unblock <ip>|all  remove a block
   matchwatch blocklist         show blocked servers
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
+  matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
@@ -2034,6 +2088,7 @@ case "$1" in
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
 	fav) cmd_fav "$2" "$3" ;;
+	allow) cmd_allow "$2" "$3" ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
 	clear-history) cmd_clear_history ;;
@@ -3611,7 +3666,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow"
 
 reply() { # ok(0|1) text
 	json_init
@@ -3742,7 +3797,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.22.3", reloading = false;
+var BUILT = "0.23.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4020,6 +4075,16 @@ function star(ip, wordy) {
 	});
 	return b;
 }
+// One server let through the places being stayed on. Offered while staying; shown as a tag once it is in.
+function isAllowed(ip) { return (D.info.allowed || []).indexOf(ip) >= 0; }
+function allowBtn(ip) {
+	if (isAllowed(ip)) return h("span", { cls: "tag keep", title: "Let through the places you stay on. Remove it under the places, at the top of the Servers page.", text: "In the pool" });
+	if (RO || !(D.info.stays || []).length) return null;
+	var b = act("Add to pool", "allow", ip, {});
+	b.title = "Let this one server through, whatever region it is in";
+	return b;
+}
+function addIf(parent, el) { if (el) parent.appendChild(el); }
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
 	box.appendChild(h("h2", "Favourites"));
@@ -4033,7 +4098,7 @@ function favSection() {
 			.forEach(function (s) {
 				var td = h("td", { cls: "act" });
 				td.appendChild(star(s.ip));
-				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" }));
+				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else addIf(td, allowBtn(s.ip));
 				t.lastChild.appendChild(row([[s.ip], [place(s)], [s.org && s.org !== "-" ? s.org : ""], [s.matches == null ? "" : String(s.matches), "num"], [s.rating == null ? "" : String(s.rating), "num s " + cls(s.rating)],
 					[s.ping == null ? "" : fmt(s.ping, 1), "num"], [s.last ? when(s.last) : "Not played on yet"], td]));
 			});
@@ -4185,6 +4250,7 @@ function pageMatch(id) {
 		if (isBlocked(m.ip)) a.appendChild(h("span", { cls: "tag", text: "This server is blocked" }));
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		a.appendChild(star(m.ip, true));
+		if (!isBlocked(m.ip)) addIf(a, allowBtn(m.ip));
 		if (idx >= 0) a.appendChild(act("Remove this match", "forgetmatch", m.start, { confirm: "Confirm: remove this match", done: function (o) { toast(o); location.hash = "#/matches"; } }));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
@@ -4331,6 +4397,15 @@ function pageServers() {
 			view.appendChild(rm);
 		}
 	}
+	// single servers let through, whatever region they are in
+	var lets = D.info.allowed || [];
+	if (lets.length) {
+		view.appendChild(h("h3", { cls: "favgame" }, "Single servers in the pool", h("small", String(lets.length))));
+		var lr = h("div", { cls: "actions" });
+		lets.forEach(function (ip) { var s = D.servers.filter(function (x) { return x.ip === ip; })[0] || D.favInfo[ip]; lr.appendChild(act("Remove " + ip + (s && place(s) ? ", " + place(s) : ""), "unallow", ip, {})); });
+		view.appendChild(lr);
+		view.appendChild(h("p", { cls: "note", text: (stays.length ? "These servers are let through even though they are outside the places you stay on. " : "These will be let through when you stay on places. ") + "Only the exact address is allowed, so its neighbours in the same datacentre are still turned away. The game still decides whether to offer one to you." }));
+	} else if (stays.length && !RO) view.appendChild(h("p", { cls: "note", text: "To let one server through from outside these places, press Add to pool beside it in your favourites or the server list below, or on a match report." }));
 	// stay anywhere: cities, countries or wider areas, as one pool
 	if (!RO) {
 	view.appendChild(h("h2", stays.length ? "Change where you stay" : "Stay in one or more places"));
@@ -4397,7 +4472,7 @@ function pageServers() {
 		D.servers.forEach(function (s) {
 			var td = h("td", { cls: "act" });
 			td.appendChild(star(s.ip));
-			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" }));
+			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else { addIf(td, allowBtn(s.ip)); td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" })); }
 			if (!isFav(s.ip)) td.appendChild(act("Remove", "forgetserver", s.ip, { confirm: "Confirm: remove it and its " + s.matches + " match" + (s.matches === 1 ? "" : "es") }));
 			else if (!RO) td.appendChild(h("span", { cls: "kept", title: "A favourite cannot be removed. Take its star off first.", text: "Kept" }));
 			t2.lastChild.appendChild(row([[s.ip], [place(s)], [s.org === "-" ? "" : s.org], [String(s.matches), "num"], [String(s.rating), "num s " + cls(s.rating)], [String(s.worst), "num"], [s.ping == null ? "n/a" : fmt(s.ping, 1), "num"], td]));

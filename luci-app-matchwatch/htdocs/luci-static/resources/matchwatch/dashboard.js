@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.22.3", reloading = false;
+var BUILT = "0.23.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -304,6 +304,16 @@ function star(ip, wordy) {
 	});
 	return b;
 }
+// One server let through the places being stayed on. Offered while staying; shown as a tag once it is in.
+function isAllowed(ip) { return (D.info.allowed || []).indexOf(ip) >= 0; }
+function allowBtn(ip) {
+	if (isAllowed(ip)) return h("span", { cls: "tag keep", title: "Let through the places you stay on. Remove it under the places, at the top of the Servers page.", text: "In the pool" });
+	if (RO || !(D.info.stays || []).length) return null;
+	var b = act("Add to pool", "allow", ip, {});
+	b.title = "Let this one server through, whatever region it is in";
+	return b;
+}
+function addIf(parent, el) { if (el) parent.appendChild(el); }
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
 	box.appendChild(h("h2", "Favourites"));
@@ -317,7 +327,7 @@ function favSection() {
 			.forEach(function (s) {
 				var td = h("td", { cls: "act" });
 				td.appendChild(star(s.ip));
-				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" }));
+				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else addIf(td, allowBtn(s.ip));
 				t.lastChild.appendChild(row([[s.ip], [place(s)], [s.org && s.org !== "-" ? s.org : ""], [s.matches == null ? "" : String(s.matches), "num"], [s.rating == null ? "" : String(s.rating), "num s " + cls(s.rating)],
 					[s.ping == null ? "" : fmt(s.ping, 1), "num"], [s.last ? when(s.last) : "Not played on yet"], td]));
 			});
@@ -469,6 +479,7 @@ function pageMatch(id) {
 		if (isBlocked(m.ip)) a.appendChild(h("span", { cls: "tag", text: "This server is blocked" }));
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		a.appendChild(star(m.ip, true));
+		if (!isBlocked(m.ip)) addIf(a, allowBtn(m.ip));
 		if (idx >= 0) a.appendChild(act("Remove this match", "forgetmatch", m.start, { confirm: "Confirm: remove this match", done: function (o) { toast(o); location.hash = "#/matches"; } }));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
@@ -615,6 +626,15 @@ function pageServers() {
 			view.appendChild(rm);
 		}
 	}
+	// single servers let through, whatever region they are in
+	var lets = D.info.allowed || [];
+	if (lets.length) {
+		view.appendChild(h("h3", { cls: "favgame" }, "Single servers in the pool", h("small", String(lets.length))));
+		var lr = h("div", { cls: "actions" });
+		lets.forEach(function (ip) { var s = D.servers.filter(function (x) { return x.ip === ip; })[0] || D.favInfo[ip]; lr.appendChild(act("Remove " + ip + (s && place(s) ? ", " + place(s) : ""), "unallow", ip, {})); });
+		view.appendChild(lr);
+		view.appendChild(h("p", { cls: "note", text: (stays.length ? "These servers are let through even though they are outside the places you stay on. " : "These will be let through when you stay on places. ") + "Only the exact address is allowed, so its neighbours in the same datacentre are still turned away. The game still decides whether to offer one to you." }));
+	} else if (stays.length && !RO) view.appendChild(h("p", { cls: "note", text: "To let one server through from outside these places, press Add to pool beside it in your favourites or the server list below, or on a match report." }));
 	// stay anywhere: cities, countries or wider areas, as one pool
 	if (!RO) {
 	view.appendChild(h("h2", stays.length ? "Change where you stay" : "Stay in one or more places"));
@@ -681,7 +701,7 @@ function pageServers() {
 		D.servers.forEach(function (s) {
 			var td = h("td", { cls: "act" });
 			td.appendChild(star(s.ip));
-			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" }));
+			if (s.blocked) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else { addIf(td, allowBtn(s.ip)); td.appendChild(act("Block", "block", s.ip, { danger: true, confirm: "Confirm: " + days + " days" })); }
 			if (!isFav(s.ip)) td.appendChild(act("Remove", "forgetserver", s.ip, { confirm: "Confirm: remove it and its " + s.matches + " match" + (s.matches === 1 ? "" : "es") }));
 			else if (!RO) td.appendChild(h("span", { cls: "kept", title: "A favourite cannot be removed. Take its star off first.", text: "Kept" }));
 			t2.lastChild.appendChild(row([[s.ip], [place(s)], [s.org === "-" ? "" : s.org], [String(s.matches), "num"], [String(s.rating), "num s " + cls(s.rating)], [String(s.worst), "num"], [s.ping == null ? "n/a" : fmt(s.ping, 1), "num"], td]));
