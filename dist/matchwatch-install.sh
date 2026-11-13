@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.32.0"
+VERSION="0.32.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2779,7 +2779,7 @@ function load_games(file,    l, g, k, a, i, r) {
 		for (i = 1; i <= k; i++) {
 			NGP++
 			if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 }
-			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4])
+			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4]); GP_name[NGP] = clean(g[1])
 		}
 	}
 	close(file)
@@ -2835,6 +2835,15 @@ function kindof(port, ip,    i) {
 	return ""
 }
 function isgame(port, ip) { return kindof(port, ip) == "game" }
+# the name of the game this server is labelled as, for the Live page; nothing for voice or an unnamed port
+function gamename(port, ip,    i) {
+	for (i = 1; i <= NGP; i++) {
+		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
+		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
+		return (GP_kind[i] == "game") ? GP_name[i] : ""
+	}
+	return ""
+}
 # is this server a game by port AND host? That is as sure as MatchWatch gets without a match having been played there
 function hostgame(port, ip,    i) {
 	for (i = 1; i <= NGP; i++) {
@@ -3456,7 +3465,7 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		if (F_geo[f] != "") { split(F_geo[f], ga, "\t"); loc = clean(ga[3]) (ga[1] != "" ? ", " ga[1] : "") }
 		if (!first) s = s ","
 		first = 0
-		s = s "{\"ip\":\"" ip "\",\"port\":" F_rport[f] ",\"device\":\"" F_lip[f] "\",\"age\":" int(now - F_first[f]) ",\"start\":" int(F_first[f])
+		s = s "{\"ip\":\"" ip "\",\"port\":" F_rport[f] ",\"device\":\"" F_lip[f] "\",\"age\":" int(now - F_first[f]) ",\"start\":" int(F_first[f]) ",\"game\":\"" gamename(F_rport[f], ip) "\""
 		s = s ",\"loc\":\"" loc "\",\"org\":\"" clean(ga[7]) "\""
 		s = s ",\"tick\":" jnum(L_rate[kd]) ",\"jit\":" jnum(L_jit[kd]) ",\"late\":" jnum(L_late[kd]) ",\"lost\":" jnum(L_lost[kd])
 		s = s ",\"uprate\":" jnum(L_rate[ku]) ",\"upjit\":" jnum(L_jit[ku])
@@ -4364,7 +4373,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.32.0", reloading = false;
+var BUILT = "0.32.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4867,6 +4876,19 @@ function labelForPort(port) {
 	(D.hold || []).some(function (g) { return String(g.ports).split(" ").some(function (r) { var a = r.split("-"), lo = +a[0], hi = +(a[1] || a[0]); if (port >= lo && port <= hi) { hit = g; return true; } return false; }); });
 	return hit;
 }
+// The label the match in progress goes under: the engine says (it knows who hosts the server); older engines did not, so fall back to the port
+function liveLabel(s) {
+	var byName = s.game ? (D.hold || []).filter(function (g) { return g.name === s.game; })[0] : null;
+	return byName || (s.game ? { name: s.game } : labelForPort(s.port));
+}
+// ...and how the Live page words it: the game's name; for a network several games share, the name you gave it, or "A Steam game"
+function liveGame(s) {
+	var lg = liveLabel(s);
+	if (!lg || !lg.name) return "";
+	if (!sharedLabel(lg.name)) return lg.name + ". ";
+	if (lg.as) return lg.as + ", on " + netWords(lg.name) + ". ";
+	return (/^Steam games/.test(lg.name) ? "A Steam game" : lg.name) + ". ";
+}
 function netWords(label) { return /^Steam games/.test(label) ? "Steam's network" : "a network several games share"; }
 // current: the name this match has now. until: when a name that carries on runs out (0 = never, null = none carrying on)
 function gamePick(start, label, current, until) {
@@ -5037,7 +5059,7 @@ function updateLive() {
 	if (L.mm) L.mm.textContent = mmLine();
 	if (L.game) {
 		// a match on a network several games share: ask which game, once per match and whenever the answer changes
-		var lg = s && !RO ? labelForPort(s.port) : null, gk = lg && sharedLabel(lg.name) ? s.start + "|" + lg.name + "|" + (lg.as || "") + "|" + (lg.until || 0) : "";
+		var lg = s && !RO ? liveLabel(s) : null, gk = lg && sharedLabel(lg.name) ? s.start + "|" + lg.name + "|" + (lg.as || "") + "|" + (lg.until || 0) : "";
 		if (gk !== L.gameKey && !(L.game.querySelector("input") && L.game.querySelector("input").value && gk)) { L.gameKey = gk; L.game.textContent = ""; if (gk) L.game.appendChild(gamePick(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null)); }
 	}
 	if (!s) {
@@ -5061,7 +5083,7 @@ function updateLive() {
 	}
 	L.last.textContent = "";
 	L.title.textContent = (s.loc || "Locating server") + (s.org ? " (" + s.org + ")" : "");
-	L.sub.textContent = s.ip + ":" + s.port + (s.rep != null ? ". Rated " + s.rep + "/100 over " + s.repn + " earlier match" + (s.repn === 1 ? "" : "es") + "." : ". First time on this server.");
+	L.sub.textContent = liveGame(s) + s.ip + ":" + s.port + (s.rep != null ? ". Rated " + s.rep + "/100 over " + s.repn + " earlier match" + (s.repn === 1 ? "" : "es") + "." : ". First time on this server.");
 	L.figs.textContent = "";
 	[["Ping", s.ping == null ? "n/a" : fmt(s.ping, 1), "ms"], ["Server update rate", fmt(s.tick, 0), "per second"], ["Timing jitter", fmt(s.jit, 2), "ms"], ["Late updates", fmt(s.late, 1), "%"],
 	 ["Missing updates", fmt(s.s_lost, 2), "%"], ["Freezes", String(s.s_frz), "over 100 ms"], ["Your PC send rate", fmt(s.uprate, 0), "per second"], ["Your PC pauses", String(s.s_hitch), "over 100 ms"]]

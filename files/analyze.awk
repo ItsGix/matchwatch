@@ -186,7 +186,7 @@ function load_games(file,    l, g, k, a, i, r) {
 		for (i = 1; i <= k; i++) {
 			NGP++
 			if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 }
-			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4])
+			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4]); GP_name[NGP] = clean(g[1])
 		}
 	}
 	close(file)
@@ -242,6 +242,15 @@ function kindof(port, ip,    i) {
 	return ""
 }
 function isgame(port, ip) { return kindof(port, ip) == "game" }
+# the name of the game this server is labelled as, for the Live page; nothing for voice or an unnamed port
+function gamename(port, ip,    i) {
+	for (i = 1; i <= NGP; i++) {
+		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
+		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
+		return (GP_kind[i] == "game") ? GP_name[i] : ""
+	}
+	return ""
+}
 # is this server a game by port AND host? That is as sure as MatchWatch gets without a match having been played there
 function hostgame(port, ip,    i) {
 	for (i = 1; i <= NGP; i++) {
@@ -863,7 +872,7 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		if (F_geo[f] != "") { split(F_geo[f], ga, "\t"); loc = clean(ga[3]) (ga[1] != "" ? ", " ga[1] : "") }
 		if (!first) s = s ","
 		first = 0
-		s = s "{\"ip\":\"" ip "\",\"port\":" F_rport[f] ",\"device\":\"" F_lip[f] "\",\"age\":" int(now - F_first[f]) ",\"start\":" int(F_first[f])
+		s = s "{\"ip\":\"" ip "\",\"port\":" F_rport[f] ",\"device\":\"" F_lip[f] "\",\"age\":" int(now - F_first[f]) ",\"start\":" int(F_first[f]) ",\"game\":\"" gamename(F_rport[f], ip) "\""
 		s = s ",\"loc\":\"" loc "\",\"org\":\"" clean(ga[7]) "\""
 		s = s ",\"tick\":" jnum(L_rate[kd]) ",\"jit\":" jnum(L_jit[kd]) ",\"late\":" jnum(L_late[kd]) ",\"lost\":" jnum(L_lost[kd])
 		s = s ",\"uprate\":" jnum(L_rate[ku]) ",\"upjit\":" jnum(L_jit[ku])

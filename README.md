@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.32.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.32.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -419,7 +419,7 @@ This list cannot be complete:
 
 Some games cannot be told apart from the router at all. Every game that uses Steam's own network reaches the same Valve servers on the same ports, so Counter-Strike 2, Dota 2 and a newly released indie shooter all look identical. MatchWatch files them under one label, "Steam games", and does not ask you to name anything, because the port already has a name.
 
-For a match under a label like that, the Live page and the match report ask **Which game is this?** Type the name and choose how long it should carry on: **this match only**, **the next 6 hours**, or **until I change it**. Six hours is the default, so an evening's matches take the name and the next session asks again, which stops a different Steam game being filed under last week's name. Names you have used before appear as buttons, so answering is one press, and **Back to Steam games** removes a name. Until you say which game it is, a match stays under "Steam games"; once named, its report reads "Wardogs, on Steam's network".
+For a match under a label like that, the Live page and the match report ask **Which game is this?** Type the name and choose how long it should carry on: **this match only**, **the next 6 hours**, or **until I change it**. Six hours is the default, so an evening's matches take the name and the next session asks again, which stops a different Steam game being filed under last week's name. Names you have used before appear as buttons, so answering is one press, and **Back to Steam games** removes a name. The Live page names the game under the server: "Call of Duty", or for an unnamed match on Valve's network, "A Steam game". Until you say which game it is, a match stays under "Steam games"; once named, its report reads "Wardogs, on Steam's network".
 
 This only changes the name shown. Staying on places, strict and the lobby check still treat the match as a game on that network. From the command line: `matchwatch matchgame <match start> <name>`.
 

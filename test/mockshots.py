@@ -100,7 +100,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.32.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.32.1", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Fortnite", "ports": "9000-9100", "kind": "", "hosts": ""}, {"name": "Call of Duty", "ports": "3074,30000-45000", "kind": "", "hosts": "vultr,as20473"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -119,7 +119,7 @@ def build(site):
                                  {"p": "192.0.2.0/24", "n": 22, "avg": 93, "city": "Amsterdam", "cc": "NL", "org": "Example Hosting Amsterdam", "blocked": False}]}
     d, u = timeline(120, "clean"); d[40], d[41], d[95] = 265.3, 98, 150; u[70] = 166
     p = [round(random.uniform(5.8, 6.4), 1) for _ in range(120)]; p[40], p[41] = 14.5, 9.0
-    out["status"] = {"ts": NOW + 3600, "candidates": 0, "flows": 3, "sessions": [{"ip": "203.0.113.21", "port": 30120, "device": "192.168.1.50", "age": 412, "start": NOW - 412, "loc": "Frankfurt, DE", "org": "Example Hosting Frankfurt",
+    out["status"] = {"ts": NOW + 3600, "candidates": 0, "flows": 3, "sessions": [{"ip": "203.0.113.21", "port": 30120, "device": "192.168.1.50", "age": 412, "start": NOW - 412, "game": "Call of Duty", "loc": "Frankfurt, DE", "org": "Example Hosting Frankfurt",
                      "tick": 20.1, "jit": 0.41, "late": 0.02, "lost": 0, "uprate": 95.2, "upjit": 0.3, "s_lost": 0.04, "s_frz": 1, "s_hitch": 1, "rep": 97, "repn": 3, "ping": 6.1, "tl_d": d, "tl_u": u, "tl_p": p,
                      "marks": [{"t": NOW + 3600 - 76, "k": "server+ping", "x": "server updates stalled: one arrived 217 ms late; ping jumped to 14 ms (normally 6)"}]}]}
     # results of the two slow tools, as the router would leave them (job number 1)
@@ -187,7 +187,7 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace") out = "1";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.32.0.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.32.1.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the Tools screenshots: press what a visitor would, so each picture shows a result
