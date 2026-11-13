@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.29.0"
+VERSION="0.30.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -84,6 +84,7 @@ STAY_STRICT=1
 STAY_KM=150
 STAY_RANGES=1
 UPDATE_CHECK=0
+MATCH_MODE=0
 DATA_DIR="/etc/matchwatch"
 WEB=0
 if [ -n "$CONF" ]; then
@@ -115,6 +116,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get STAY_KM main stay_km "$STAY_KM"
 	config_get STAY_RANGES main stay_ranges "$STAY_RANGES"
 	config_get UPDATE_CHECK main update_check "$UPDATE_CHECK"
+	config_get MATCH_MODE main match_mode "$MATCH_MODE"
 	config_get DATA_DIR main data_dir "$DATA_DIR"
 	config_get WEB main web "$WEB"
 fi
@@ -310,6 +312,7 @@ cmd_probe_start() {
 	local sid="$1" rip="$2" lip="$3" near last hops reached
 	is_ipv4 "$rip" || return 1
 	PD="$RUN/probe.$sid"; mkdir -p "$PD"
+	[ "$MATCH_MODE" = 1 ] && mm_set tight
 	echo server > "$PD/far.kind"; echo "$rip" > "$PD/far.ip"
 	echo "$rip $4" > "$PD/server"
 	start_ping far "$rip"
@@ -410,6 +413,7 @@ export_json() {
 	[ -d "$RUN/www" ] || return 0
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	awk -v MODE=hist_json -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/history.json.tmp" && mv -f "$RUN/www/history.json.tmp" "$RUN/www/history.json"
+	mm_json
 	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\",\"host\":%s}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4, ($6 == 1 ? "true" : "false") } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
@@ -428,6 +432,7 @@ export_json() {
 
 cmd_after() { # note overall
 	local sname i
+	mm_later
 	regions_stale && ( cmd_regions measure >/dev/null 2>&1 & )
 	[ -f "$RUN/last.txt" ] && cp "$RUN/last.txt" "$DATA/last.txt"
 	if [ -s "$DATA/stay" ]; then
@@ -580,6 +585,8 @@ cmd_lobby() { # server-ip port device-ip
 	local where short want=0 now last
 	is_ipv4 "$ip" || return 1
 	mkdir -p "$RUN/www"
+	# a game server is being reached for: have QoSmate's limits on before the match itself starts
+	[ "$MATCH_MODE" = 1 ] && mm_set tight
 	if [ -s "$DATA/stay" ] && ! is_allowed "$ip" && in_away "$ip"; then
 		printf '{"ts":%s,"ip":"%s","port":%s,"loc":"","org":"","ping":null,"verdict":"good","blocked":true,"msg":"A server in a region outside the places you stay on. Its whole range is turned away, so the game should move on quickly."}\n' "$(date +%s)" "$ip" "${port:-0}" > "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
 		return 0
@@ -1620,6 +1627,88 @@ cmd_hold() { # on <game> | off <game> | (nothing = list)
 	else echo "$name will be strict when you stay on places. You are not staying anywhere at the moment, so nothing is held."; fi
 }
 
+# ---- match mode. QoSmate keeps a game ahead of everything else by holding the line a little under its
+# full speed, and that limit also slows downloads when nobody is playing. With match mode on, MatchWatch
+# lifts the limit between matches and puts it back when a match starts. QoSmate does the prioritising,
+# with the rates set in QoSmate; all MatchWatch does is tell cake "unlimited" or QoSmate's own rate
+# (tc qdisc change, which keeps every other option and needs no restart of QoSmate). QoSmate's settings
+# are never written. Everything fails towards QoSmate's own limits: stopping MatchWatch, starting it, or
+# switching match mode off all put them back, and so does anything that restarts QoSmate.
+MM_HOLD="${MW_MM_HOLD:-300}"   # seconds without a match before the limit is lifted, so a run of matches stays limited
+mm_ok() { # can it work here? QoSmate installed, switched on, in a cake mode, and cake on the internet port
+	[ -x /etc/init.d/qosmate ] && have tc && have uci || return 1
+	[ "$(uci -q get qosmate.global.enabled)" = 1 ] && [ "$(uci -q get qosmate.settings.ROOT_QDISC)" = cake ] || return 1
+	[ -n "$WAN_IF" ] || find_ifaces
+	[ -n "$WAN_IF" ] && tc qdisc show dev "$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'
+}
+mm_json() {
+	local st up dn can=false
+	[ -d "$RUN/www" ] || return 0
+	mm_ok && can=true
+	up="$(uci -q get qosmate.settings.UPRATE 2>/dev/null)"; dn="$(uci -q get qosmate.settings.DOWNRATE 2>/dev/null)"
+	case "$up" in ""|*[!0-9]*) up=0 ;; esac; case "$dn" in ""|*[!0-9]*) dn=0 ;; esac
+	if [ "$MATCH_MODE" != 1 ]; then st=off; elif [ "$can" != true ]; then st=unsupported; else st="$(cat "$RUN/mm.state" 2>/dev/null)"; fi
+	printf '{"on":%s,"can":%s,"state":"%s","up":%s,"down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "${st:-tight}" "$up" "$dn" "$MM_HOLD" > "$RUN/www/matchmode.json.tmp" && mv -f "$RUN/www/matchmode.json.tmp" "$RUN/www/matchmode.json"
+}
+mm_set() { # tight | loose : QoSmate's own limits, or none
+	local want="$1" up dn
+	mkdir -p "$RUN"
+	# anything that asks for the limits also cancels a lift that was waiting
+	[ "$want" = tight ] && echo "$(date +%s).$$" > "$RUN/mm.stamp"
+	[ "$want" = loose ] && [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ] && return 0
+	mm_ok || { rm -f "$RUN/mm.state"; mm_json; return 1; }
+	if [ "$want" = loose ]; then
+		tc qdisc change dev "$WAN_IF" root cake unlimited 2>/dev/null || return 1
+		tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && tc qdisc change dev "ifb-$WAN_IF" root cake unlimited 2>/dev/null
+		logger -t matchwatch "match mode: nothing played for a while, so QoSmate's speed limit is lifted until the next match" 2>/dev/null
+	else
+		up="$(uci -q get qosmate.settings.UPRATE)"; dn="$(uci -q get qosmate.settings.DOWNRATE)"
+		case "$up" in ""|0|*[!0-9]*) return 1 ;; esac; case "$dn" in ""|0|*[!0-9]*) return 1 ;; esac
+		tc qdisc change dev "$WAN_IF" root cake bandwidth "${up}kbit" 2>/dev/null || return 1
+		tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && tc qdisc change dev "ifb-$WAN_IF" root cake bandwidth "${dn}kbit" 2>/dev/null
+		[ "$(cat "$RUN/mm.state" 2>/dev/null)" = tight ] || logger -t matchwatch "match mode: QoSmate's limits are on ($dn kbit down, $up kbit up)" 2>/dev/null
+	fi
+	echo "$want" > "$RUN/mm.state"
+	mm_json
+	return 0
+}
+mm_later() { # [seconds] : lift the limit once nothing has been played for that long
+	local stamp
+	[ "$MATCH_MODE" = 1 ] || return 0
+	stamp="$(date +%s).$$"; echo "$stamp" > "$RUN/mm.stamp"
+	( sleep "${1:-$MM_HOLD}"
+	  [ "$(cat "$RUN/mm.stamp" 2>/dev/null)" = "$stamp" ] || exit 0
+	  grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null || exit 0
+	  mm_set loose ) >/dev/null 2>&1 &
+}
+mm_save() { # 0|1
+	if [ -n "$CONF" ]; then
+		touch "$CONF"
+		if grep -q '^MATCH_MODE=' "$CONF"; then sed -i "s|^MATCH_MODE=.*|MATCH_MODE=$1|" "$CONF"; else echo "MATCH_MODE=$1" >> "$CONF"; fi
+	else
+		uci -q get matchwatch.main >/dev/null || uci set matchwatch.main=matchwatch
+		uci set "matchwatch.main.match_mode=$1"; uci commit matchwatch || die "could not save the setting"
+	fi
+	MATCH_MODE="$1"
+}
+cmd_matchmode() { # on | off | (nothing = status)
+	case "$1" in
+		on) mm_ok || die "match mode needs QoSmate installed, switched on and in one of its cake modes. QoSmate does the prioritising; MatchWatch only lifts its speed limit between matches."
+			mm_save 1
+			if grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null; then mm_set tight; mm_later 20; echo "Match mode is on. Nothing is being played, so QoSmate's speed limit is lifted in a few seconds and comes back the moment a match starts."
+			else mm_set tight; echo "Match mode is on. A match is being played, so QoSmate's limits stay on; they are lifted $((MM_HOLD / 60)) minutes after your last match."; fi ;;
+		off) mm_save 0; echo "$(date +%s).$$" > "$RUN/mm.stamp" 2>/dev/null
+			mm_ok && mm_set tight
+			rm -f "$RUN/mm.state"; mm_json
+			echo "Match mode is off. QoSmate's limits are back on all the time, as QoSmate has them set." ;;
+		""|status) if [ "$MATCH_MODE" != 1 ]; then echo "Match mode is off."
+			elif ! mm_ok; then echo "Match mode is on but cannot work: it needs QoSmate switched on and in one of its cake modes."
+			elif [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then echo "Match mode is on. Nothing is being played, so QoSmate's speed limit is lifted."
+			else echo "Match mode is on. QoSmate's limits are on: $(uci -q get qosmate.settings.DOWNRATE) kbit down, $(uci -q get qosmate.settings.UPRATE) kbit up."; fi ;;
+		*) die "usage: matchwatch matchmode [on|off]" ;;
+	esac
+}
+
 cmd_fav() { # add <ip> | remove <ip> | (nothing = list)
 	local ip="$2"
 	mkdir -p "$DATA"; touch "$DATA/favourites"
@@ -1915,6 +2004,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 			rm -f "$f"; return $rc ;;
 		fav) cmd_fav add "$arg" ;;
 		allow) cmd_allow add "$arg" ;;
+		matchmodeon) cmd_matchmode on ;;
+		matchmodeoff) cmd_matchmode off ;;
 		holdon) [ -n "$name" ] || die "choose a game"; cmd_hold on "$name" ;;
 		holdoff) [ -n "$name" ] || die "choose a game"; cmd_hold off "$name" ;;
 		unallow) cmd_allow remove "$arg" ;;
@@ -2232,6 +2323,8 @@ cmd_run() {
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	find_ifaces; build_filter
 	apply_blocklist
+	# match mode: start from QoSmate's own limits, and lift them only once a minute has passed with no match
+	if [ "$MATCH_MODE" = 1 ]; then rm -f "$RUN/mm.state"; ( sleep 8; mm_set tight; mm_later 60 ) >/dev/null 2>&1 & fi
 	# strict games are switched on a few seconds after the engine is listening, never before
 	rm -f "$RUN/hold.ports"; nft flush set inet matchwatch hold_ports 2>/dev/null
 	[ -s "$DATA/hold" ] && [ -s "$DATA/stay" ] && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
@@ -2329,6 +2422,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
+  matchwatch matchmode [on|off]      with QoSmate: its speed limit on during matches, lifted between them
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
@@ -2369,6 +2463,8 @@ case "$1" in
 	blocklist) cmd_blocklist ;;
 	fav) cmd_fav "$2" "$3" ;;
 	allow) cmd_allow "$2" "$3" ;;
+	matchmode) cmd_matchmode "$2" ;;
+	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set tight; rm -f "$RUN/mm.state" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
 	_unseen) cmd_unseen "$2" "$3" ;;
@@ -3992,6 +4088,8 @@ service_triggers() {
 # a stopped MatchWatch must never leave servers held: nothing would be there to let them through
 stop_service() {
 	nft flush set inet matchwatch hold_ports 2>/dev/null
+	# match mode: hand the line back with QoSmate's own limits on
+	/usr/bin/matchwatch _mmstop >/dev/null 2>&1
 	rm -f /tmp/matchwatch/hold.ports
 }
 
@@ -4013,7 +4111,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff"
 
 reply() { # ok(0|1) text
 	json_init
@@ -4138,13 +4236,13 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null, hold: [] };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null, hold: [], mm: null };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // The version this file belongs to (build.py checks it matches the program's). When the router reports
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.29.0", reloading = false;
+var BUILT = "0.30.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4638,6 +4736,15 @@ function strictSection() {
 	}
 	return box;
 }
+// Match mode in a sentence: what QoSmate's speed limit is doing right now
+function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" : k + " kbit"; }
+function mmLine() {
+	var m = D.mm;
+	if (!m || !m.on) return "";
+	if (m.state === "unsupported") return "Match mode is on but cannot work: it needs QoSmate switched on, in one of its cake modes.";
+	if (m.state === "loose") return "Match mode: nothing is being played, so QoSmate's speed limit is lifted and your line runs at full speed. It comes back the moment a match starts.";
+	return "Match mode: QoSmate's limits are on, " + mbit(m.down) + " down and " + mbit(m.up) + " up, keeping your game ahead of everything else. They are lifted " + Math.round((m.hold || 300) / 60) + " minutes after your last match.";
+}
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
 	box.appendChild(h("h2", "Favourites"));
@@ -4670,14 +4777,14 @@ function pageLive() {
 	L.figs = h("dl", { cls: "figs" });
 	L.felt = h("button", { type: "button", cls: "solid big", text: "I felt that" });
 	L.note = h("p", { cls: "note", text: "Press when something feels off, or tap the M key. A few seconds later this shows what the server, your ping and your PC were doing." });
-	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div");
+	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div"); L.mm = h("p", { cls: "note" });
 	L.felt.addEventListener("click", felt);
 	var np = namePrompt(function () { if (page === "live") pageLive(); });
 	if (np) view.appendChild(np);
 	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub);
 	view.appendChild(h("div", { cls: "strip" }, L.cv, legend()));
 	view.appendChild(L.figs);
-	view.appendChild(h("div", { cls: "actions" }, L.felt)); view.appendChild(L.note); view.appendChild(L.marks); view.appendChild(L.actions); view.appendChild(L.last);
+	view.appendChild(h("div", { cls: "actions" }, L.felt)); view.appendChild(L.note); view.appendChild(L.marks); view.appendChild(L.actions); view.appendChild(L.mm); view.appendChild(L.last);
 	L.ip = null; updateLive();
 }
 function felt() {
@@ -4698,6 +4805,7 @@ function updateLive() {
 		L.banner.appendChild(bn);
 	}
 	L.felt.disabled = !s;
+	if (L.mm) L.mm.textContent = mmLine();
 	if (!s) {
 		L.title.textContent = "No match in progress";
 		L.sub.textContent = "Start a game and the server appears here within about ten seconds.";
@@ -5504,7 +5612,16 @@ function pageTools() {
 		view.appendChild(tool("Recent activity", "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent.",
 			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
-		view.appendChild(h("h2", "QoSmate priority"));
+		view.appendChild(h("h2", "QoSmate"));
+		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. QoSmate does the prioritising, with the rates you set in it; MatchWatch only switches its limit, and never changes QoSmate's settings.";
+		if (!hasQos) view.appendChild(tool("Match mode", mmDesc, needQos()));
+		else {
+			var mm = D.mm || {}, again = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1500); };
+			view.appendChild(tool("Match mode", mmDesc,
+				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
+					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
+				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") })));
+		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
 			var fixOut = outBox();
@@ -5545,7 +5662,8 @@ function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#p
 // rebuilding it each time made it flicker, and anything filled in a moment later pushed the rest down.
 var lastSig = "";
 function loadAll(then) {
-	var left = 10, done = function () { if (--left === 0) then(); };
+	var left = 11, done = function () { if (--left === 0) then(); };
+	get("matchmode.json", function (x) { D.mm = x || null; done(); });
 	get("hold.json", function (x) { D.hold = x || []; done(); });
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
@@ -5559,7 +5677,7 @@ function loadAll(then) {
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
 	get("coverage.json", function (x) { D.cov = x || null; done(); });
 }
-function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold]); } catch (e) { return String(Date.now()); } }
+function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold, D.mm]); } catch (e) { return String(Date.now()); } }
 function refresh(force) {
 	loadAll(function () {
 		var sig = sigNow(), changed = sig !== lastSig;
@@ -6633,6 +6751,11 @@ return view.extend({
 
 		list.sort(function (a, b) { return a[1].toLowerCase() < b[1].toLowerCase() ? -1 : 1; });
 		list.forEach(function (e) { o.value(e[0], e[1]); });
+
+		o = s.taboption('general', form.Flag, 'match_mode', _('Match mode (needs QoSmate)'),
+			_('QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, and that limit also slows downloads when nobody is playing. With this on, MatchWatch lifts QoSmate\'s limit between matches and puts it back when a match starts: low latency while you play, full speed the rest of the time. QoSmate does the prioritising, with the rates you set in QoSmate. It needs QoSmate in one of its cake modes.'));
+		o.default = '0';
+		o.rmempty = false;
 
 		o = s.taboption('general', form.Flag, 'pc_score', _('Count your PC towards scores'),
 			_('Off: pauses in what your PC sends are still shown in reports, but never lower the overall score or change the verdict.'));

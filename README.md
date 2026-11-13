@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.29.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.30.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -23,7 +23,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - [Games and voice chat](#games-and-voice-chat)
 - [Sharing with other players](#sharing-with-other-players)
 - [Tools](#tools)
-- [QoSmate](#qosmate)
+- [QoSmate](#qosmate), including match mode
 - [Commands](#commands)
 - [Privacy and security](#privacy-and-security)
 - [Limits](#limits)
@@ -53,6 +53,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Alerts your phone through ntfy: when a match starts, when a poor server is ahead, after a bad match.
 - Tests your line before you queue, traces the route to a server, and grades both from A+ to F.
 - Checks that QoSmate is prioritising your game, and reports what its queues did in each match.
+- Match mode: QoSmate's speed limit on while you play, lifted the rest of the time.
 - Updates itself from GitHub at the press of a button.
 
 **Stays out of the way**
@@ -519,7 +520,17 @@ A trace is one sample, so it shows how far a server is, not how steady the route
 
 ## QoSmate
 
-[QoSmate](https://github.com/hudra0/qosmate) is a separate package that prioritises traffic on OpenWrt. MatchWatch works without it; with it, three things are added. Without it, the QoSmate tools say so and link to it.
+[QoSmate](https://github.com/hudra0/qosmate), by hudra0, is a separate package that prioritises traffic on OpenWrt. It is what gives a game low latency on a busy line; MatchWatch measures, and QoSmate does the work. MatchWatch runs without it; with it, four things are added. Without it, the QoSmate tools say so and link to it.
+
+**Match mode.** QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, so that any queue forms in your router, where QoSmate can put the game first. The cost is that the limit is there all day, slowing downloads when nobody is playing, and on a slow line or a small router that cost is large. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts.
+
+- The limit comes back when the game first reaches for a game server, or at the latest when the match itself starts. It is lifted again five minutes after your last match, so a run of matches stays limited throughout.
+- The limits used are the ones you set in QoSmate. MatchWatch never writes QoSmate's settings and does not restart it; it tells the queue "unlimited" or "QoSmate's rate" and nothing else, so no option you chose in QoSmate is lost and there is no blip.
+- It fails towards QoSmate's own limits. Stopping or restarting MatchWatch, switching match mode off, or anything that restarts QoSmate all leave the limits on.
+- The Live page says which state you are in, and Recent activity records each switch.
+- It needs QoSmate switched on and in one of its cake modes. Turn it on under Tools, Data and settings, or in Settings; over SSH, `matchwatch matchmode on`. It is off by default.
+
+If your router shapes your full line speed without strain and you play most evenings, you gain little: the limit costs you a few percent of download speed. It is worth most on a slow line, or where the router cannot shape as fast as the line runs.
 
 **Did QoSmate do its job in this match?** In one of QoSmate's cake modes, each match report has a "QoSmate in this match" section. MatchWatch reads QoSmate's queue counters when the match starts and ends, and the longest wait every five seconds in between. It says in a sentence whether the game's own queue dropped or delayed anything, and whether other traffic had to be held back while the game went ahead. It only reads. In HFSC mode the section is left out.
 
@@ -555,6 +566,7 @@ Everything is also available over SSH:
 | `matchwatch mark` | Flag this moment, same as the "I felt that" button |
 | `matchwatch qos` | During a match: is the game in QoSmate's top priority queue? |
 | `matchwatch qos fix` / `qos unfix` | Add or remove QoSmate rules that prioritise your gaming device |
+| `matchwatch matchmode` / `matchmode on` / `matchmode off` | With QoSmate: its speed limit on during matches, lifted between them |
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
 | `matchwatch doctor` | Checks that capture works. Changes nothing |
 | `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |
@@ -628,6 +640,12 @@ python3 test/gen.py good | busybox awk -v REPLAY=1 -v DATA=/tmp/none -v RUN=/tmp
 ```
 
 Scenarios: `good`, `badserver`, `clump`, `badpc`, `frag`, `lobby`, `noise`, `fps`, `handshake`, `short`. [`CLAUDE.md`](CLAUDE.md) has the developer notes and the list of what has been proven on a real router.
+
+## Thanks
+
+- [QoSmate](https://github.com/hudra0/qosmate) by hudra0 does the traffic prioritising that MatchWatch checks, records and, in match mode, switches. MatchWatch contains none of its code and changes none of its settings.
+- [Geomate](https://github.com/hudra0/geomate), also by hudra0, showed how well drawing regions on a map works for choosing game servers. MatchWatch's map and strict mode follow its example; the code is MatchWatch's own.
+- [Leaflet](https://leafletjs.com/) (BSD 2-Clause) draws the map, with map pictures from [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
 
 ## Licence
 

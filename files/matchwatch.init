@@ -23,6 +23,8 @@ service_triggers() {
 # a stopped MatchWatch must never leave servers held: nothing would be there to let them through
 stop_service() {
 	nft flush set inet matchwatch hold_ports 2>/dev/null
+	# match mode: hand the line back with QoSmate's own limits on
+	/usr/bin/matchwatch _mmstop >/dev/null 2>&1
 	rm -f /tmp/matchwatch/hold.ports
 }
 

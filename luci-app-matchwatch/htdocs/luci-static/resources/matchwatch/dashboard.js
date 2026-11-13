@@ -20,13 +20,13 @@ shadow.appendChild(sheet); shadow.appendChild(wrap);
 var RO = !!T.readonly;
 function setDark() { wrap.classList.toggle("dark", T.dark ? !!T.dark() : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)); }
 setDark(); sheet.addEventListener("load", function () { setDark(); updateLive(); });
-var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null, hold: [] };
+var D = { st: null, hist: [], servers: [], dcs: [], blocks: [], info: {}, lobby: null, regions: [], favs: [], favInfo: {}, gp: [], cov: null, hold: [], mm: null };
 var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // The version this file belongs to (build.py checks it matches the program's). When the router reports
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.29.0", reloading = false;
+var BUILT = "0.30.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -520,6 +520,15 @@ function strictSection() {
 	}
 	return box;
 }
+// Match mode in a sentence: what QoSmate's speed limit is doing right now
+function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" : k + " kbit"; }
+function mmLine() {
+	var m = D.mm;
+	if (!m || !m.on) return "";
+	if (m.state === "unsupported") return "Match mode is on but cannot work: it needs QoSmate switched on, in one of its cake modes.";
+	if (m.state === "loose") return "Match mode: nothing is being played, so QoSmate's speed limit is lifted and your line runs at full speed. It comes back the moment a match starts.";
+	return "Match mode: QoSmate's limits are on, " + mbit(m.down) + " down and " + mbit(m.up) + " up, keeping your game ahead of everything else. They are lifted " + Math.round((m.hold || 300) / 60) + " minutes after your last match.";
+}
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
 	box.appendChild(h("h2", "Favourites"));
@@ -552,14 +561,14 @@ function pageLive() {
 	L.figs = h("dl", { cls: "figs" });
 	L.felt = h("button", { type: "button", cls: "solid big", text: "I felt that" });
 	L.note = h("p", { cls: "note", text: "Press when something feels off, or tap the M key. A few seconds later this shows what the server, your ping and your PC were doing." });
-	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div");
+	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div"); L.mm = h("p", { cls: "note" });
 	L.felt.addEventListener("click", felt);
 	var np = namePrompt(function () { if (page === "live") pageLive(); });
 	if (np) view.appendChild(np);
 	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub);
 	view.appendChild(h("div", { cls: "strip" }, L.cv, legend()));
 	view.appendChild(L.figs);
-	view.appendChild(h("div", { cls: "actions" }, L.felt)); view.appendChild(L.note); view.appendChild(L.marks); view.appendChild(L.actions); view.appendChild(L.last);
+	view.appendChild(h("div", { cls: "actions" }, L.felt)); view.appendChild(L.note); view.appendChild(L.marks); view.appendChild(L.actions); view.appendChild(L.mm); view.appendChild(L.last);
 	L.ip = null; updateLive();
 }
 function felt() {
@@ -580,6 +589,7 @@ function updateLive() {
 		L.banner.appendChild(bn);
 	}
 	L.felt.disabled = !s;
+	if (L.mm) L.mm.textContent = mmLine();
 	if (!s) {
 		L.title.textContent = "No match in progress";
 		L.sub.textContent = "Start a game and the server appears here within about ten seconds.";
@@ -1386,7 +1396,16 @@ function pageTools() {
 		view.appendChild(tool("Recent activity", "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent.",
 			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
-		view.appendChild(h("h2", "QoSmate priority"));
+		view.appendChild(h("h2", "QoSmate"));
+		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. QoSmate does the prioritising, with the rates you set in it; MatchWatch only switches its limit, and never changes QoSmate's settings.";
+		if (!hasQos) view.appendChild(tool("Match mode", mmDesc, needQos()));
+		else {
+			var mm = D.mm || {}, again = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1500); };
+			view.appendChild(tool("Match mode", mmDesc,
+				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
+					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
+				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") })));
+		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
 			var fixOut = outBox();
@@ -1427,7 +1446,8 @@ function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#p
 // rebuilding it each time made it flicker, and anything filled in a moment later pushed the rest down.
 var lastSig = "";
 function loadAll(then) {
-	var left = 10, done = function () { if (--left === 0) then(); };
+	var left = 11, done = function () { if (--left === 0) then(); };
+	get("matchmode.json", function (x) { D.mm = x || null; done(); });
 	get("hold.json", function (x) { D.hold = x || []; done(); });
 	get("history.json", function (x) { D.hist = x || []; done(); });
 	get("servers.json", function (x) { D.servers = x || []; done(); });
@@ -1441,7 +1461,7 @@ function loadAll(then) {
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
 	get("coverage.json", function (x) { D.cov = x || null; done(); });
 }
-function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold]); } catch (e) { return String(Date.now()); } }
+function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold, D.mm]); } catch (e) { return String(Date.now()); } }
 function refresh(force) {
 	loadAll(function () {
 		var sig = sigNow(), changed = sig !== lastSig;

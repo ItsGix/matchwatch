@@ -47,6 +47,11 @@ return view.extend({
 		list.sort(function (a, b) { return a[1].toLowerCase() < b[1].toLowerCase() ? -1 : 1; });
 		list.forEach(function (e) { o.value(e[0], e[1]); });
 
+		o = s.taboption('general', form.Flag, 'match_mode', _('Match mode (needs QoSmate)'),
+			_('QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, and that limit also slows downloads when nobody is playing. With this on, MatchWatch lifts QoSmate\'s limit between matches and puts it back when a match starts: low latency while you play, full speed the rest of the time. QoSmate does the prioritising, with the rates you set in QoSmate. It needs QoSmate in one of its cake modes.'));
+		o.default = '0';
+		o.rmempty = false;
+
 		o = s.taboption('general', form.Flag, 'pc_score', _('Count your PC towards scores'),
 			_('Off: pauses in what your PC sends are still shown in reports, but never lower the overall score or change the verdict.'));
 		o.default = '1';
