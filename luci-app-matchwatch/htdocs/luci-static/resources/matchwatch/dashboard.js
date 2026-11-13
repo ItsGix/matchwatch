@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.31.1", reloading = false;
+var BUILT = "0.32.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -69,10 +69,11 @@ function toast(msg, err) { var t = shadow.getElementById("toast"); t.textContent
 
 // ---------- talking to the router
 function api(action, arg, extra) {
-	var p = { action: action }, m = /region=([^&]*)/.exec(extra || ""), nm = /name=([^&]*)/.exec(extra || "");
+	var p = { action: action }, m = /region=([^&]*)/.exec(extra || ""), nm = /name=([^&]*)/.exec(extra || ""), dy = /days=([^&]*)/.exec(extra || "");
 	if (arg != null) p.arg = String(arg);
 	if (m) p.region = m[1].replace(/\+/g, " ");
 	if (nm) p.name = nm[1];
+	if (dy) p.days = dy[1];
 	return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, error: "Could not reach the router." }; });
 }
 // A button that runs a command. opts: confirm (label for the second press), danger, solid, done(text)
@@ -522,6 +523,48 @@ function strictSection() {
 	}
 	return box;
 }
+// A label that covers several games which cannot be told apart from the router: everything on Steam's
+// network, for one. For a match under such a label the owner can say which game it was.
+function sharedLabel(name) { return !!name && (/^Steam games/.test(name) || / or /.test(name)); }
+function labelForPort(port) {
+	var hit = null;
+	(D.hold || []).some(function (g) { return String(g.ports).split(" ").some(function (r) { var a = r.split("-"), lo = +a[0], hi = +(a[1] || a[0]); if (port >= lo && port <= hi) { hit = g; return true; } return false; }); });
+	return hit;
+}
+function netWords(label) { return /^Steam games/.test(label) ? "Steam's network" : "a network several games share"; }
+// current: the name this match has now. until: when a name that carries on runs out (0 = never, null = none carrying on)
+function gamePick(start, label, current, until) {
+	var box = h("div", { cls: "gamepick" }), used = [], net = netWords(label), hours = 6;
+	D.hist.forEach(function (m) { if (m.label === label && m.game && m.game !== label && m.game !== current && used.indexOf(m.game) < 0) used.push(m.game); });
+	var inp = h("input", { type: "text", maxlength: "40", placeholder: "Which game is this?", autocomplete: "off", "aria-label": "The game this match was" });
+	inp.value = current || "";
+	var send = function (v, hrs) {
+		v = String(v).replace(/[^A-Za-z0-9 .:-]/g, "").replace(/ +/g, " ").trim().slice(0, 40);
+		Array.prototype.forEach.call(box.querySelectorAll("button"), function (b) { b.disabled = true; });
+		api("matchgame", start, "&name=" + v + (hrs === "" || hrs == null ? "" : "&days=" + hrs)).then(function (j) {
+			Array.prototype.forEach.call(box.querySelectorAll("button"), function (b) { b.disabled = false; });
+			toast(j.out || j.error || "That did not work.", !j.ok);
+			if (j.ok) { inp.value = ""; L.gameKey = null; refresh(true); }
+		});
+	};
+	// how long the name carries on to later matches on the same network
+	var spans = [[0, "This match only"], [6, "The next 6 hours"], ["", "Until I change it"]], sbox = h("div", { cls: "choice", role: "group", "aria-label": "Use this name for" });
+	var setSpan = function (v) { hours = v; Array.prototype.forEach.call(sbox.children, function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-h") === String(v) ? "true" : "false"); }); };
+	spans.forEach(function (x) { var b = h("button", { type: "button", text: x[1], "data-h": String(x[0]) }); b.addEventListener("click", function () { setSpan(x[0]); }); sbox.appendChild(b); });
+	setSpan(until === 0 ? "" : 6);
+	var save = h("button", { type: "button", cls: current ? "" : "solid", text: current ? "Change" : "Save" });
+	save.addEventListener("click", function () { if (!inp.value.trim()) { inp.focus(); return; } send(inp.value, hours); });
+	inp.addEventListener("keydown", function (e) { if (e.key === "Enter") save.click(); });
+	var row = h("div", { cls: "stayform" }, inp, save);
+	used.slice(0, 4).forEach(function (g) { var b = h("button", { type: "button", text: g }); b.addEventListener("click", function () { send(g, hours); }); row.appendChild(b); });
+	if (current) { var back = h("button", { type: "button", text: "Back to " + (/^Steam games/.test(label) ? "Steam games" : "the shared name") }); back.addEventListener("click", function () { send("", ""); }); row.appendChild(back); }
+	var lasts = until == null ? "" : until === 0 ? " Matches there keep this name until you change it." : " Matches there keep this name until " + when(until) + ", then MatchWatch asks again.";
+	box.appendChild(h("p", { cls: "note" }, current ? h("b", "Recorded as " + current + ". ") : h("b", "Which game is this? "),
+		current ? "It is on " + net + ", which many games use." + lasts : "It is on " + net + ", which many games use, so MatchWatch cannot tell them apart. Until you say, it is filed under \"" + (/^Steam games/.test(label) ? "Steam games" : label) + "\"."));
+	box.appendChild(row);
+	box.appendChild(h("div", { cls: "spanrow" }, h("span", "Use this name for"), sbox));
+	return box;
+}
 function waitWords(s) { return !s ? "as soon as a match ends" : (s < 90 ? s + " seconds" : Math.round(s / 60) + " minutes") + " after a match ends"; }
 // Match mode in a sentence: what QoSmate's speed limit is doing right now
 function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" : k + " kbit"; }
@@ -627,11 +670,11 @@ function pageLive() {
 	L.figs = h("dl", { cls: "figs" });
 	L.felt = h("button", { type: "button", cls: "solid big", text: "I felt that" });
 	L.note = h("p", { cls: "note", text: "Press when something feels off, or tap the M key. A few seconds later this shows what the server, your ping and your PC were doing." });
-	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div"); L.mm = h("p", { cls: "note" });
+	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div"); L.mm = h("p", { cls: "note" }); L.game = h("div"); L.gameKey = null;
 	L.felt.addEventListener("click", felt);
 	var np = namePrompt(function () { if (page === "live") pageLive(); });
 	if (np) view.appendChild(np);
-	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub);
+	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub); view.appendChild(L.game);
 	view.appendChild(h("div", { cls: "strip" }, L.cv, legend()));
 	view.appendChild(L.figs);
 	view.appendChild(h("div", { cls: "actions" }, L.felt)); view.appendChild(L.note); view.appendChild(L.marks); view.appendChild(L.actions); view.appendChild(L.mm); view.appendChild(L.last);
@@ -656,6 +699,11 @@ function updateLive() {
 	}
 	L.felt.disabled = !s;
 	if (L.mm) L.mm.textContent = mmLine();
+	if (L.game) {
+		// a match on a network several games share: ask which game, once per match and whenever the answer changes
+		var lg = s && !RO ? labelForPort(s.port) : null, gk = lg && sharedLabel(lg.name) ? s.start + "|" + lg.name + "|" + (lg.as || "") + "|" + (lg.until || 0) : "";
+		if (gk !== L.gameKey && !(L.game.querySelector("input") && L.game.querySelector("input").value && gk)) { L.gameKey = gk; L.game.textContent = ""; if (gk) L.game.appendChild(gamePick(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null)); }
+	}
 	if (!s) {
 		L.title.textContent = "No match in progress";
 		L.sub.textContent = "Start a game and the server appears here within about ten seconds.";
@@ -753,7 +801,7 @@ function pageMatch(id) {
 		if (!m) { view.appendChild(h("h1", "That match is no longer on file")); return; }
 		var where = place(m) || m.ip, sc = cls(m.overall);
 		view.appendChild(h("div", { cls: "head" },
-			h("div", null, h("h1", where), h("p", { cls: "sub", text: (sum && sum.game ? sum.game + ". " : "") + (m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + "." })),
+			h("div", null, h("h1", where), h("p", { cls: "sub", text: (sum && sum.game ? sum.game + (sum.label && sum.label !== sum.game ? ", on " + netWords(sum.label) : "") + ". " : "") + (m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + "." })),
 			h("div", { cls: "score" }, h("b", { cls: sc }, String(m.overall), h("small", "/100")), h("span", { cls: sc, text: grade(m.overall) }))));
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
 		if (m.outside) {
@@ -777,6 +825,7 @@ function pageMatch(id) {
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		a.appendChild(star(m.ip, true));
 		if (!isBlocked(m.ip)) addIf(a, allowBtn(m.ip));
+		if (sum && !RO && sharedLabel(sum.label)) view.appendChild(gamePick(sum.start, sum.label, sum.game !== sum.label ? sum.game : "", null));
 		if (idx >= 0) a.appendChild(act("Remove this match", "forgetmatch", m.start, { confirm: "Confirm: remove this match", done: function (o) { toast(o); location.hash = "#/matches"; } }));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));

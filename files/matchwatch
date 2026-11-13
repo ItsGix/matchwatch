@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.31.1"
+VERSION="0.32.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -371,7 +371,7 @@ export_json() {
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	awk -v MODE=hist_json -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/history.json.tmp" && mv -f "$RUN/www/history.json.tmp" "$RUN/www/history.json"
 	mm_json
-	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\",\"host\":%s}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4, ($6 == 1 ? "true" : "false") } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
+	hold_list | awk -F'\t' -v PF="$DATA/playing" -v NOW="$(date +%s)" 'BEGIN { while ((getline l < PF) > 0) { if (split(l, a, "\t") >= 2 && (a[4] + 0 == 0 || a[4] + 0 >= NOW)) { gsub(/["\\]/, " ", a[2]); as[a[1]] = a[2]; til[a[1]] = a[4] + 0 } } close(PF); printf "[" } { k = $1; gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\",\"host\":%s,\"as\":\"%s\",\"until\":%d}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4, ($6 == 1 ? "true" : "false"), ((k in as) ? as[k] : ""), til[k] + 0 } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
@@ -1558,6 +1558,45 @@ EOF
 	return 0
 }
 
+# ---- which game a match really was, for labels that cover several games (Steam's network, mostly)
+cmd_matchgame() { # <match start> [name] [hours] : record a match as this game. No name: back to the label.
+	# hours says how long the name carries on to later matches under the same label: 0 = this match only,
+	# a number = that many hours from now, nothing = until the owner changes it
+	local start="$1" name="$2" hours="$3" info label ip port now til
+	case "$start" in ""|*[!0-9]*) die "usage: matchwatch matchgame <match start, as in 'matchwatch history'> [game name]" ;; esac
+	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
+	[ "${#name}" -le 40 ] || die "that name is too long"
+	case "$hours" in *[!0-9]*) die "how long is a number of hours" ;; esac
+	[ "${#hours}" -le 4 ] || die "that is too many hours"
+	touch "$DATA/sessions.tsv" "$DATA/matchgames" "$DATA/playing" "$DATA/geo.cache"
+	# the match: one on file, or the one being played
+	set -- $(awk -F'\t' -v s="$start" '$1 == s { print $5, $6; exit }' "$DATA/sessions.tsv")
+	[ -n "$2" ] || set -- $(sed -n 's/.*"ip":"\([0-9.]*\)","port":\([0-9]*\),"device":"[^"]*","age":[0-9]*,"start":'"$start"'[,}].*/\1 \2/p' "$RUN/www/status.json" 2>/dev/null)
+	ip="$1"; port="$2"
+	[ -n "$port" ] || die "no match started at $start"
+	info="$(awk -F'\t' -v ip="$ip" '$1 == ip { l = $7 " " $8 " " $9 } END { print l }' "$DATA/geo.cache")"
+	label="$(label_kind "$port" "$info" name)"
+	[ -n "$label" ] || die "that match is on a port nobody has named. Name the game under Tools, Games."
+	now="$(date +%s)"
+	awk -F'\t' -v s="$start" '$1 != s' "$DATA/matchgames" | tail -n 4999 > "$DATA/matchgames.tmp"; mv -f "$DATA/matchgames.tmp" "$DATA/matchgames"
+	# "this match only" leaves whatever name is carrying on as it is
+	if [ "$hours" != 0 ] || [ -z "$name" ]; then awk -F'\t' -v l="$label" '$1 != l' "$DATA/playing" > "$DATA/playing.tmp"; mv -f "$DATA/playing.tmp" "$DATA/playing"; fi
+	if [ -n "$name" ]; then
+		printf '%s\t%s\n' "$start" "$name" >> "$DATA/matchgames"
+		if [ "$hours" = 0 ]; then export_json; echo "Recorded as $name, for this match only."
+		else
+			til=0; [ -n "$hours" ] && til=$((now + hours * 3600))
+			printf '%s\t%s\t%s\t%s\n' "$label" "$name" "$now" "$til" >> "$DATA/playing"
+			export_json
+			if [ -n "$hours" ]; then echo "Recorded as $name. Matches on the same network in the next $hours hour(s) are recorded as $name too; after that MatchWatch asks again."
+			else echo "Recorded as $name. Your following matches on the same network are recorded as $name too, until you choose another."; fi
+		fi
+	else
+		export_json
+		echo "Back to \"$label\" for that match and the ones that follow."
+	fi
+}
+
 cmd_hold() { # on <game> | off <game> | (nothing = list)
 	local name="$2" row
 	mkdir -p "$DATA"; touch "$DATA/hold"
@@ -1783,7 +1822,7 @@ cmd_clear_history() { # forget every recorded match. Blocks, the stay pool and s
 	n="$(wc -l < "$DATA/sessions.tsv")"
 	: > "$DATA/sessions.tsv"
 	for f in "$DATA"/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
-	rm -f "$DATA/last.txt" "$RUN/last.txt"
+	rm -f "$DATA/last.txt" "$RUN/last.txt" "$DATA/matchgames"
 	[ -d "$RUN/www" ] && export_json
 	# the running engine still remembers the old ratings, so start it afresh
 	[ -z "$CONF" ] && [ -x /etc/init.d/matchwatch ] && ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 &
@@ -2005,6 +2044,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		fav) cmd_fav add "$arg" ;;
 		allow) cmd_allow add "$arg" ;;
 		matchmodeon) cmd_matchmode on ;;
+		matchgame) [ -n "$arg" ] || die "choose a match"; cmd_matchgame "$arg" "$name" "$days" ;;
 		matchmodeoff) cmd_matchmode off ;;
 		# four speeds in kbit from the dashboard, as playing-down/playing-up/between-down/between-up
 		matchmodeset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
@@ -2424,6 +2464,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
+  matchwatch matchgame <start> [name]   say which game a match was, when its label covers several (Steam's network)
   matchwatch matchmode [on|off]      with QoSmate: one pair of speeds while you play, another between matches
   matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
                                seconds is how long after a match the between-matches speeds wait (30 unless you say)
@@ -2468,6 +2509,7 @@ case "$1" in
 	fav) cmd_fav "$2" "$3" ;;
 	allow) cmd_allow "$2" "$3" ;;
 	matchmode) shift; cmd_matchmode "$@" ;;
+	matchgame) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_matchgame "$c" "$*" ;;
 	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set own; rm -f "$RUN/mm.state" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;

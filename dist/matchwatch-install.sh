@@ -23,7 +23,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/hold" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/matchgames" "$R/etc/matchwatch/playing" "$R/etc/matchwatch/hold" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.31.1"
+VERSION="0.32.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -426,7 +426,7 @@ export_json() {
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	awk -v MODE=hist_json -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/history.json.tmp" && mv -f "$RUN/www/history.json.tmp" "$RUN/www/history.json"
 	mm_json
-	hold_list | awk -F'\t' 'BEGIN { printf "[" } { gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\",\"host\":%s}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4, ($6 == 1 ? "true" : "false") } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
+	hold_list | awk -F'\t' -v PF="$DATA/playing" -v NOW="$(date +%s)" 'BEGIN { while ((getline l < PF) > 0) { if (split(l, a, "\t") >= 2 && (a[4] + 0 == 0 || a[4] + 0 >= NOW)) { gsub(/["\\]/, " ", a[2]); as[a[1]] = a[2]; til[a[1]] = a[4] + 0 } } close(PF); printf "[" } { k = $1; gsub(/["\\]/, " ", $1); printf "%s{\"name\":\"%s\",\"on\":%s,\"ok\":%s,\"ports\":\"%s\",\"host\":%s,\"as\":\"%s\",\"until\":%d}", (n++ ? "," : ""), $1, ($2 == 1 ? "true" : "false"), ($3 == 1 ? "true" : "false"), $4, ($6 == 1 ? "true" : "false"), ((k in as) ? as[k] : ""), til[k] + 0 } END { print "]" }' > "$RUN/www/hold.json.tmp" && mv -f "$RUN/www/hold.json.tmp" "$RUN/www/hold.json"
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
@@ -1613,6 +1613,45 @@ EOF
 	return 0
 }
 
+# ---- which game a match really was, for labels that cover several games (Steam's network, mostly)
+cmd_matchgame() { # <match start> [name] [hours] : record a match as this game. No name: back to the label.
+	# hours says how long the name carries on to later matches under the same label: 0 = this match only,
+	# a number = that many hours from now, nothing = until the owner changes it
+	local start="$1" name="$2" hours="$3" info label ip port now til
+	case "$start" in ""|*[!0-9]*) die "usage: matchwatch matchgame <match start, as in 'matchwatch history'> [game name]" ;; esac
+	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
+	[ "${#name}" -le 40 ] || die "that name is too long"
+	case "$hours" in *[!0-9]*) die "how long is a number of hours" ;; esac
+	[ "${#hours}" -le 4 ] || die "that is too many hours"
+	touch "$DATA/sessions.tsv" "$DATA/matchgames" "$DATA/playing" "$DATA/geo.cache"
+	# the match: one on file, or the one being played
+	set -- $(awk -F'\t' -v s="$start" '$1 == s { print $5, $6; exit }' "$DATA/sessions.tsv")
+	[ -n "$2" ] || set -- $(sed -n 's/.*"ip":"\([0-9.]*\)","port":\([0-9]*\),"device":"[^"]*","age":[0-9]*,"start":'"$start"'[,}].*/\1 \2/p' "$RUN/www/status.json" 2>/dev/null)
+	ip="$1"; port="$2"
+	[ -n "$port" ] || die "no match started at $start"
+	info="$(awk -F'\t' -v ip="$ip" '$1 == ip { l = $7 " " $8 " " $9 } END { print l }' "$DATA/geo.cache")"
+	label="$(label_kind "$port" "$info" name)"
+	[ -n "$label" ] || die "that match is on a port nobody has named. Name the game under Tools, Games."
+	now="$(date +%s)"
+	awk -F'\t' -v s="$start" '$1 != s' "$DATA/matchgames" | tail -n 4999 > "$DATA/matchgames.tmp"; mv -f "$DATA/matchgames.tmp" "$DATA/matchgames"
+	# "this match only" leaves whatever name is carrying on as it is
+	if [ "$hours" != 0 ] || [ -z "$name" ]; then awk -F'\t' -v l="$label" '$1 != l' "$DATA/playing" > "$DATA/playing.tmp"; mv -f "$DATA/playing.tmp" "$DATA/playing"; fi
+	if [ -n "$name" ]; then
+		printf '%s\t%s\n' "$start" "$name" >> "$DATA/matchgames"
+		if [ "$hours" = 0 ]; then export_json; echo "Recorded as $name, for this match only."
+		else
+			til=0; [ -n "$hours" ] && til=$((now + hours * 3600))
+			printf '%s\t%s\t%s\t%s\n' "$label" "$name" "$now" "$til" >> "$DATA/playing"
+			export_json
+			if [ -n "$hours" ]; then echo "Recorded as $name. Matches on the same network in the next $hours hour(s) are recorded as $name too; after that MatchWatch asks again."
+			else echo "Recorded as $name. Your following matches on the same network are recorded as $name too, until you choose another."; fi
+		fi
+	else
+		export_json
+		echo "Back to \"$label\" for that match and the ones that follow."
+	fi
+}
+
 cmd_hold() { # on <game> | off <game> | (nothing = list)
 	local name="$2" row
 	mkdir -p "$DATA"; touch "$DATA/hold"
@@ -1838,7 +1877,7 @@ cmd_clear_history() { # forget every recorded match. Blocks, the stay pool and s
 	n="$(wc -l < "$DATA/sessions.tsv")"
 	: > "$DATA/sessions.tsv"
 	for f in "$DATA"/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
-	rm -f "$DATA/last.txt" "$RUN/last.txt"
+	rm -f "$DATA/last.txt" "$RUN/last.txt" "$DATA/matchgames"
 	[ -d "$RUN/www" ] && export_json
 	# the running engine still remembers the old ratings, so start it afresh
 	[ -z "$CONF" ] && [ -x /etc/init.d/matchwatch ] && ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 &
@@ -2060,6 +2099,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		fav) cmd_fav add "$arg" ;;
 		allow) cmd_allow add "$arg" ;;
 		matchmodeon) cmd_matchmode on ;;
+		matchgame) [ -n "$arg" ] || die "choose a match"; cmd_matchgame "$arg" "$name" "$days" ;;
 		matchmodeoff) cmd_matchmode off ;;
 		# four speeds in kbit from the dashboard, as playing-down/playing-up/between-down/between-up
 		matchmodeset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
@@ -2479,6 +2519,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
+  matchwatch matchgame <start> [name]   say which game a match was, when its label covers several (Steam's network)
   matchwatch matchmode [on|off]      with QoSmate: one pair of speeds while you play, another between matches
   matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
                                seconds is how long after a match the between-matches speeds wait (30 unless you say)
@@ -2523,6 +2564,7 @@ case "$1" in
 	fav) cmd_fav "$2" "$3" ;;
 	allow) cmd_allow "$2" "$3" ;;
 	matchmode) shift; cmd_matchmode "$@" ;;
+	matchgame) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_matchgame "$c" "$*" ;;
 	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set own; rm -f "$RUN/mm.state" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
@@ -3479,6 +3521,11 @@ BEGIN {
 	FS = "\t"
 	if (STAYF != "") { while ((getline l < STAYF) > 0) { if (split(l, rr, "\t") >= 4) { nsp++; for (j = 1; j <= 5; j++) SP[nsp, j] = rr[j] } } close(STAYF) }
 	load_games(GAMESL); load_games(GAMES)
+	if (GAMESL != "") {
+		l = GAMESL; sub(/games\.local$/, "", l); MGF = l "matchgames"; STKF = l "playing"
+		while ((getline rr0 < MGF) > 0) { if (split(rr0, rr, "\t") >= 2 && rr[2] != "") MG[rr[1]] = rr[2] } close(MGF)
+		while ((getline rr0 < STKF) > 0) { if (split(rr0, rr, "\t") >= 3 && rr[2] != "") { STK[rr[1]] = rr[2]; STKt[rr[1]] = rr[3] + 0; STKu[rr[1]] = rr[4] + 0 } } close(STKF)
+	}
 	if (REG != "") { while ((getline l < REG) > 0) { nreg++; split(l, rr, "\t"); for (j = 1; j <= 11; j++) RG[nreg, j] = rr[j] } close(REG) }
 	if (BLOCK != "") {
 		while ((getline l < BLOCK) > 0) {
@@ -3513,7 +3560,7 @@ NF >= 39 {
 	if (io == 0 && is_game_port($6, $9 " " $10) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
 	if (io == 1 && $37 == 1) IN_hist[++nin] = $36
 	if ($37 == 1) { hh = strftime("%H", $1) + 0; HR_n[hh]++; HR_s[hh] += $36 }
-	g = game_of($6, $9 " " $10); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
+	g = named($1, $6, $9 " " $10); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
 	if (nreg > 0) { rc = region_of($40, $41); if (rc != "") { RP_n[rc]++; if ($37 == 1) { RP_rn[rc]++; RP_rs[rc] += $36 } if ($22 != "-") { RP_p[rc] += $22; RP_pn[rc]++ } } }
 	if ($22 != "-") { D_ping[dk] += $22; D_pingn[dk]++ }
 	if (!((dk, ip) in D_hasip)) { D_hasip[dk, ip] = 1; D_srv[dk]++ }
@@ -3560,6 +3607,16 @@ function which_label(port, host,   i, k, a, lo, r, w, n, j, ok) {
 	return 0
 }
 function game_of(port, host,   i) { i = which_label(port, host); return i ? GM[i, 1] : "Game on port " port }
+# The name a match goes by. Some labels cover several games that cannot be told apart from the router
+# (everything on Steam's network arrives on the same ports from the same servers), so the owner can say
+# which game a match was (MG, by match start), and that name then holds for later matches under the same
+# label, for as long as they chose: until a time, or until they say otherwise (STK, by label, from a moment on).
+function named(start, port, host,   lab) {
+	if (start in MG) return MG[start]
+	lab = game_of(port, host)
+	if ((lab in STK) && start + 0 >= STKt[lab] && (STKu[lab] == 0 || start + 0 <= STKu[lab])) return STK[lab]
+	return lab
+}
 function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3]; GM[ngame, 4] = g[4] } close(file) }
 # is this server labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
 function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice") : 0 }
@@ -3580,7 +3637,7 @@ END {
 	if (MODE == "gameplaces") {
 		for (i = 1; i <= n; i++) {
 			if (!is_game_port(R[i, 6], R[i, 9] " " R[i, 10])) continue
-			g = game_of(R[i, 6], R[i, 9] " " R[i, 10]); k = g SUBSEP p24(R[i, 5])
+			g = named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10]); k = g SUBSEP p24(R[i, 5])
 			if (!(k in GPs)) { GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 1 }
 			GPcity[k] = R[i, 8]; GPcc[k] = R[i, 7]; GPorg[k] = R[i, 9]; if (known(R[i, 40]) && known(R[i, 41])) { GPla[k] = R[i, 40]; GPlo[k] = R[i, 41] }
 			GPn[k]++; if (R[i, 37] == 1) { GPrn[k]++; GPrs[k] += R[i, 36] }
@@ -3644,7 +3701,7 @@ END {
 		shown = 0
 		for (i = n; i >= 1 && shown < lim; i--) {
 			if (only != "" && R[i, 5] != only) continue
-			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(game_of(R[i, 6], R[i, 9] " " R[i, 10]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
+			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
 			shown++
 		}
 		exit
@@ -3684,7 +3741,7 @@ END {
 			if (R[i, 35] > R[best, 35]) best = i
 			if (R[i, 35] < R[worst, 35]) worst = i
 			FC[R[i, 38]]++
-			gg = game_of(R[i, 6], R[i, 9] " " R[i, 10]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
+			gg = named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
 		}
 		gs = ""; for (i = 1; i <= nrg; i++) gs = gs (i > 1 ? ", " : "") rgo[i] " (" RG_n[rgo[i]] ")"
 		printf "Latest session: %d match%s, %d minutes of play, %s to %s.\nGames: %s.\n", c, (c == 1 ? "" : "es"), secs / 60, strftime("%d %b %H:%M", R[first, 1]), strftime("%H:%M", R[n, 1] + R[n, 2]), gs
@@ -3798,7 +3855,7 @@ END {
 		printf "["
 		c = 0
 		for (i = n; i >= 1 && c < 200; i--) {
-			printf "%s{\"game\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(game_of(R[i, 6], R[i, 9] " " R[i, 10])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
+			printf "%s{\"game\":%s,\"label\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10])), q(game_of(R[i, 6], R[i, 9] " " R[i, 10])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
 			printf ",\"tick\":%s,\"jit\":%s,\"late\":%s,\"lost\":%s,\"clump\":%s,\"freeze\":%s,\"rough\":%s", jn(R[i, 11]), jn(R[i, 12]), jn(R[i, 13]), jn(R[i, 14]), jn(R[i, 15]), jn(R[i, 16]), jn(R[i, 17])
 			printf ",\"uprate\":%s,\"upjit\":%s,\"hitch\":%s,\"farkind\":%s,\"ping\":%s,\"pingjit\":%s,\"pingloss\":%s", jn(R[i, 18]), jn(R[i, 19]), jn(R[i, 20]), q(R[i, 21]), jn(R[i, 22]), jn(R[i, 23]), jn(R[i, 24])
 			printf ",\"nearping\":%s,\"nearjit\":%s,\"nearloss\":%s,\"lanping\":%s", jn(R[i, 25]), jn(R[i, 26]), jn(R[i, 27]), jn(R[i, 28])
@@ -4174,7 +4231,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame"
 
 reply() { # ok(0|1) text
 	json_init
@@ -4307,7 +4364,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.31.1", reloading = false;
+var BUILT = "0.32.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4348,10 +4405,11 @@ function toast(msg, err) { var t = shadow.getElementById("toast"); t.textContent
 
 // ---------- talking to the router
 function api(action, arg, extra) {
-	var p = { action: action }, m = /region=([^&]*)/.exec(extra || ""), nm = /name=([^&]*)/.exec(extra || "");
+	var p = { action: action }, m = /region=([^&]*)/.exec(extra || ""), nm = /name=([^&]*)/.exec(extra || ""), dy = /days=([^&]*)/.exec(extra || "");
 	if (arg != null) p.arg = String(arg);
 	if (m) p.region = m[1].replace(/\+/g, " ");
 	if (nm) p.name = nm[1];
+	if (dy) p.days = dy[1];
 	return T.act(p).then(function (j) { return j || {}; }, function () { return { ok: false, error: "Could not reach the router." }; });
 }
 // A button that runs a command. opts: confirm (label for the second press), danger, solid, done(text)
@@ -4801,6 +4859,48 @@ function strictSection() {
 	}
 	return box;
 }
+// A label that covers several games which cannot be told apart from the router: everything on Steam's
+// network, for one. For a match under such a label the owner can say which game it was.
+function sharedLabel(name) { return !!name && (/^Steam games/.test(name) || / or /.test(name)); }
+function labelForPort(port) {
+	var hit = null;
+	(D.hold || []).some(function (g) { return String(g.ports).split(" ").some(function (r) { var a = r.split("-"), lo = +a[0], hi = +(a[1] || a[0]); if (port >= lo && port <= hi) { hit = g; return true; } return false; }); });
+	return hit;
+}
+function netWords(label) { return /^Steam games/.test(label) ? "Steam's network" : "a network several games share"; }
+// current: the name this match has now. until: when a name that carries on runs out (0 = never, null = none carrying on)
+function gamePick(start, label, current, until) {
+	var box = h("div", { cls: "gamepick" }), used = [], net = netWords(label), hours = 6;
+	D.hist.forEach(function (m) { if (m.label === label && m.game && m.game !== label && m.game !== current && used.indexOf(m.game) < 0) used.push(m.game); });
+	var inp = h("input", { type: "text", maxlength: "40", placeholder: "Which game is this?", autocomplete: "off", "aria-label": "The game this match was" });
+	inp.value = current || "";
+	var send = function (v, hrs) {
+		v = String(v).replace(/[^A-Za-z0-9 .:-]/g, "").replace(/ +/g, " ").trim().slice(0, 40);
+		Array.prototype.forEach.call(box.querySelectorAll("button"), function (b) { b.disabled = true; });
+		api("matchgame", start, "&name=" + v + (hrs === "" || hrs == null ? "" : "&days=" + hrs)).then(function (j) {
+			Array.prototype.forEach.call(box.querySelectorAll("button"), function (b) { b.disabled = false; });
+			toast(j.out || j.error || "That did not work.", !j.ok);
+			if (j.ok) { inp.value = ""; L.gameKey = null; refresh(true); }
+		});
+	};
+	// how long the name carries on to later matches on the same network
+	var spans = [[0, "This match only"], [6, "The next 6 hours"], ["", "Until I change it"]], sbox = h("div", { cls: "choice", role: "group", "aria-label": "Use this name for" });
+	var setSpan = function (v) { hours = v; Array.prototype.forEach.call(sbox.children, function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-h") === String(v) ? "true" : "false"); }); };
+	spans.forEach(function (x) { var b = h("button", { type: "button", text: x[1], "data-h": String(x[0]) }); b.addEventListener("click", function () { setSpan(x[0]); }); sbox.appendChild(b); });
+	setSpan(until === 0 ? "" : 6);
+	var save = h("button", { type: "button", cls: current ? "" : "solid", text: current ? "Change" : "Save" });
+	save.addEventListener("click", function () { if (!inp.value.trim()) { inp.focus(); return; } send(inp.value, hours); });
+	inp.addEventListener("keydown", function (e) { if (e.key === "Enter") save.click(); });
+	var row = h("div", { cls: "stayform" }, inp, save);
+	used.slice(0, 4).forEach(function (g) { var b = h("button", { type: "button", text: g }); b.addEventListener("click", function () { send(g, hours); }); row.appendChild(b); });
+	if (current) { var back = h("button", { type: "button", text: "Back to " + (/^Steam games/.test(label) ? "Steam games" : "the shared name") }); back.addEventListener("click", function () { send("", ""); }); row.appendChild(back); }
+	var lasts = until == null ? "" : until === 0 ? " Matches there keep this name until you change it." : " Matches there keep this name until " + when(until) + ", then MatchWatch asks again.";
+	box.appendChild(h("p", { cls: "note" }, current ? h("b", "Recorded as " + current + ". ") : h("b", "Which game is this? "),
+		current ? "It is on " + net + ", which many games use." + lasts : "It is on " + net + ", which many games use, so MatchWatch cannot tell them apart. Until you say, it is filed under \"" + (/^Steam games/.test(label) ? "Steam games" : label) + "\"."));
+	box.appendChild(row);
+	box.appendChild(h("div", { cls: "spanrow" }, h("span", "Use this name for"), sbox));
+	return box;
+}
 function waitWords(s) { return !s ? "as soon as a match ends" : (s < 90 ? s + " seconds" : Math.round(s / 60) + " minutes") + " after a match ends"; }
 // Match mode in a sentence: what QoSmate's speed limit is doing right now
 function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" : k + " kbit"; }
@@ -4906,11 +5006,11 @@ function pageLive() {
 	L.figs = h("dl", { cls: "figs" });
 	L.felt = h("button", { type: "button", cls: "solid big", text: "I felt that" });
 	L.note = h("p", { cls: "note", text: "Press when something feels off, or tap the M key. A few seconds later this shows what the server, your ping and your PC were doing." });
-	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div"); L.mm = h("p", { cls: "note" });
+	L.marks = h("div"); L.actions = h("div", { cls: "actions" }); L.last = h("div"); L.mm = h("p", { cls: "note" }); L.game = h("div"); L.gameKey = null;
 	L.felt.addEventListener("click", felt);
 	var np = namePrompt(function () { if (page === "live") pageLive(); });
 	if (np) view.appendChild(np);
-	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub);
+	view.appendChild(L.banner); view.appendChild(L.title); view.appendChild(L.sub); view.appendChild(L.game);
 	view.appendChild(h("div", { cls: "strip" }, L.cv, legend()));
 	view.appendChild(L.figs);
 	view.appendChild(h("div", { cls: "actions" }, L.felt)); view.appendChild(L.note); view.appendChild(L.marks); view.appendChild(L.actions); view.appendChild(L.mm); view.appendChild(L.last);
@@ -4935,6 +5035,11 @@ function updateLive() {
 	}
 	L.felt.disabled = !s;
 	if (L.mm) L.mm.textContent = mmLine();
+	if (L.game) {
+		// a match on a network several games share: ask which game, once per match and whenever the answer changes
+		var lg = s && !RO ? labelForPort(s.port) : null, gk = lg && sharedLabel(lg.name) ? s.start + "|" + lg.name + "|" + (lg.as || "") + "|" + (lg.until || 0) : "";
+		if (gk !== L.gameKey && !(L.game.querySelector("input") && L.game.querySelector("input").value && gk)) { L.gameKey = gk; L.game.textContent = ""; if (gk) L.game.appendChild(gamePick(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null)); }
+	}
 	if (!s) {
 		L.title.textContent = "No match in progress";
 		L.sub.textContent = "Start a game and the server appears here within about ten seconds.";
@@ -5032,7 +5137,7 @@ function pageMatch(id) {
 		if (!m) { view.appendChild(h("h1", "That match is no longer on file")); return; }
 		var where = place(m) || m.ip, sc = cls(m.overall);
 		view.appendChild(h("div", { cls: "head" },
-			h("div", null, h("h1", where), h("p", { cls: "sub", text: (sum && sum.game ? sum.game + ". " : "") + (m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + "." })),
+			h("div", null, h("h1", where), h("p", { cls: "sub", text: (sum && sum.game ? sum.game + (sum.label && sum.label !== sum.game ? ", on " + netWords(sum.label) : "") + ". " : "") + (m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + "." })),
 			h("div", { cls: "score" }, h("b", { cls: sc }, String(m.overall), h("small", "/100")), h("span", { cls: sc, text: grade(m.overall) }))));
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
 		if (m.outside) {
@@ -5056,6 +5161,7 @@ function pageMatch(id) {
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		a.appendChild(star(m.ip, true));
 		if (!isBlocked(m.ip)) addIf(a, allowBtn(m.ip));
+		if (sum && !RO && sharedLabel(sum.label)) view.appendChild(gamePick(sum.start, sum.label, sum.game !== sum.label ? sum.game : "", null));
 		if (idx >= 0) a.appendChild(act("Remove this match", "forgetmatch", m.start, { confirm: "Confirm: remove this match", done: function (o) { toast(o); location.hash = "#/matches"; } }));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
@@ -6086,6 +6192,13 @@ ol.steps li { margin: 8px 0; }
 .choice + small { margin-top: 8px; }
 .speedcard .dir.after { display: block; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); font-weight: 700; font-size: 0.92rem; }
 .speedcard .dir.after + .choice { flex-wrap: wrap; }
+/* which game a match was, for a network several games share */
+.gamepick { margin: 12px 0 4px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--grid); border-left: 4px solid var(--pen); border-radius: var(--r2); max-width: 760px; }
+.gamepick .note { margin: 0 0 10px; }
+.gamepick .note b { color: var(--ink); }
+.gamepick .stayform { max-width: none; }
+.gamepick .spanrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 0.88rem; }
+.gamepick .spanrow .choice { margin-top: 0; flex-wrap: wrap; }
 MW_FILE_END_15
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css.new"
 mv -f "$R/www/luci-static/resources/matchwatch/dashboard.css.new" "$R/www/luci-static/resources/matchwatch/dashboard.css"

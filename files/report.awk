@@ -24,6 +24,11 @@ BEGIN {
 	FS = "\t"
 	if (STAYF != "") { while ((getline l < STAYF) > 0) { if (split(l, rr, "\t") >= 4) { nsp++; for (j = 1; j <= 5; j++) SP[nsp, j] = rr[j] } } close(STAYF) }
 	load_games(GAMESL); load_games(GAMES)
+	if (GAMESL != "") {
+		l = GAMESL; sub(/games\.local$/, "", l); MGF = l "matchgames"; STKF = l "playing"
+		while ((getline rr0 < MGF) > 0) { if (split(rr0, rr, "\t") >= 2 && rr[2] != "") MG[rr[1]] = rr[2] } close(MGF)
+		while ((getline rr0 < STKF) > 0) { if (split(rr0, rr, "\t") >= 3 && rr[2] != "") { STK[rr[1]] = rr[2]; STKt[rr[1]] = rr[3] + 0; STKu[rr[1]] = rr[4] + 0 } } close(STKF)
+	}
 	if (REG != "") { while ((getline l < REG) > 0) { nreg++; split(l, rr, "\t"); for (j = 1; j <= 11; j++) RG[nreg, j] = rr[j] } close(REG) }
 	if (BLOCK != "") {
 		while ((getline l < BLOCK) > 0) {
@@ -58,7 +63,7 @@ NF >= 39 {
 	if (io == 0 && is_game_port($6, $9 " " $10) && !(p24(ip) in OUT_seen)) { OUT_seen[p24(ip)] = 1; OUT[++nout] = p24(ip) ".0/24" }
 	if (io == 1 && $37 == 1) IN_hist[++nin] = $36
 	if ($37 == 1) { hh = strftime("%H", $1) + 0; HR_n[hh]++; HR_s[hh] += $36 }
-	g = game_of($6, $9 " " $10); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
+	g = named($1, $6, $9 " " $10); if (!(g in G_n)) gorder[++ngs] = g; G_n[g]++; G_secs[g] += $2; G_port[g] = $6
 	if (nreg > 0) { rc = region_of($40, $41); if (rc != "") { RP_n[rc]++; if ($37 == 1) { RP_rn[rc]++; RP_rs[rc] += $36 } if ($22 != "-") { RP_p[rc] += $22; RP_pn[rc]++ } } }
 	if ($22 != "-") { D_ping[dk] += $22; D_pingn[dk]++ }
 	if (!((dk, ip) in D_hasip)) { D_hasip[dk, ip] = 1; D_srv[dk]++ }
@@ -105,6 +110,16 @@ function which_label(port, host,   i, k, a, lo, r, w, n, j, ok) {
 	return 0
 }
 function game_of(port, host,   i) { i = which_label(port, host); return i ? GM[i, 1] : "Game on port " port }
+# The name a match goes by. Some labels cover several games that cannot be told apart from the router
+# (everything on Steam's network arrives on the same ports from the same servers), so the owner can say
+# which game a match was (MG, by match start), and that name then holds for later matches under the same
+# label, for as long as they chose: until a time, or until they say otherwise (STK, by label, from a moment on).
+function named(start, port, host,   lab) {
+	if (start in MG) return MG[start]
+	lab = game_of(port, host)
+	if ((lab in STK) && start + 0 >= STKt[lab] && (STKu[lab] == 0 || start + 0 <= STKu[lab])) return STK[lab]
+	return lab
+}
 function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3]; GM[ngame, 4] = g[4] } close(file) }
 # is this server labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
 function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice") : 0 }
@@ -125,7 +140,7 @@ END {
 	if (MODE == "gameplaces") {
 		for (i = 1; i <= n; i++) {
 			if (!is_game_port(R[i, 6], R[i, 9] " " R[i, 10])) continue
-			g = game_of(R[i, 6], R[i, 9] " " R[i, 10]); k = g SUBSEP p24(R[i, 5])
+			g = named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10]); k = g SUBSEP p24(R[i, 5])
 			if (!(k in GPs)) { GPs[k] = 1; gpo[++ngp] = k; GPm[k] = 1 }
 			GPcity[k] = R[i, 8]; GPcc[k] = R[i, 7]; GPorg[k] = R[i, 9]; if (known(R[i, 40]) && known(R[i, 41])) { GPla[k] = R[i, 40]; GPlo[k] = R[i, 41] }
 			GPn[k]++; if (R[i, 37] == 1) { GPrn[k]++; GPrs[k] += R[i, 36] }
@@ -189,7 +204,7 @@ END {
 		shown = 0
 		for (i = n; i >= 1 && shown < lim; i--) {
 			if (only != "" && R[i, 5] != only) continue
-			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(game_of(R[i, 6], R[i, 9] " " R[i, 10]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
+			printf "%-16s %-18s %-16s %-18s %5s %6s %6s %6s %7s %6s  %s\n", strftime("%Y-%m-%d %H:%M", R[i, 1]), substr(named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10]), 1, 18), R[i, 5], substr(where(i), 1, 18), R[i, 11], R[i, 12], R[i, 14], R[i, 22], R[i, 35], R[i, 36], R[i, 38]
 			shown++
 		}
 		exit
@@ -229,7 +244,7 @@ END {
 			if (R[i, 35] > R[best, 35]) best = i
 			if (R[i, 35] < R[worst, 35]) worst = i
 			FC[R[i, 38]]++
-			gg = game_of(R[i, 6], R[i, 9] " " R[i, 10]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
+			gg = named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10]); if (!(gg in RG_n)) rgo[++nrg] = gg; RG_n[gg]++
 		}
 		gs = ""; for (i = 1; i <= nrg; i++) gs = gs (i > 1 ? ", " : "") rgo[i] " (" RG_n[rgo[i]] ")"
 		printf "Latest session: %d match%s, %d minutes of play, %s to %s.\nGames: %s.\n", c, (c == 1 ? "" : "es"), secs / 60, strftime("%d %b %H:%M", R[first, 1]), strftime("%H:%M", R[n, 1] + R[n, 2]), gs
@@ -343,7 +358,7 @@ END {
 		printf "["
 		c = 0
 		for (i = n; i >= 1 && c < 200; i--) {
-			printf "%s{\"game\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(game_of(R[i, 6], R[i, 9] " " R[i, 10])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
+			printf "%s{\"game\":%s,\"label\":%s,\"start\":%d,\"dur\":%d,\"analysed\":%d,\"device\":%s,\"ip\":%s,\"port\":%d,\"cc\":%s,\"city\":%s,\"org\":%s,\"asn\":%s", (c ? "," : ""), q(named(R[i, 1], R[i, 6], R[i, 9] " " R[i, 10])), q(game_of(R[i, 6], R[i, 9] " " R[i, 10])), R[i, 1], R[i, 2], R[i, 3], q(R[i, 4]), q(R[i, 5]), R[i, 6], q(R[i, 7]), q(R[i, 8]), q(R[i, 9]), q(R[i, 10])
 			printf ",\"tick\":%s,\"jit\":%s,\"late\":%s,\"lost\":%s,\"clump\":%s,\"freeze\":%s,\"rough\":%s", jn(R[i, 11]), jn(R[i, 12]), jn(R[i, 13]), jn(R[i, 14]), jn(R[i, 15]), jn(R[i, 16]), jn(R[i, 17])
 			printf ",\"uprate\":%s,\"upjit\":%s,\"hitch\":%s,\"farkind\":%s,\"ping\":%s,\"pingjit\":%s,\"pingloss\":%s", jn(R[i, 18]), jn(R[i, 19]), jn(R[i, 20]), q(R[i, 21]), jn(R[i, 22]), jn(R[i, 23]), jn(R[i, 24])
 			printf ",\"nearping\":%s,\"nearjit\":%s,\"nearloss\":%s,\"lanping\":%s", jn(R[i, 25]), jn(R[i, 26]), jn(R[i, 27]), jn(R[i, 28])

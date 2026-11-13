@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.31.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.32.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -411,9 +411,17 @@ MatchWatch never looks inside packets, so it recognises a game from two things i
 This list cannot be complete:
 
 - Many publishers do not publish their server ports. PUBG, Marvel Rivals, Helldivers 2, The Finals and Dead by Daylight are examples.
-- Several games share a range. Counter-Strike 2, Dota 2 and Destiny 2 all use Steam's network, so they show under one "Steam games" label.
+- Several games share a range. Counter-Strike 2, Dota 2 and Destiny 2 all use Steam's network, so they show under one "Steam games" label until you say which you are playing. See [Games that share a network](#games-that-share-a-network).
 - Games hosted player-to-player, such as GTA Online and most Nintendo Switch games, have no server port to recognise.
 - Final Fantasy XIV, World of Warcraft and Minecraft Java do not use UDP for play, so MatchWatch does not see them as matches.
+
+### Games that share a network
+
+Some games cannot be told apart from the router at all. Every game that uses Steam's own network reaches the same Valve servers on the same ports, so Counter-Strike 2, Dota 2 and a newly released indie shooter all look identical. MatchWatch files them under one label, "Steam games", and does not ask you to name anything, because the port already has a name.
+
+For a match under a label like that, the Live page and the match report ask **Which game is this?** Type the name and choose how long it should carry on: **this match only**, **the next 6 hours**, or **until I change it**. Six hours is the default, so an evening's matches take the name and the next session asks again, which stops a different Steam game being filed under last week's name. Names you have used before appear as buttons, so answering is one press, and **Back to Steam games** removes a name. Until you say which game it is, a match stays under "Steam games"; once named, its report reads "Wardogs, on Steam's network".
+
+This only changes the name shown. Staying on places, strict and the lobby check still treat the match as a game on that network. From the command line: `matchwatch matchgame <match start> <name>`.
 
 ### Games it does not recognise
 
@@ -577,6 +585,7 @@ Everything is also available over SSH:
 | `matchwatch ranges [refresh]` | The hosting companies' address lists used to turn whole regions away |
 | `matchwatch regions [measure]` | Ping every region, nearest first |
 | `matchwatch game name <port or lo-hi> <name> [hosts] [voice]` / `game remove` | Name a game by port, or take a name away |
+| `matchwatch matchgame <start> [name]` | Say which game a match was, when its label covers several |
 | `matchwatch mark` | Flag this moment, same as the "I felt that" button |
 | `matchwatch qos` | During a match: is the game in QoSmate's top priority queue? |
 | `matchwatch qos fix` / `qos unfix` | Add or remove QoSmate rules that prioritise your gaming device |

@@ -257,3 +257,10 @@ ol.steps li { margin: 8px 0; }
 .choice + small { margin-top: 8px; }
 .speedcard .dir.after { display: block; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); font-weight: 700; font-size: 0.92rem; }
 .speedcard .dir.after + .choice { flex-wrap: wrap; }
+/* which game a match was, for a network several games share */
+.gamepick { margin: 12px 0 4px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--grid); border-left: 4px solid var(--pen); border-radius: var(--r2); max-width: 760px; }
+.gamepick .note { margin: 0 0 10px; }
+.gamepick .note b { color: var(--ink); }
+.gamepick .stayform { max-width: none; }
+.gamepick .spanrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 0.88rem; }
+.gamepick .spanrow .choice { margin-top: 0; flex-wrap: wrap; }
