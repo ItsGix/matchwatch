@@ -48,6 +48,11 @@ make_dirs = sorted({os.path.dirname(dst) for dst in installed} | {"/etc/matchwat
 
 head = r'''#!/bin/sh
 # matchwatch installer for OpenWrt. One file; contains everything, including the LuCI app.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ItsGix and the MatchWatch contributors
+# Free software under the GNU General Public License, version 3 or later, with no warranty:
+# https://github.com/ItsGix/matchwatch/blob/main/LICENSE
+# It carries Leaflet 1.9.4 unchanged, which is under the BSD 2-Clause licence (its notice is in leaflet.js).
 #   sh matchwatch-install.sh [gaming-device-ip]   install or update
 #   sh matchwatch-install.sh remove               uninstall (keeps your history and settings)
 #   sh matchwatch-install.sh purge                uninstall and delete history and settings

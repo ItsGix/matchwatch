@@ -1,4 +1,6 @@
 # matchwatch history reports. Input: sessions.tsv
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ItsGix and the MatchWatch contributors
 # MODE = hist_txt | srv_txt | dc_txt | hist_json | srv_json | dc_json | dc_prefixes
 #        | dc_key | dc_others | dc_recent | dc_last | lobby     (KEY = datacentre key, STAY = key being kept to)
 #        | regions_txt | regions_json                             (REG = measured regions file)

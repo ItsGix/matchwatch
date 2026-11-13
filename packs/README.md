@@ -37,3 +37,7 @@ A pack is accepted when:
 4. **It passes the check.** `matchwatch share check <file>` must accept every line.
 
 No pack is installed automatically. MatchWatch never downloads this folder; people choose what to import.
+
+## Licence
+
+A pack sent to this folder is accepted under the project's licence, the GNU General Public License, version 3 or later.

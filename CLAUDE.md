@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.31.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.31.1.
 
 ## Layout
 
@@ -122,7 +122,7 @@ The QoSmate fix and unfix buttons. Note that fix adopts rules named `Game_Outbou
 4. Hop-by-hop blame exists since 0.27.0. Still to do: see it name a stop in a real rough match, and tune the 4 ms and 5% lines against real routes.
 5. A voice chat check (Discord, in-game voice) rated like matches. Discord voice is labelled and protected from blocking since 0.12.0; a verdict worded for calls rather than matches is still to do.
 6. Share files exist since 0.14.0. Still to do: real game packs in `packs/` (each needs a source), a way to add a region ping host without editing `regions.local` by hand, and showing shared ratings on the Servers page beside your own.
-7. Packaging and a write-up for the OpenWrt forum. The repository is public with no licence yet: choose one before packaging.
+7. Packaging and a write-up for the OpenWrt forum. The licence is GPL-3.0-or-later since 0.31.1 (`LICENSE`, byte for byte the text QoSmate ships; the owner chose to match QoSmate). New source files get the SPDX line and the copyright line the others carry; Leaflet keeps BSD 2-Clause.
 8. Later, once there is a better answer for uploads: a community list of game names by port and host, and of where each game's servers are, that routers fetch daily. The owner will not host a server. Fetching from this repository is easy; the open question is how contributions arrive without a shared secret in a public script (the idea so far: a Contribute button opening a pre-filled GitHub issue, merged by a GitHub Action with the share-file checks). A community name must be port plus host, agreed by several contributors, rank below the owner's names and the built-in list, and never drive blocking by default. Not to be built until the owner asks.
 
 ## Lines not to cross

@@ -1,4 +1,6 @@
 # matchwatch analysis engine
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ItsGix and the MatchWatch contributors
 # Reads "tcpdump -tt -n -q -l" lines for UDP traffic seen on the LAN side,
 # plus "TICK" heartbeat lines, and judges each game session.
 #

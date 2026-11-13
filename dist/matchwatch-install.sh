@@ -1,5 +1,10 @@
 #!/bin/sh
 # matchwatch installer for OpenWrt. One file; contains everything, including the LuCI app.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ItsGix and the MatchWatch contributors
+# Free software under the GNU General Public License, version 3 or later, with no warranty:
+# https://github.com/ItsGix/matchwatch/blob/main/LICENSE
+# It carries Leaflet 1.9.4 unchanged, which is under the BSD 2-Clause licence (its notice is in leaflet.js).
 #   sh matchwatch-install.sh [gaming-device-ip]   install or update
 #   sh matchwatch-install.sh remove               uninstall (keeps your history and settings)
 #   sh matchwatch-install.sh purge                uninstall and delete history and settings
@@ -51,8 +56,13 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 #!/bin/sh
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ItsGix and the MatchWatch contributors
+# Free software: you may share and change it under the GNU General Public License, version 3 or later.
+# It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.31.0"
+VERSION="0.31.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2540,6 +2550,8 @@ chmod 755 "$R/usr/bin/matchwatch.new"
 mv -f "$R/usr/bin/matchwatch.new" "$R/usr/bin/matchwatch"
 cat > "$R/usr/lib/matchwatch/analyze.awk.new" <<'MW_FILE_END_1'
 # matchwatch analysis engine
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ItsGix and the MatchWatch contributors
 # Reads "tcpdump -tt -n -q -l" lines for UDP traffic seen on the LAN side,
 # plus "TICK" heartbeat lines, and judges each game session.
 #
@@ -3442,6 +3454,8 @@ chmod 644 "$R/usr/lib/matchwatch/analyze.awk.new"
 mv -f "$R/usr/lib/matchwatch/analyze.awk.new" "$R/usr/lib/matchwatch/analyze.awk"
 cat > "$R/usr/lib/matchwatch/report.awk.new" <<'MW_FILE_END_2'
 # matchwatch history reports. Input: sessions.tsv
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ItsGix and the MatchWatch contributors
 # MODE = hist_txt | srv_txt | dc_txt | hist_json | srv_json | dc_json | dc_prefixes
 #        | dc_key | dc_others | dc_recent | dc_last | lobby     (KEY = datacentre key, STAY = key being kept to)
 #        | regions_txt | regions_json                             (REG = measured regions file)
@@ -4263,6 +4277,8 @@ MW_FILE_END_13
 chmod 644 "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json.new"
 mv -f "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json.new" "$R/usr/share/rpcd/acl.d/luci-app-matchwatch.json"
 cat > "$R/www/luci-static/resources/matchwatch/dashboard.js.new" <<'MW_FILE_END_14'
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 ItsGix and the MatchWatch contributors
 // matchwatch dashboard. One copy serves two homes: the LuCI page (Services > MatchWatch)
 // and the optional page that needs no login. Each home supplies T, how to talk to the router:
 //   T.css       address of dashboard.css
@@ -4291,7 +4307,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.31.0", reloading = false;
+var BUILT = "0.31.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}

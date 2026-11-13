@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.31.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.31.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -664,4 +664,14 @@ Scenarios: `good`, `badserver`, `clump`, `badpc`, `frag`, `lobby`, `noise`, `fps
 
 ## Licence
 
-This is an experimental personal project. Issues and feedback are welcome. **No open-source licence has been chosen yet**, so the source being public does not grant rights to reuse or redistribute it.
+MatchWatch is free software under the [GNU General Public License, version 3 or later](LICENSE), the same licence QoSmate uses. Copyright (C) 2026 ItsGix and the MatchWatch contributors.
+
+In plain terms:
+
+- You may use it, study it, change it and pass it on, for any purpose.
+- If you pass it on, changed or not, it must stay under the same licence and the source must come with it.
+- It comes with no warranty.
+
+Leaflet, the map library shipped with it, keeps its own BSD 2-Clause licence. Game packs and other contributions are accepted under the same licence as the project.
+
+Issues and feedback are welcome.
