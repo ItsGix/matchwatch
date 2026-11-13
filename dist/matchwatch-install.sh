@@ -52,7 +52,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.30.0"
+VERSION="0.31.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -85,6 +85,7 @@ STAY_KM=150
 STAY_RANGES=1
 UPDATE_CHECK=0
 MATCH_MODE=0
+MM_ON_DOWN=""; MM_ON_UP=""; MM_OFF_DOWN=""; MM_OFF_UP=""; MM_HOLD=""
 DATA_DIR="/etc/matchwatch"
 WEB=0
 if [ -n "$CONF" ]; then
@@ -117,6 +118,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get STAY_RANGES main stay_ranges "$STAY_RANGES"
 	config_get UPDATE_CHECK main update_check "$UPDATE_CHECK"
 	config_get MATCH_MODE main match_mode "$MATCH_MODE"
+	config_get MM_ON_DOWN main mm_on_down ""; config_get MM_ON_UP main mm_on_up ""; config_get MM_OFF_DOWN main mm_off_down ""; config_get MM_OFF_UP main mm_off_up ""; config_get MM_HOLD main mm_hold ""
 	config_get DATA_DIR main data_dir "$DATA_DIR"
 	config_get WEB main web "$WEB"
 fi
@@ -1629,83 +1631,126 @@ cmd_hold() { # on <game> | off <game> | (nothing = list)
 
 # ---- match mode. QoSmate keeps a game ahead of everything else by holding the line a little under its
 # full speed, and that limit also slows downloads when nobody is playing. With match mode on, MatchWatch
-# lifts the limit between matches and puts it back when a match starts. QoSmate does the prioritising,
-# with the rates set in QoSmate; all MatchWatch does is tell cake "unlimited" or QoSmate's own rate
+# switches the limit: one pair of speeds while a match is played, another between matches. The owner
+# chooses both. Left alone, "while playing" is QoSmate's own rate and "between matches" is no limit.
+# QoSmate does the prioritising; all MatchWatch does is give cake a rate, or "unlimited"
 # (tc qdisc change, which keeps every other option and needs no restart of QoSmate). QoSmate's settings
-# are never written. Everything fails towards QoSmate's own limits: stopping MatchWatch, starting it, or
+# are never written. Everything fails towards QoSmate's own rates: stopping MatchWatch, starting it, or
 # switching match mode off all put them back, and so does anything that restarts QoSmate.
-MM_HOLD="${MW_MM_HOLD:-300}"   # seconds without a match before the limit is lifted, so a run of matches stays limited
+# Speeds are in kbit; nothing, or 0, means the default for that slot.
+mm_num() { case "$1" in ""|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+# MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 30 unless the owner chose otherwise).
+# The owner found five minutes far too long. 0 means as soon as the match is seen to have ended.
+MM_HOLD="$(mm_num "${MW_MM_HOLD:-${MM_HOLD:-30}}")"
 mm_ok() { # can it work here? QoSmate installed, switched on, in a cake mode, and cake on the internet port
 	[ -x /etc/init.d/qosmate ] && have tc && have uci || return 1
 	[ "$(uci -q get qosmate.global.enabled)" = 1 ] && [ "$(uci -q get qosmate.settings.ROOT_QDISC)" = cake ] || return 1
 	[ -n "$WAN_IF" ] || find_ifaces
 	[ -n "$WAN_IF" ] && tc qdisc show dev "$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'
 }
+mm_rates() { # tight | loose | own -> "up down" in kbit, 0 meaning no limit
+	local qu qd u d
+	qu="$(mm_num "$(uci -q get qosmate.settings.UPRATE 2>/dev/null)")"; qd="$(mm_num "$(uci -q get qosmate.settings.DOWNRATE 2>/dev/null)")"
+	case "$1" in
+		loose) u="$(mm_num "$MM_OFF_UP")"; d="$(mm_num "$MM_OFF_DOWN")" ;;
+		tight) u="$(mm_num "$MM_ON_UP")"; d="$(mm_num "$MM_ON_DOWN")"; [ "$u" -gt 0 ] || u="$qu"; [ "$d" -gt 0 ] || d="$qd" ;;
+		*) u="$qu"; d="$qd" ;;
+	esac
+	echo "$u $d"
+}
 mm_json() {
-	local st up dn can=false
+	local st can=false on off own
 	[ -d "$RUN/www" ] || return 0
 	mm_ok && can=true
-	up="$(uci -q get qosmate.settings.UPRATE 2>/dev/null)"; dn="$(uci -q get qosmate.settings.DOWNRATE 2>/dev/null)"
-	case "$up" in ""|*[!0-9]*) up=0 ;; esac; case "$dn" in ""|*[!0-9]*) dn=0 ;; esac
+	own="$(mm_rates own)"; on="$(mm_rates tight)"; off="$(mm_rates loose)"
 	if [ "$MATCH_MODE" != 1 ]; then st=off; elif [ "$can" != true ]; then st=unsupported; else st="$(cat "$RUN/mm.state" 2>/dev/null)"; fi
-	printf '{"on":%s,"can":%s,"state":"%s","up":%s,"down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "${st:-tight}" "$up" "$dn" "$MM_HOLD" > "$RUN/www/matchmode.json.tmp" && mv -f "$RUN/www/matchmode.json.tmp" "$RUN/www/matchmode.json"
+	printf '{"on":%s,"can":%s,"state":"%s","up":%s,"down":%s,"on_up":%s,"on_down":%s,"off_up":%s,"off_down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "${st:-tight}" \
+		"${own% *}" "${own#* }" "${on% *}" "${on#* }" "${off% *}" "${off#* }" "$MM_HOLD" > "$RUN/www/matchmode.json.tmp" && mv -f "$RUN/www/matchmode.json.tmp" "$RUN/www/matchmode.json"
 }
-mm_set() { # tight | loose : QoSmate's own limits, or none
-	local want="$1" up dn
+mm_tc() { # device kbit : that rate, or no limit for 0
+	if [ "$2" -gt 0 ]; then tc qdisc change dev "$1" root cake bandwidth "${2}kbit" 2>/dev/null; else tc qdisc change dev "$1" root cake unlimited 2>/dev/null; fi
+}
+mm_say() { [ "$1" -gt 0 ] && echo "$1 kbit" || echo "no limit"; }
+mm_set() { # tight | loose | own [force] : the speeds for playing, for between matches, or QoSmate's own
+	local want="$1" r up dn was
 	mkdir -p "$RUN"
-	# anything that asks for the limits also cancels a lift that was waiting
-	[ "$want" = tight ] && echo "$(date +%s).$$" > "$RUN/mm.stamp"
-	[ "$want" = loose ] && [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ] && return 0
+	# anything but "between matches" also cancels a switch to it that was waiting
+	[ "$want" = loose ] || echo "$(date +%s).$$" > "$RUN/mm.stamp"
+	was="$(cat "$RUN/mm.state" 2>/dev/null)"
+	[ "$want" = loose ] && [ "$was" = loose ] && [ "$2" != force ] && return 0
 	mm_ok || { rm -f "$RUN/mm.state"; mm_json; return 1; }
-	if [ "$want" = loose ]; then
-		tc qdisc change dev "$WAN_IF" root cake unlimited 2>/dev/null || return 1
-		tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && tc qdisc change dev "ifb-$WAN_IF" root cake unlimited 2>/dev/null
-		logger -t matchwatch "match mode: nothing played for a while, so QoSmate's speed limit is lifted until the next match" 2>/dev/null
+	r="$(mm_rates "$want")"; up="${r% *}"; dn="${r#* }"
+	# the speeds for playing must be real ones: without QoSmate's rate and without one of the owner's, leave things be
+	if [ "$want" != loose ]; then [ "$up" -gt 0 ] && [ "$dn" -gt 0 ] || return 1; fi
+	mm_tc "$WAN_IF" "$up" || return 1
+	tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && mm_tc "ifb-$WAN_IF" "$dn"
+	if [ "$want" = own ]; then rm -f "$RUN/mm.state"
 	else
-		up="$(uci -q get qosmate.settings.UPRATE)"; dn="$(uci -q get qosmate.settings.DOWNRATE)"
-		case "$up" in ""|0|*[!0-9]*) return 1 ;; esac; case "$dn" in ""|0|*[!0-9]*) return 1 ;; esac
-		tc qdisc change dev "$WAN_IF" root cake bandwidth "${up}kbit" 2>/dev/null || return 1
-		tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && tc qdisc change dev "ifb-$WAN_IF" root cake bandwidth "${dn}kbit" 2>/dev/null
-		[ "$(cat "$RUN/mm.state" 2>/dev/null)" = tight ] || logger -t matchwatch "match mode: QoSmate's limits are on ($dn kbit down, $up kbit up)" 2>/dev/null
+		echo "$want" > "$RUN/mm.state"
+		if [ "$want" = loose ]; then logger -t matchwatch "match mode: nothing played for a while, so the between-matches speeds apply ($(mm_say "$dn") down, $(mm_say "$up") up)" 2>/dev/null
+		elif [ "$was" != tight ] || [ "$2" = force ]; then logger -t matchwatch "match mode: the speeds for playing are on ($dn kbit down, $up kbit up)" 2>/dev/null; fi
 	fi
-	echo "$want" > "$RUN/mm.state"
 	mm_json
 	return 0
 }
-mm_later() { # [seconds] : lift the limit once nothing has been played for that long
+mm_later() { # [seconds] : switch to the between-matches speeds once nothing has been played for that long
 	local stamp
 	[ "$MATCH_MODE" = 1 ] || return 0
 	stamp="$(date +%s).$$"; echo "$stamp" > "$RUN/mm.stamp"
-	( sleep "${1:-$MM_HOLD}"
+	# never under three seconds: the engine needs a moment to write that the match is over
+	( stamp2="${1:-$MM_HOLD}"; [ "$stamp2" -ge 3 ] 2>/dev/null || stamp2=3; sleep "$stamp2"
 	  [ "$(cat "$RUN/mm.stamp" 2>/dev/null)" = "$stamp" ] || exit 0
 	  grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null || exit 0
 	  mm_set loose ) >/dev/null 2>&1 &
 }
-mm_save() { # 0|1
+conf_put() { # SHELL_NAME uci_option value : one setting, in whichever place settings live
 	if [ -n "$CONF" ]; then
 		touch "$CONF"
-		if grep -q '^MATCH_MODE=' "$CONF"; then sed -i "s|^MATCH_MODE=.*|MATCH_MODE=$1|" "$CONF"; else echo "MATCH_MODE=$1" >> "$CONF"; fi
+		if grep -q "^$1=" "$CONF"; then sed -i "s|^$1=.*|$1=$3|" "$CONF"; else echo "$1=$3" >> "$CONF"; fi
 	else
 		uci -q get matchwatch.main >/dev/null || uci set matchwatch.main=matchwatch
-		uci set "matchwatch.main.match_mode=$1"; uci commit matchwatch || die "could not save the setting"
+		if [ -n "$3" ]; then uci set "matchwatch.main.$2=$3"; else uci -q delete "matchwatch.main.$2"; fi
 	fi
-	MATCH_MODE="$1"
 }
-cmd_matchmode() { # on | off | (nothing = status)
+conf_done() { [ -n "$CONF" ] || uci commit matchwatch || die "could not save the setting"; }
+mm_save() { conf_put MATCH_MODE match_mode "$1"; conf_done; MATCH_MODE="$1"; }
+mm_idle() { grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null; }
+cmd_matchmode() { # on | off | speeds <down> <up> <down> <up> | (nothing = status)
+	local r v n
 	case "$1" in
-		on) mm_ok || die "match mode needs QoSmate installed, switched on and in one of its cake modes. QoSmate does the prioritising; MatchWatch only lifts its speed limit between matches."
-			mm_save 1
-			if grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null; then mm_set tight; mm_later 20; echo "Match mode is on. Nothing is being played, so QoSmate's speed limit is lifted in a few seconds and comes back the moment a match starts."
-			else mm_set tight; echo "Match mode is on. A match is being played, so QoSmate's limits stay on; they are lifted $((MM_HOLD / 60)) minutes after your last match."; fi ;;
-		off) mm_save 0; echo "$(date +%s).$$" > "$RUN/mm.stamp" 2>/dev/null
-			mm_ok && mm_set tight
+		on) mm_ok || die "match mode needs QoSmate installed, switched on and in one of its cake modes. QoSmate does the prioritising; MatchWatch only switches its speed limit."
+			mm_save 1; mm_set tight force
+			if mm_idle; then mm_later 20; echo "Match mode is on. Nothing is being played, so the between-matches speeds apply in a few seconds; the speeds for playing come back the moment a match starts."
+			else echo "Match mode is on. A match is being played, so the speeds for playing stay on; the between-matches speeds apply $MM_HOLD seconds after it ends."; fi ;;
+		off) mm_save 0
+			mm_ok && mm_set own
 			rm -f "$RUN/mm.state"; mm_json
-			echo "Match mode is off. QoSmate's limits are back on all the time, as QoSmate has them set." ;;
-		""|status) if [ "$MATCH_MODE" != 1 ]; then echo "Match mode is off."
+			echo "Match mode is off. QoSmate's own limits are back on all the time, as QoSmate has them set." ;;
+		speeds) # kbit each: while playing down, up; between matches down, up. 0 = the default (QoSmate's own rate; no limit)
+			[ $# = 5 ] || [ $# = 6 ] || die "usage: matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds after a match], speeds in kbit; 0 for QoSmate's own rate while playing, or no limit between matches"
+			if [ $# = 6 ]; then
+				case "$6" in ""|*[!0-9]*) die "the wait after a match is a number of seconds" ;; esac
+				[ "${#6}" -le 4 ] && [ "$6" -le 3600 ] || die "the wait after a match can be up to an hour"
+				MM_HOLD="$6"; conf_put MM_HOLD mm_hold "$6"
+			fi
+			for v in "$2" "$3" "$4" "$5"; do
+				case "$v" in ""|*[!0-9]*) die "speeds are whole numbers of kbit" ;; esac
+				[ "${#v}" -le 8 ] && { [ "$v" = 0 ] || [ "$v" -ge 100 ]; } || die "a speed must be between 100 kbit and 10 Gbit, or 0"
+			done
+			n() { [ "$1" = 0 ] && echo "" || echo "$1"; }
+			MM_ON_DOWN="$(n "$2")"; MM_ON_UP="$(n "$3")"; MM_OFF_DOWN="$(n "$4")"; MM_OFF_UP="$(n "$5")"
+			conf_put MM_ON_DOWN mm_on_down "$MM_ON_DOWN"; conf_put MM_ON_UP mm_on_up "$MM_ON_UP"; conf_put MM_OFF_DOWN mm_off_down "$MM_OFF_DOWN"; conf_put MM_OFF_UP mm_off_up "$MM_OFF_UP"; conf_done
+			# put the new speeds to work at once, in whichever state things are
+			if [ "$MATCH_MODE" = 1 ] && mm_ok; then if [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then mm_set loose force; else mm_set tight force; mm_idle && mm_later; fi; else mm_json; fi
+			r="$(mm_rates tight)"; v="$(mm_rates loose)"
+			echo "Saved. While playing: ${r#* } kbit down, ${r% *} kbit up$( [ -z "$MM_ON_DOWN$MM_ON_UP" ] && echo " (QoSmate's own)"). Between matches: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up.$( [ "$MATCH_MODE" = 1 ] || echo " Match mode is off, so these wait until you turn it on.") They apply $( [ "$MM_HOLD" -gt 0 ] && echo "$MM_HOLD seconds after" || echo "as soon as" ) a match ends." ;;
+		""|status) r="$(mm_rates tight)"; v="$(mm_rates loose)"
+			if [ "$MATCH_MODE" != 1 ]; then echo "Match mode is off."
 			elif ! mm_ok; then echo "Match mode is on but cannot work: it needs QoSmate switched on and in one of its cake modes."
-			elif [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then echo "Match mode is on. Nothing is being played, so QoSmate's speed limit is lifted."
-			else echo "Match mode is on. QoSmate's limits are on: $(uci -q get qosmate.settings.DOWNRATE) kbit down, $(uci -q get qosmate.settings.UPRATE) kbit up."; fi ;;
-		*) die "usage: matchwatch matchmode [on|off]" ;;
+			elif [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then echo "Match mode is on. Nothing is being played: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up."
+			else echo "Match mode is on. The speeds for playing are on: ${r#* } kbit down, ${r% *} kbit up."; fi
+			echo "While playing: ${r#* } kbit down, ${r% *} kbit up. Between matches: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up." ;;
+		*) die "usage: matchwatch matchmode [on|off|speeds <playing down> <playing up> <between down> <between up>]" ;;
 	esac
 }
 
@@ -2006,6 +2051,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		allow) cmd_allow add "$arg" ;;
 		matchmodeon) cmd_matchmode on ;;
 		matchmodeoff) cmd_matchmode off ;;
+		# four speeds in kbit from the dashboard, as playing-down/playing-up/between-down/between-up
+		matchmodeset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
 		holdon) [ -n "$name" ] || die "choose a game"; cmd_hold on "$name" ;;
 		holdoff) [ -n "$name" ] || die "choose a game"; cmd_hold off "$name" ;;
 		unallow) cmd_allow remove "$arg" ;;
@@ -2422,7 +2469,9 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
-  matchwatch matchmode [on|off]      with QoSmate: its speed limit on during matches, lifted between them
+  matchwatch matchmode [on|off]      with QoSmate: one pair of speeds while you play, another between matches
+  matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
+                               seconds is how long after a match the between-matches speeds wait (30 unless you say)
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
@@ -2463,8 +2512,8 @@ case "$1" in
 	blocklist) cmd_blocklist ;;
 	fav) cmd_fav "$2" "$3" ;;
 	allow) cmd_allow "$2" "$3" ;;
-	matchmode) cmd_matchmode "$2" ;;
-	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set tight; rm -f "$RUN/mm.state" ;;
+	matchmode) shift; cmd_matchmode "$@" ;;
+	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set own; rm -f "$RUN/mm.state" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
 	_unseen) cmd_unseen "$2" "$3" ;;
@@ -4111,7 +4160,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset"
 
 reply() { # ok(0|1) text
 	json_init
@@ -4242,7 +4291,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.30.0", reloading = false;
+var BUILT = "0.31.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4736,14 +4785,78 @@ function strictSection() {
 	}
 	return box;
 }
+function waitWords(s) { return !s ? "as soon as a match ends" : (s < 90 ? s + " seconds" : Math.round(s / 60) + " minutes") + " after a match ends"; }
 // Match mode in a sentence: what QoSmate's speed limit is doing right now
 function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" : k + " kbit"; }
 function mmLine() {
 	var m = D.mm;
 	if (!m || !m.on) return "";
 	if (m.state === "unsupported") return "Match mode is on but cannot work: it needs QoSmate switched on, in one of its cake modes.";
-	if (m.state === "loose") return "Match mode: nothing is being played, so QoSmate's speed limit is lifted and your line runs at full speed. It comes back the moment a match starts.";
-	return "Match mode: QoSmate's limits are on, " + mbit(m.down) + " down and " + mbit(m.up) + " up, keeping your game ahead of everything else. They are lifted " + Math.round((m.hold || 300) / 60) + " minutes after your last match.";
+	var od = m.on_down || m.down, ou = m.on_up || m.up, lim = function (k) { return k ? mbit(k) : "no limit"; };
+	if (m.state === "loose") return "Match mode: nothing is being played, so the between-matches speeds apply (" + (m.off_down || m.off_up ? lim(m.off_down) + " down, " + lim(m.off_up) + " up" : "no limit") + "). The speeds for playing come back the moment a match starts.";
+	return "Match mode: the speeds for playing are on, " + mbit(od) + " down and " + mbit(ou) + " up, with QoSmate keeping your game ahead of everything else. The between-matches speeds apply " + waitWords(m.hold) + ".";
+}
+// The speeds match mode switches between: a box to type in and a slider for each, kept in step.
+// A slider works in percent of QoSmate's own rate, which is the one figure both sides can be measured against.
+function mmSpeeds(mm, again) {
+	var own = { down: mm.down || 0, up: mm.up || 0 }, val = {}, box = h("div", { cls: "speeds" });
+	if (!own.down || !own.up) { box.appendChild(h("p", { cls: "note", text: "QoSmate's own download and upload rates could not be read, so speeds cannot be chosen here yet." })); return box; }
+	function one(key, dir, label, lo, hi, start) {
+		var base = own[dir];
+		var num = h("input", { type: "number", min: "0.1", step: "0.1", inputmode: "decimal", "aria-label": label + ", megabits per second" });
+		var rng = h("input", { type: "range", min: String(lo), max: String(hi), step: "1", "aria-label": label + ", percent of QoSmate's rate" });
+		var pct = h("small");
+		var show = function (kbit, from) {
+			val[key] = kbit;
+			var p = Math.round(100 * kbit / base);
+			if (from !== "num") num.value = kbit ? String(Math.round(kbit / 100) / 10) : "";
+			if (from !== "rng") rng.value = String(Math.min(hi, Math.max(lo, p)));
+			pct.textContent = kbit ? p + "% of QoSmate's " + mbit(base) : "Type a speed";
+		};
+		num.addEventListener("input", function () { var v = parseFloat(num.value); show(v > 0 ? Math.round(v * 1000) : 0, "num"); });
+		rng.addEventListener("input", function () { show(Math.round(base * rng.value / 100), "rng"); });
+		show(start);
+		return h("div", { cls: "speed" }, h("span", { cls: "dir", text: label }), h("span", { cls: "numwrap" }, num, h("i", "Mbit")), rng, pct);
+	}
+	var play = h("div", { cls: "speedcard" }, h("b", "While you play"), h("small", "QoSmate holds your line to these and keeps the game in front."),
+		one("on_down", "down", "Download", 5, 100, mm.on_down || own.down), one("on_up", "up", "Upload", 5, 100, mm.on_up || own.up));
+	var limited = !!(mm.off_down || mm.off_up);
+	var none = h("button", { type: "button", text: "No limit" }), some = h("button", { type: "button", text: "Choose speeds" });
+	var rows = h("div", null, one("off_down", "down", "Download", 50, 200, mm.off_down || own.down), one("off_up", "up", "Upload", 50, 200, mm.off_up || own.up));
+	var hint = h("small");
+	var pick = function (lim) {
+		limited = lim; rows.style.display = lim ? "" : "none";
+		none.setAttribute("aria-pressed", lim ? "false" : "true"); some.setAttribute("aria-pressed", lim ? "true" : "false");
+		hint.textContent = lim ? "Still limited, but at these speeds: a little under your line's real speed keeps downloads from making calls and video stutter." : "Your line runs flat out. The fastest downloads, with nothing held back.";
+	};
+	none.addEventListener("click", function () { pick(false); }); some.addEventListener("click", function () { pick(true); });
+	// how soon after a match the between-matches speeds take over
+	var hold = mm.hold == null ? 30 : mm.hold, waits = [[0, "At once"], [30, "30 seconds"], [120, "2 minutes"], [300, "5 minutes"]], wbox = h("div", { cls: "choice", role: "group", "aria-label": "How soon after a match" }), whint = h("small");
+	if (!waits.some(function (w) { return w[0] === hold; })) waits.push([hold, waitWords(hold).replace(" after a match ends", "")]);
+	var setWait = function (s) {
+		hold = s;
+		Array.prototype.forEach.call(wbox.children, function (b) { b.setAttribute("aria-pressed", +b.getAttribute("data-s") === s ? "true" : "false"); });
+		whint.textContent = s === 0 ? "The moment MatchWatch sees the match has ended. If you queue again straight away, the speeds for playing come back as the next match starts." : (s <= 30 ? "A short wait, so a quick requeue does not flip the speeds back and forth." : "Long enough to cover the gap between matches, so a run of them stays at the speeds for playing.");
+	};
+	waits.forEach(function (w) { var b = h("button", { type: "button", text: w[1], "data-s": String(w[0]) }); b.addEventListener("click", function () { setWait(w[0]); }); wbox.appendChild(b); });
+	var rest = h("div", { cls: "speedcard" }, h("b", "Between matches"), h("div", { cls: "choice", role: "group", "aria-label": "Between matches" }, none, some), hint, rows,
+		h("span", { cls: "dir after", text: "Switch to these after a match" }), wbox, whint);
+	setWait(hold);
+	pick(limited);
+	var save = h("button", { type: "button", cls: "solid", text: "Save these speeds" }), reset = h("button", { type: "button", text: "Back to QoSmate's own" });
+	var send = function (arg, btn) {
+		btn.disabled = true;
+		api("matchmodeset", arg).then(function (j) { btn.disabled = false; if (!j.ok) { toast(j.out || j.error || "That did not work.", true); return; } again(j.out); });
+	};
+	save.addEventListener("click", function () {
+		var k = function (key, dir) { var v = val[key] || 0; return v === own[dir] && key.indexOf("on_") === 0 ? 0 : v; };   // QoSmate's own rate is stored as "follow QoSmate"
+		if (!val.on_down || !val.on_up || (limited && (!val.off_down || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
+		send([k("on_down", "down"), k("on_up", "up"), limited ? val.off_down : 0, limited ? val.off_up : 0, hold].join("/"), save);
+	});
+	reset.addEventListener("click", function () { send("0/0/0/0/30", reset); });
+	box.appendChild(h("div", { cls: "speedgrid" }, play, rest));
+	box.appendChild(h("div", { cls: "actions" }, save, reset));
+	return box;
 }
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
@@ -5613,14 +5726,15 @@ function pageTools() {
 			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
 		view.appendChild(h("h2", "QoSmate"));
-		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. QoSmate does the prioritising, with the rates you set in it; MatchWatch only switches its limit, and never changes QoSmate's settings.";
+		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. You choose both sets of speeds. QoSmate does the prioritising; MatchWatch only switches its limit, and never changes QoSmate's settings.";
 		if (!hasQos) view.appendChild(tool("Match mode", mmDesc, needQos()));
 		else {
 			var mm = D.mm || {}, again = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1500); };
 			view.appendChild(tool("Match mode", mmDesc,
 				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
 					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
-				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") })));
+				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") }),
+				mm.can === false ? null : mmSpeeds(mm, again)));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
@@ -5758,7 +5872,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 button.star { background: none; border: 0; padding: 2px 6px; font-size: 1.2rem; line-height: 1; color: var(--muted); }
 button.star:hover:not(:disabled), .star.on { color: var(--star); }
 span.star { font-size: 1.2rem; line-height: 1; padding: 2px 6px; }
-select, input[type="text"], textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 8px 11px; }
+select, input[type="text"], input[type="number"], textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 8px 11px; }
 select { padding: 7px 10px; max-width: 100%; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 16px 0 0; }
 .stayform { display: flex; gap: 8px; flex-wrap: wrap; max-width: 560px; }
@@ -5936,6 +6050,26 @@ details.more > span { display: inline; }
 ol.steps { margin: 6px 0 0; padding-left: 1.3em; max-width: 70ch; }
 ol.steps li { margin: 8px 0; }
 @media (max-width: 560px) { .map { height: 360px; } }
+/* match mode: the two sets of speeds */
+.speeds { margin-top: 14px; }
+.speedgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.speedcard { background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 14px 16px 16px; }
+.speedcard > b { display: block; font: 700 1.02rem var(--display); }
+.speedcard > small, .speedcard .speed small { display: block; color: var(--muted); font-size: 0.82rem; line-height: 1.35; }
+.speedcard > small { margin-top: 2px; min-height: 2.7em; }
+.speed { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 10px; margin-top: 14px; }
+.speed .dir { font-weight: 700; font-size: 0.92rem; }
+.speed .numwrap { display: inline-flex; align-items: baseline; gap: 6px; }
+.speed .numwrap input { width: 6.2em; text-align: right; font-variant-numeric: tabular-nums; padding: 5px 8px; background: var(--paper); }
+.speed .numwrap i { font-style: normal; color: var(--muted); font-size: 0.85rem; }
+.speed input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--pen); height: 22px; background: none; border: 0; padding: 0; }
+.speed small { grid-column: 1 / -1; }
+.choice { display: inline-flex; gap: 2px; padding: 3px; margin-top: 10px; background: var(--soft); border-radius: var(--r2); }
+.choice button { background: none; border: 0; padding: 6px 12px; font-size: 0.88rem; color: var(--muted); }
+.choice button[aria-pressed="true"] { background: var(--paper); color: var(--ink); font-weight: 700; }
+.choice + small { margin-top: 8px; }
+.speedcard .dir.after { display: block; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); font-weight: 700; font-size: 0.92rem; }
+.speedcard .dir.after + .choice { flex-wrap: wrap; }
 MW_FILE_END_15
 chmod 644 "$R/www/luci-static/resources/matchwatch/dashboard.css.new"
 mv -f "$R/www/luci-static/resources/matchwatch/dashboard.css.new" "$R/www/luci-static/resources/matchwatch/dashboard.css"
@@ -6753,7 +6887,7 @@ return view.extend({
 		list.forEach(function (e) { o.value(e[0], e[1]); });
 
 		o = s.taboption('general', form.Flag, 'match_mode', _('Match mode (needs QoSmate)'),
-			_('QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, and that limit also slows downloads when nobody is playing. With this on, MatchWatch lifts QoSmate\'s limit between matches and puts it back when a match starts: low latency while you play, full speed the rest of the time. QoSmate does the prioritising, with the rates you set in QoSmate. It needs QoSmate in one of its cake modes.'));
+			_('QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, and that limit also slows downloads when nobody is playing. With this on, MatchWatch lifts QoSmate\'s limit between matches and puts it back when a match starts: low latency while you play, full speed the rest of the time. QoSmate does the prioritising. Choose the speeds for playing and for between matches on the dashboard, under Tools, Data and settings; left alone they are QoSmate\'s own rate while you play and no limit between matches. It needs QoSmate in one of its cake modes.'));
 		o.default = '0';
 		o.rmempty = false;
 

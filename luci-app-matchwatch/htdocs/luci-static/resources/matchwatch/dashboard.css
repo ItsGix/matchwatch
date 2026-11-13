@@ -59,7 +59,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 button.star { background: none; border: 0; padding: 2px 6px; font-size: 1.2rem; line-height: 1; color: var(--muted); }
 button.star:hover:not(:disabled), .star.on { color: var(--star); }
 span.star { font-size: 1.2rem; line-height: 1; padding: 2px 6px; }
-select, input[type="text"], textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 8px 11px; }
+select, input[type="text"], input[type="number"], textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 8px 11px; }
 select { padding: 7px 10px; max-width: 100%; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 16px 0 0; }
 .stayform { display: flex; gap: 8px; flex-wrap: wrap; max-width: 560px; }
@@ -237,3 +237,23 @@ details.more > span { display: inline; }
 ol.steps { margin: 6px 0 0; padding-left: 1.3em; max-width: 70ch; }
 ol.steps li { margin: 8px 0; }
 @media (max-width: 560px) { .map { height: 360px; } }
+/* match mode: the two sets of speeds */
+.speeds { margin-top: 14px; }
+.speedgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.speedcard { background: var(--panel); border: 1px solid var(--grid); border-radius: var(--r); padding: 14px 16px 16px; }
+.speedcard > b { display: block; font: 700 1.02rem var(--display); }
+.speedcard > small, .speedcard .speed small { display: block; color: var(--muted); font-size: 0.82rem; line-height: 1.35; }
+.speedcard > small { margin-top: 2px; min-height: 2.7em; }
+.speed { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 10px; margin-top: 14px; }
+.speed .dir { font-weight: 700; font-size: 0.92rem; }
+.speed .numwrap { display: inline-flex; align-items: baseline; gap: 6px; }
+.speed .numwrap input { width: 6.2em; text-align: right; font-variant-numeric: tabular-nums; padding: 5px 8px; background: var(--paper); }
+.speed .numwrap i { font-style: normal; color: var(--muted); font-size: 0.85rem; }
+.speed input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--pen); height: 22px; background: none; border: 0; padding: 0; }
+.speed small { grid-column: 1 / -1; }
+.choice { display: inline-flex; gap: 2px; padding: 3px; margin-top: 10px; background: var(--soft); border-radius: var(--r2); }
+.choice button { background: none; border: 0; padding: 6px 12px; font-size: 0.88rem; color: var(--muted); }
+.choice button[aria-pressed="true"] { background: var(--paper); color: var(--ink); font-weight: 700; }
+.choice + small { margin-top: 8px; }
+.speedcard .dir.after { display: block; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--grid); font-weight: 700; font-size: 0.92rem; }
+.speedcard .dir.after + .choice { flex-wrap: wrap; }

@@ -26,7 +26,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.30.0", reloading = false;
+var BUILT = "0.31.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -520,14 +520,78 @@ function strictSection() {
 	}
 	return box;
 }
+function waitWords(s) { return !s ? "as soon as a match ends" : (s < 90 ? s + " seconds" : Math.round(s / 60) + " minutes") + " after a match ends"; }
 // Match mode in a sentence: what QoSmate's speed limit is doing right now
 function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" : k + " kbit"; }
 function mmLine() {
 	var m = D.mm;
 	if (!m || !m.on) return "";
 	if (m.state === "unsupported") return "Match mode is on but cannot work: it needs QoSmate switched on, in one of its cake modes.";
-	if (m.state === "loose") return "Match mode: nothing is being played, so QoSmate's speed limit is lifted and your line runs at full speed. It comes back the moment a match starts.";
-	return "Match mode: QoSmate's limits are on, " + mbit(m.down) + " down and " + mbit(m.up) + " up, keeping your game ahead of everything else. They are lifted " + Math.round((m.hold || 300) / 60) + " minutes after your last match.";
+	var od = m.on_down || m.down, ou = m.on_up || m.up, lim = function (k) { return k ? mbit(k) : "no limit"; };
+	if (m.state === "loose") return "Match mode: nothing is being played, so the between-matches speeds apply (" + (m.off_down || m.off_up ? lim(m.off_down) + " down, " + lim(m.off_up) + " up" : "no limit") + "). The speeds for playing come back the moment a match starts.";
+	return "Match mode: the speeds for playing are on, " + mbit(od) + " down and " + mbit(ou) + " up, with QoSmate keeping your game ahead of everything else. The between-matches speeds apply " + waitWords(m.hold) + ".";
+}
+// The speeds match mode switches between: a box to type in and a slider for each, kept in step.
+// A slider works in percent of QoSmate's own rate, which is the one figure both sides can be measured against.
+function mmSpeeds(mm, again) {
+	var own = { down: mm.down || 0, up: mm.up || 0 }, val = {}, box = h("div", { cls: "speeds" });
+	if (!own.down || !own.up) { box.appendChild(h("p", { cls: "note", text: "QoSmate's own download and upload rates could not be read, so speeds cannot be chosen here yet." })); return box; }
+	function one(key, dir, label, lo, hi, start) {
+		var base = own[dir];
+		var num = h("input", { type: "number", min: "0.1", step: "0.1", inputmode: "decimal", "aria-label": label + ", megabits per second" });
+		var rng = h("input", { type: "range", min: String(lo), max: String(hi), step: "1", "aria-label": label + ", percent of QoSmate's rate" });
+		var pct = h("small");
+		var show = function (kbit, from) {
+			val[key] = kbit;
+			var p = Math.round(100 * kbit / base);
+			if (from !== "num") num.value = kbit ? String(Math.round(kbit / 100) / 10) : "";
+			if (from !== "rng") rng.value = String(Math.min(hi, Math.max(lo, p)));
+			pct.textContent = kbit ? p + "% of QoSmate's " + mbit(base) : "Type a speed";
+		};
+		num.addEventListener("input", function () { var v = parseFloat(num.value); show(v > 0 ? Math.round(v * 1000) : 0, "num"); });
+		rng.addEventListener("input", function () { show(Math.round(base * rng.value / 100), "rng"); });
+		show(start);
+		return h("div", { cls: "speed" }, h("span", { cls: "dir", text: label }), h("span", { cls: "numwrap" }, num, h("i", "Mbit")), rng, pct);
+	}
+	var play = h("div", { cls: "speedcard" }, h("b", "While you play"), h("small", "QoSmate holds your line to these and keeps the game in front."),
+		one("on_down", "down", "Download", 5, 100, mm.on_down || own.down), one("on_up", "up", "Upload", 5, 100, mm.on_up || own.up));
+	var limited = !!(mm.off_down || mm.off_up);
+	var none = h("button", { type: "button", text: "No limit" }), some = h("button", { type: "button", text: "Choose speeds" });
+	var rows = h("div", null, one("off_down", "down", "Download", 50, 200, mm.off_down || own.down), one("off_up", "up", "Upload", 50, 200, mm.off_up || own.up));
+	var hint = h("small");
+	var pick = function (lim) {
+		limited = lim; rows.style.display = lim ? "" : "none";
+		none.setAttribute("aria-pressed", lim ? "false" : "true"); some.setAttribute("aria-pressed", lim ? "true" : "false");
+		hint.textContent = lim ? "Still limited, but at these speeds: a little under your line's real speed keeps downloads from making calls and video stutter." : "Your line runs flat out. The fastest downloads, with nothing held back.";
+	};
+	none.addEventListener("click", function () { pick(false); }); some.addEventListener("click", function () { pick(true); });
+	// how soon after a match the between-matches speeds take over
+	var hold = mm.hold == null ? 30 : mm.hold, waits = [[0, "At once"], [30, "30 seconds"], [120, "2 minutes"], [300, "5 minutes"]], wbox = h("div", { cls: "choice", role: "group", "aria-label": "How soon after a match" }), whint = h("small");
+	if (!waits.some(function (w) { return w[0] === hold; })) waits.push([hold, waitWords(hold).replace(" after a match ends", "")]);
+	var setWait = function (s) {
+		hold = s;
+		Array.prototype.forEach.call(wbox.children, function (b) { b.setAttribute("aria-pressed", +b.getAttribute("data-s") === s ? "true" : "false"); });
+		whint.textContent = s === 0 ? "The moment MatchWatch sees the match has ended. If you queue again straight away, the speeds for playing come back as the next match starts." : (s <= 30 ? "A short wait, so a quick requeue does not flip the speeds back and forth." : "Long enough to cover the gap between matches, so a run of them stays at the speeds for playing.");
+	};
+	waits.forEach(function (w) { var b = h("button", { type: "button", text: w[1], "data-s": String(w[0]) }); b.addEventListener("click", function () { setWait(w[0]); }); wbox.appendChild(b); });
+	var rest = h("div", { cls: "speedcard" }, h("b", "Between matches"), h("div", { cls: "choice", role: "group", "aria-label": "Between matches" }, none, some), hint, rows,
+		h("span", { cls: "dir after", text: "Switch to these after a match" }), wbox, whint);
+	setWait(hold);
+	pick(limited);
+	var save = h("button", { type: "button", cls: "solid", text: "Save these speeds" }), reset = h("button", { type: "button", text: "Back to QoSmate's own" });
+	var send = function (arg, btn) {
+		btn.disabled = true;
+		api("matchmodeset", arg).then(function (j) { btn.disabled = false; if (!j.ok) { toast(j.out || j.error || "That did not work.", true); return; } again(j.out); });
+	};
+	save.addEventListener("click", function () {
+		var k = function (key, dir) { var v = val[key] || 0; return v === own[dir] && key.indexOf("on_") === 0 ? 0 : v; };   // QoSmate's own rate is stored as "follow QoSmate"
+		if (!val.on_down || !val.on_up || (limited && (!val.off_down || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
+		send([k("on_down", "down"), k("on_up", "up"), limited ? val.off_down : 0, limited ? val.off_up : 0, hold].join("/"), save);
+	});
+	reset.addEventListener("click", function () { send("0/0/0/0/30", reset); });
+	box.appendChild(h("div", { cls: "speedgrid" }, play, rest));
+	box.appendChild(h("div", { cls: "actions" }, save, reset));
+	return box;
 }
 function favSection() {
 	var box = h("div"), days = D.info.block_days || 14, groups = {}, order = [];
@@ -1397,14 +1461,15 @@ function pageTools() {
 			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
 
 		view.appendChild(h("h2", "QoSmate"));
-		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. QoSmate does the prioritising, with the rates you set in it; MatchWatch only switches its limit, and never changes QoSmate's settings.";
+		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. You choose both sets of speeds. QoSmate does the prioritising; MatchWatch only switches its limit, and never changes QoSmate's settings.";
 		if (!hasQos) view.appendChild(tool("Match mode", mmDesc, needQos()));
 		else {
 			var mm = D.mm || {}, again = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1500); };
 			view.appendChild(tool("Match mode", mmDesc,
 				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
 					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
-				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") })));
+				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") }),
+				mm.can === false ? null : mmSpeeds(mm, again)));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {

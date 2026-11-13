@@ -2,7 +2,7 @@
 # matchwatch - judges game servers, the route to them, your line and your PC
 # from packet timing, on an OpenWrt router. Passive: it never alters game traffic.
 
-VERSION="0.30.0"
+VERSION="0.31.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -35,6 +35,7 @@ STAY_KM=150
 STAY_RANGES=1
 UPDATE_CHECK=0
 MATCH_MODE=0
+MM_ON_DOWN=""; MM_ON_UP=""; MM_OFF_DOWN=""; MM_OFF_UP=""; MM_HOLD=""
 DATA_DIR="/etc/matchwatch"
 WEB=0
 if [ -n "$CONF" ]; then
@@ -67,6 +68,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get STAY_RANGES main stay_ranges "$STAY_RANGES"
 	config_get UPDATE_CHECK main update_check "$UPDATE_CHECK"
 	config_get MATCH_MODE main match_mode "$MATCH_MODE"
+	config_get MM_ON_DOWN main mm_on_down ""; config_get MM_ON_UP main mm_on_up ""; config_get MM_OFF_DOWN main mm_off_down ""; config_get MM_OFF_UP main mm_off_up ""; config_get MM_HOLD main mm_hold ""
 	config_get DATA_DIR main data_dir "$DATA_DIR"
 	config_get WEB main web "$WEB"
 fi
@@ -1579,83 +1581,126 @@ cmd_hold() { # on <game> | off <game> | (nothing = list)
 
 # ---- match mode. QoSmate keeps a game ahead of everything else by holding the line a little under its
 # full speed, and that limit also slows downloads when nobody is playing. With match mode on, MatchWatch
-# lifts the limit between matches and puts it back when a match starts. QoSmate does the prioritising,
-# with the rates set in QoSmate; all MatchWatch does is tell cake "unlimited" or QoSmate's own rate
+# switches the limit: one pair of speeds while a match is played, another between matches. The owner
+# chooses both. Left alone, "while playing" is QoSmate's own rate and "between matches" is no limit.
+# QoSmate does the prioritising; all MatchWatch does is give cake a rate, or "unlimited"
 # (tc qdisc change, which keeps every other option and needs no restart of QoSmate). QoSmate's settings
-# are never written. Everything fails towards QoSmate's own limits: stopping MatchWatch, starting it, or
+# are never written. Everything fails towards QoSmate's own rates: stopping MatchWatch, starting it, or
 # switching match mode off all put them back, and so does anything that restarts QoSmate.
-MM_HOLD="${MW_MM_HOLD:-300}"   # seconds without a match before the limit is lifted, so a run of matches stays limited
+# Speeds are in kbit; nothing, or 0, means the default for that slot.
+mm_num() { case "$1" in ""|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+# MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 30 unless the owner chose otherwise).
+# The owner found five minutes far too long. 0 means as soon as the match is seen to have ended.
+MM_HOLD="$(mm_num "${MW_MM_HOLD:-${MM_HOLD:-30}}")"
 mm_ok() { # can it work here? QoSmate installed, switched on, in a cake mode, and cake on the internet port
 	[ -x /etc/init.d/qosmate ] && have tc && have uci || return 1
 	[ "$(uci -q get qosmate.global.enabled)" = 1 ] && [ "$(uci -q get qosmate.settings.ROOT_QDISC)" = cake ] || return 1
 	[ -n "$WAN_IF" ] || find_ifaces
 	[ -n "$WAN_IF" ] && tc qdisc show dev "$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'
 }
+mm_rates() { # tight | loose | own -> "up down" in kbit, 0 meaning no limit
+	local qu qd u d
+	qu="$(mm_num "$(uci -q get qosmate.settings.UPRATE 2>/dev/null)")"; qd="$(mm_num "$(uci -q get qosmate.settings.DOWNRATE 2>/dev/null)")"
+	case "$1" in
+		loose) u="$(mm_num "$MM_OFF_UP")"; d="$(mm_num "$MM_OFF_DOWN")" ;;
+		tight) u="$(mm_num "$MM_ON_UP")"; d="$(mm_num "$MM_ON_DOWN")"; [ "$u" -gt 0 ] || u="$qu"; [ "$d" -gt 0 ] || d="$qd" ;;
+		*) u="$qu"; d="$qd" ;;
+	esac
+	echo "$u $d"
+}
 mm_json() {
-	local st up dn can=false
+	local st can=false on off own
 	[ -d "$RUN/www" ] || return 0
 	mm_ok && can=true
-	up="$(uci -q get qosmate.settings.UPRATE 2>/dev/null)"; dn="$(uci -q get qosmate.settings.DOWNRATE 2>/dev/null)"
-	case "$up" in ""|*[!0-9]*) up=0 ;; esac; case "$dn" in ""|*[!0-9]*) dn=0 ;; esac
+	own="$(mm_rates own)"; on="$(mm_rates tight)"; off="$(mm_rates loose)"
 	if [ "$MATCH_MODE" != 1 ]; then st=off; elif [ "$can" != true ]; then st=unsupported; else st="$(cat "$RUN/mm.state" 2>/dev/null)"; fi
-	printf '{"on":%s,"can":%s,"state":"%s","up":%s,"down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "${st:-tight}" "$up" "$dn" "$MM_HOLD" > "$RUN/www/matchmode.json.tmp" && mv -f "$RUN/www/matchmode.json.tmp" "$RUN/www/matchmode.json"
+	printf '{"on":%s,"can":%s,"state":"%s","up":%s,"down":%s,"on_up":%s,"on_down":%s,"off_up":%s,"off_down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "${st:-tight}" \
+		"${own% *}" "${own#* }" "${on% *}" "${on#* }" "${off% *}" "${off#* }" "$MM_HOLD" > "$RUN/www/matchmode.json.tmp" && mv -f "$RUN/www/matchmode.json.tmp" "$RUN/www/matchmode.json"
 }
-mm_set() { # tight | loose : QoSmate's own limits, or none
-	local want="$1" up dn
+mm_tc() { # device kbit : that rate, or no limit for 0
+	if [ "$2" -gt 0 ]; then tc qdisc change dev "$1" root cake bandwidth "${2}kbit" 2>/dev/null; else tc qdisc change dev "$1" root cake unlimited 2>/dev/null; fi
+}
+mm_say() { [ "$1" -gt 0 ] && echo "$1 kbit" || echo "no limit"; }
+mm_set() { # tight | loose | own [force] : the speeds for playing, for between matches, or QoSmate's own
+	local want="$1" r up dn was
 	mkdir -p "$RUN"
-	# anything that asks for the limits also cancels a lift that was waiting
-	[ "$want" = tight ] && echo "$(date +%s).$$" > "$RUN/mm.stamp"
-	[ "$want" = loose ] && [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ] && return 0
+	# anything but "between matches" also cancels a switch to it that was waiting
+	[ "$want" = loose ] || echo "$(date +%s).$$" > "$RUN/mm.stamp"
+	was="$(cat "$RUN/mm.state" 2>/dev/null)"
+	[ "$want" = loose ] && [ "$was" = loose ] && [ "$2" != force ] && return 0
 	mm_ok || { rm -f "$RUN/mm.state"; mm_json; return 1; }
-	if [ "$want" = loose ]; then
-		tc qdisc change dev "$WAN_IF" root cake unlimited 2>/dev/null || return 1
-		tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && tc qdisc change dev "ifb-$WAN_IF" root cake unlimited 2>/dev/null
-		logger -t matchwatch "match mode: nothing played for a while, so QoSmate's speed limit is lifted until the next match" 2>/dev/null
+	r="$(mm_rates "$want")"; up="${r% *}"; dn="${r#* }"
+	# the speeds for playing must be real ones: without QoSmate's rate and without one of the owner's, leave things be
+	if [ "$want" != loose ]; then [ "$up" -gt 0 ] && [ "$dn" -gt 0 ] || return 1; fi
+	mm_tc "$WAN_IF" "$up" || return 1
+	tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && mm_tc "ifb-$WAN_IF" "$dn"
+	if [ "$want" = own ]; then rm -f "$RUN/mm.state"
 	else
-		up="$(uci -q get qosmate.settings.UPRATE)"; dn="$(uci -q get qosmate.settings.DOWNRATE)"
-		case "$up" in ""|0|*[!0-9]*) return 1 ;; esac; case "$dn" in ""|0|*[!0-9]*) return 1 ;; esac
-		tc qdisc change dev "$WAN_IF" root cake bandwidth "${up}kbit" 2>/dev/null || return 1
-		tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && tc qdisc change dev "ifb-$WAN_IF" root cake bandwidth "${dn}kbit" 2>/dev/null
-		[ "$(cat "$RUN/mm.state" 2>/dev/null)" = tight ] || logger -t matchwatch "match mode: QoSmate's limits are on ($dn kbit down, $up kbit up)" 2>/dev/null
+		echo "$want" > "$RUN/mm.state"
+		if [ "$want" = loose ]; then logger -t matchwatch "match mode: nothing played for a while, so the between-matches speeds apply ($(mm_say "$dn") down, $(mm_say "$up") up)" 2>/dev/null
+		elif [ "$was" != tight ] || [ "$2" = force ]; then logger -t matchwatch "match mode: the speeds for playing are on ($dn kbit down, $up kbit up)" 2>/dev/null; fi
 	fi
-	echo "$want" > "$RUN/mm.state"
 	mm_json
 	return 0
 }
-mm_later() { # [seconds] : lift the limit once nothing has been played for that long
+mm_later() { # [seconds] : switch to the between-matches speeds once nothing has been played for that long
 	local stamp
 	[ "$MATCH_MODE" = 1 ] || return 0
 	stamp="$(date +%s).$$"; echo "$stamp" > "$RUN/mm.stamp"
-	( sleep "${1:-$MM_HOLD}"
+	# never under three seconds: the engine needs a moment to write that the match is over
+	( stamp2="${1:-$MM_HOLD}"; [ "$stamp2" -ge 3 ] 2>/dev/null || stamp2=3; sleep "$stamp2"
 	  [ "$(cat "$RUN/mm.stamp" 2>/dev/null)" = "$stamp" ] || exit 0
 	  grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null || exit 0
 	  mm_set loose ) >/dev/null 2>&1 &
 }
-mm_save() { # 0|1
+conf_put() { # SHELL_NAME uci_option value : one setting, in whichever place settings live
 	if [ -n "$CONF" ]; then
 		touch "$CONF"
-		if grep -q '^MATCH_MODE=' "$CONF"; then sed -i "s|^MATCH_MODE=.*|MATCH_MODE=$1|" "$CONF"; else echo "MATCH_MODE=$1" >> "$CONF"; fi
+		if grep -q "^$1=" "$CONF"; then sed -i "s|^$1=.*|$1=$3|" "$CONF"; else echo "$1=$3" >> "$CONF"; fi
 	else
 		uci -q get matchwatch.main >/dev/null || uci set matchwatch.main=matchwatch
-		uci set "matchwatch.main.match_mode=$1"; uci commit matchwatch || die "could not save the setting"
+		if [ -n "$3" ]; then uci set "matchwatch.main.$2=$3"; else uci -q delete "matchwatch.main.$2"; fi
 	fi
-	MATCH_MODE="$1"
 }
-cmd_matchmode() { # on | off | (nothing = status)
+conf_done() { [ -n "$CONF" ] || uci commit matchwatch || die "could not save the setting"; }
+mm_save() { conf_put MATCH_MODE match_mode "$1"; conf_done; MATCH_MODE="$1"; }
+mm_idle() { grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null; }
+cmd_matchmode() { # on | off | speeds <down> <up> <down> <up> | (nothing = status)
+	local r v n
 	case "$1" in
-		on) mm_ok || die "match mode needs QoSmate installed, switched on and in one of its cake modes. QoSmate does the prioritising; MatchWatch only lifts its speed limit between matches."
-			mm_save 1
-			if grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/dev/null; then mm_set tight; mm_later 20; echo "Match mode is on. Nothing is being played, so QoSmate's speed limit is lifted in a few seconds and comes back the moment a match starts."
-			else mm_set tight; echo "Match mode is on. A match is being played, so QoSmate's limits stay on; they are lifted $((MM_HOLD / 60)) minutes after your last match."; fi ;;
-		off) mm_save 0; echo "$(date +%s).$$" > "$RUN/mm.stamp" 2>/dev/null
-			mm_ok && mm_set tight
+		on) mm_ok || die "match mode needs QoSmate installed, switched on and in one of its cake modes. QoSmate does the prioritising; MatchWatch only switches its speed limit."
+			mm_save 1; mm_set tight force
+			if mm_idle; then mm_later 20; echo "Match mode is on. Nothing is being played, so the between-matches speeds apply in a few seconds; the speeds for playing come back the moment a match starts."
+			else echo "Match mode is on. A match is being played, so the speeds for playing stay on; the between-matches speeds apply $MM_HOLD seconds after it ends."; fi ;;
+		off) mm_save 0
+			mm_ok && mm_set own
 			rm -f "$RUN/mm.state"; mm_json
-			echo "Match mode is off. QoSmate's limits are back on all the time, as QoSmate has them set." ;;
-		""|status) if [ "$MATCH_MODE" != 1 ]; then echo "Match mode is off."
+			echo "Match mode is off. QoSmate's own limits are back on all the time, as QoSmate has them set." ;;
+		speeds) # kbit each: while playing down, up; between matches down, up. 0 = the default (QoSmate's own rate; no limit)
+			[ $# = 5 ] || [ $# = 6 ] || die "usage: matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds after a match], speeds in kbit; 0 for QoSmate's own rate while playing, or no limit between matches"
+			if [ $# = 6 ]; then
+				case "$6" in ""|*[!0-9]*) die "the wait after a match is a number of seconds" ;; esac
+				[ "${#6}" -le 4 ] && [ "$6" -le 3600 ] || die "the wait after a match can be up to an hour"
+				MM_HOLD="$6"; conf_put MM_HOLD mm_hold "$6"
+			fi
+			for v in "$2" "$3" "$4" "$5"; do
+				case "$v" in ""|*[!0-9]*) die "speeds are whole numbers of kbit" ;; esac
+				[ "${#v}" -le 8 ] && { [ "$v" = 0 ] || [ "$v" -ge 100 ]; } || die "a speed must be between 100 kbit and 10 Gbit, or 0"
+			done
+			n() { [ "$1" = 0 ] && echo "" || echo "$1"; }
+			MM_ON_DOWN="$(n "$2")"; MM_ON_UP="$(n "$3")"; MM_OFF_DOWN="$(n "$4")"; MM_OFF_UP="$(n "$5")"
+			conf_put MM_ON_DOWN mm_on_down "$MM_ON_DOWN"; conf_put MM_ON_UP mm_on_up "$MM_ON_UP"; conf_put MM_OFF_DOWN mm_off_down "$MM_OFF_DOWN"; conf_put MM_OFF_UP mm_off_up "$MM_OFF_UP"; conf_done
+			# put the new speeds to work at once, in whichever state things are
+			if [ "$MATCH_MODE" = 1 ] && mm_ok; then if [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then mm_set loose force; else mm_set tight force; mm_idle && mm_later; fi; else mm_json; fi
+			r="$(mm_rates tight)"; v="$(mm_rates loose)"
+			echo "Saved. While playing: ${r#* } kbit down, ${r% *} kbit up$( [ -z "$MM_ON_DOWN$MM_ON_UP" ] && echo " (QoSmate's own)"). Between matches: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up.$( [ "$MATCH_MODE" = 1 ] || echo " Match mode is off, so these wait until you turn it on.") They apply $( [ "$MM_HOLD" -gt 0 ] && echo "$MM_HOLD seconds after" || echo "as soon as" ) a match ends." ;;
+		""|status) r="$(mm_rates tight)"; v="$(mm_rates loose)"
+			if [ "$MATCH_MODE" != 1 ]; then echo "Match mode is off."
 			elif ! mm_ok; then echo "Match mode is on but cannot work: it needs QoSmate switched on and in one of its cake modes."
-			elif [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then echo "Match mode is on. Nothing is being played, so QoSmate's speed limit is lifted."
-			else echo "Match mode is on. QoSmate's limits are on: $(uci -q get qosmate.settings.DOWNRATE) kbit down, $(uci -q get qosmate.settings.UPRATE) kbit up."; fi ;;
-		*) die "usage: matchwatch matchmode [on|off]" ;;
+			elif [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then echo "Match mode is on. Nothing is being played: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up."
+			else echo "Match mode is on. The speeds for playing are on: ${r#* } kbit down, ${r% *} kbit up."; fi
+			echo "While playing: ${r#* } kbit down, ${r% *} kbit up. Between matches: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up." ;;
+		*) die "usage: matchwatch matchmode [on|off|speeds <playing down> <playing up> <between down> <between up>]" ;;
 	esac
 }
 
@@ -1956,6 +2001,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		allow) cmd_allow add "$arg" ;;
 		matchmodeon) cmd_matchmode on ;;
 		matchmodeoff) cmd_matchmode off ;;
+		# four speeds in kbit from the dashboard, as playing-down/playing-up/between-down/between-up
+		matchmodeset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
 		holdon) [ -n "$name" ] || die "choose a game"; cmd_hold on "$name" ;;
 		holdoff) [ -n "$name" ] || die "choose a game"; cmd_hold off "$name" ;;
 		unallow) cmd_allow remove "$arg" ;;
@@ -2372,7 +2419,9 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
-  matchwatch matchmode [on|off]      with QoSmate: its speed limit on during matches, lifted between them
+  matchwatch matchmode [on|off]      with QoSmate: one pair of speeds while you play, another between matches
+  matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
+                               seconds is how long after a match the between-matches speeds wait (30 unless you say)
   matchwatch doctor            check that everything needed is in place (changes nothing)
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
@@ -2413,8 +2462,8 @@ case "$1" in
 	blocklist) cmd_blocklist ;;
 	fav) cmd_fav "$2" "$3" ;;
 	allow) cmd_allow "$2" "$3" ;;
-	matchmode) cmd_matchmode "$2" ;;
-	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set tight; rm -f "$RUN/mm.state" ;;
+	matchmode) shift; cmd_matchmode "$@" ;;
+	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set own; rm -f "$RUN/mm.state" ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
 	_unseen) cmd_unseen "$2" "$3" ;;

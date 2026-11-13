@@ -48,7 +48,7 @@ return view.extend({
 		list.forEach(function (e) { o.value(e[0], e[1]); });
 
 		o = s.taboption('general', form.Flag, 'match_mode', _('Match mode (needs QoSmate)'),
-			_('QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, and that limit also slows downloads when nobody is playing. With this on, MatchWatch lifts QoSmate\'s limit between matches and puts it back when a match starts: low latency while you play, full speed the rest of the time. QoSmate does the prioritising, with the rates you set in QoSmate. It needs QoSmate in one of its cake modes.'));
+			_('QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, and that limit also slows downloads when nobody is playing. With this on, MatchWatch lifts QoSmate\'s limit between matches and puts it back when a match starts: low latency while you play, full speed the rest of the time. QoSmate does the prioritising. Choose the speeds for playing and for between matches on the dashboard, under Tools, Data and settings; left alone they are QoSmate\'s own rate while you play and no limit between matches. It needs QoSmate in one of its cake modes.'));
 		o.default = '0';
 		o.rmempty = false;
 

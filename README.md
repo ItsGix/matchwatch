@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.30.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.31.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -53,7 +53,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Alerts your phone through ntfy: when a match starts, when a poor server is ahead, after a bad match.
 - Tests your line before you queue, traces the route to a server, and grades both from A+ to F.
 - Checks that QoSmate is prioritising your game, and reports what its queues did in each match.
-- Match mode: QoSmate's speed limit on while you play, lifted the rest of the time.
+- Match mode: QoSmate holds your line to one pair of speeds while you play and another the rest of the time, both of your choosing.
 - Updates itself from GitHub at the press of a button.
 
 **Stays out of the way**
@@ -86,6 +86,10 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 | Tools: checks, with grades | Tools: sharing |
 | --- | --- |
 | ![Tools](docs/tools.png) | ![Sharing](docs/share.png) |
+
+| Match mode: the speeds while you play and between matches |
+| --- |
+| ![Match mode](docs/matchmode.png) |
 
 | Tools: update, data and settings |
 | --- |
@@ -522,15 +526,25 @@ A trace is one sample, so it shows how far a server is, not how steady the route
 
 [QoSmate](https://github.com/hudra0/qosmate), by hudra0, is a separate package that prioritises traffic on OpenWrt. It is what gives a game low latency on a busy line; MatchWatch measures, and QoSmate does the work. MatchWatch runs without it; with it, four things are added. Without it, the QoSmate tools say so and link to it.
 
-**Match mode.** QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, so that any queue forms in your router, where QoSmate can put the game first. The cost is that the limit is there all day, slowing downloads when nobody is playing, and on a slow line or a small router that cost is large. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts.
+**Match mode.** QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, so that any queue forms in your router, where QoSmate can put the game first. The cost is that the limit is there all day, slowing downloads when nobody is playing, and on a slow line or a small router that cost is large. With match mode on, MatchWatch switches the limit between two sets of speeds, and you choose both.
 
-- The limit comes back when the game first reaches for a game server, or at the latest when the match itself starts. It is lifted again five minutes after your last match, so a run of matches stays limited throughout.
-- The limits used are the ones you set in QoSmate. MatchWatch never writes QoSmate's settings and does not restart it; it tells the queue "unlimited" or "QoSmate's rate" and nothing else, so no option you chose in QoSmate is lost and there is no blip.
-- It fails towards QoSmate's own limits. Stopping or restarting MatchWatch, switching match mode off, or anything that restarts QoSmate all leave the limits on.
-- The Live page says which state you are in, and Recent activity records each switch.
-- It needs QoSmate switched on and in one of its cake modes. Turn it on under Tools, Data and settings, or in Settings; over SSH, `matchwatch matchmode on`. It is off by default.
+| | What it is | If you leave it alone |
+|---|---|---|
+| **While you play** | The download and upload speeds QoSmate holds your line to during a match | QoSmate's own rates, and it follows them if you change them in QoSmate |
+| **Between matches** | The speeds for the rest of the time: no limit, or speeds you choose | No limit |
+| **Switch after a match** | How long after a match ends before the between-matches speeds take over: at once, 30 seconds, 2 minutes or 5 minutes | 30 seconds |
 
-If your router shapes your full line speed without strain and you play most evenings, you gain little: the limit costs you a few percent of download speed. It is worth most on a slow line, or where the router cannot shape as fast as the line runs.
+Each speed has a box to type megabits into and a slider beside it, kept in step. The slider works in percent of QoSmate's own rate, so "80%" means 80% of what you set in QoSmate. Nothing changes until you press **Save these speeds**, and **Back to QoSmate's own** undoes your choices.
+
+- The speeds for playing come on when the game first reaches for a game server, or at the latest when the match itself starts.
+- MatchWatch never writes QoSmate's settings and does not restart it. It gives the queue a rate, or "unlimited", and nothing else, so no option you chose in QoSmate is lost and there is no blip.
+- It fails towards QoSmate's own limits. Stopping or restarting MatchWatch, switching match mode off, or anything that restarts QoSmate all put QoSmate's own rates back.
+- The Live page says which speeds are in force, and Recent activity records each switch.
+- It needs QoSmate switched on and in one of its cake modes. Turn it on under Tools, Data and settings, or in Settings. It is off by default.
+
+Over SSH: `matchwatch matchmode on`, `matchmode off`, and `matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]`, in kbit, where 0 means the default for that slot.
+
+Two things worth knowing when you choose. A speed for playing above what your line really delivers gives QoSmate nothing to work with: the queue moves to your provider and the game is no longer in front. And lowering the speed for playing below a little under your line's real speed does not lower your latency further; it only slows everyone else.
 
 **Did QoSmate do its job in this match?** In one of QoSmate's cake modes, each match report has a "QoSmate in this match" section. MatchWatch reads QoSmate's queue counters when the match starts and ends, and the longest wait every five seconds in between. It says in a sentence whether the game's own queue dropped or delayed anything, and whether other traffic had to be held back while the game went ahead. It only reads. In HFSC mode the section is left out.
 
@@ -566,7 +580,8 @@ Everything is also available over SSH:
 | `matchwatch mark` | Flag this moment, same as the "I felt that" button |
 | `matchwatch qos` | During a match: is the game in QoSmate's top priority queue? |
 | `matchwatch qos fix` / `qos unfix` | Add or remove QoSmate rules that prioritise your gaming device |
-| `matchwatch matchmode` / `matchmode on` / `matchmode off` | With QoSmate: its speed limit on during matches, lifted between them |
+| `matchwatch matchmode` / `matchmode on` / `matchmode off` | With QoSmate: one pair of speeds while you play, another between matches |
+| `matchwatch matchmode speeds <down> <up> <down> <up> [seconds]` | Choose those speeds, in kbit, and how soon after a match they switch |
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
 | `matchwatch doctor` | Checks that capture works. Changes nothing |
 | `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |
