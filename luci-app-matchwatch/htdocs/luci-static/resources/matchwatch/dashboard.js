@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.32.4", reloading = false;
+var BUILT = "0.33.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1377,13 +1377,15 @@ function pageTools() {
 	// four short pages instead of one long one. The tab is part of the address, so it can be linked and reloaded.
 	var tab = RO ? "data" : (TOOLTABS.some(function (t) { return t[0] === pageArg; }) ? pageArg : "checks");
 	if (!RO) {
+		// a port that is wrong makes a feature quietly do nothing, so say so at the top of every Tools tab
+		if (i.port_warn) view.appendChild(h("div", { cls: "banner bad" }, h("p", null, h("b", "A port looks wrong. "), i.port_warn)));
 		var seg = h("div", { cls: "seg" });
 		TOOLTABS.forEach(function (t) { var a = h("a", { href: "#/tools/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
 		view.appendChild(seg);
 	}
 	if (!RO && tab === "checks") {
 		var docOut = outBox();
-		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic. Takes five seconds and changes nothing.",
+		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic, and that it is looking at the right ports: the one your gaming device is on, the internet one, and the one QoSmate shapes. Takes five seconds and changes nothing.",
 			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
 
 		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
@@ -1547,7 +1549,11 @@ function pageTools() {
 	view.appendChild(h("h2", "Settings in use"));
 	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"],
 		["Blocks last", (i.block_days || 14) + " days"], ["Automatic blocking", i.autoblock ? "On" : "Off"], ["Phone notifications", i.notify ? "On" : "Off"], ["Your PC counts towards scores", i.pc_score === false ? "No" : "Yes"], ["Server location lookups", i.geo === false ? "Off" : "On"],
-		["This dashboard without login", i.web ? "On, view only" : "Off"]]));
+		["This dashboard without login", i.web ? "On, view only" : "Off"],
+		i.lan_if ? ["Listening for matches on", i.lan_if, "The port your gaming device is on"] : null,
+		i.wan_if ? ["Internet port", i.wan_if] : null,
+		i.qos_if ? ["QoSmate's port", i.qos_if, i.qos_if !== i.wan_if ? "Differs from the internet port, which is normal on a line that logs in" : "Read from QoSmate's own settings"] : null]));
+	if (!RO && i.lan_if) view.appendChild(h("p", { cls: "note", text: "If a port here looks wrong, run \"Check MatchWatch is working\" on the Checks tab: it tests each one and says where to correct it. The first two are set under Advanced on the Settings tab; QoSmate's port is set in QoSmate." }));
 	if (RO) view.appendChild(h("p", { cls: "note", text: "This page is view only. To block servers, run checks or change settings, log in to the router and open Services, then MatchWatch." }));
 	else if (T.settings) view.appendChild(h("p", { cls: "note" }, "Change these, and the device to watch, on the ", h("a", { href: T.settings, text: "Settings tab" }), "."));
 }

@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.32.4"
+VERSION="0.33.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -443,7 +443,8 @@ export_json() {
 	awk -v MODE=srv_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/servers.json.tmp" && mv -f "$RUN/www/servers.json.tmp" "$RUN/www/servers.json"
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s"}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" > "$RUN/www/info.json"
+	find_ifaces; qos_dev
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s","lan_if":"%s","wan_if":"%s","qos_if":"%s","port_warn":"%s"}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" "$(jesc "$LAN_IF")" "$(jesc "$WAN_IF")" "$( [ -x /etc/init.d/qosmate ] && jesc "$QWAN" )" "$(jesc "$(ports_check | awk -F'\t' '$1 == "WARN" { printf "%s%s", (n++ ? " " : ""), $2 }')")" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -2554,8 +2555,55 @@ cmd_last() {
 	elif [ -f "$DATA/last.txt" ]; then cat "$DATA/last.txt"
 	else echo "No match recorded yet."; fi
 }
+# ---- the three ports MatchWatch relies on, and whether each is the right one. A wrong port never
+# shows as an error by itself: a feature just quietly does nothing, which is how a friend of the owner
+# found one. Each line printed is a level (ok, note or WARN), a tab, and a sentence saying where to fix it:
+# MatchWatch's own two ports under Settings, Advanced; QoSmate's port in QoSmate's settings, never here,
+# because a second opinion about that port is exactly what went wrong.
+ports_check() {
+	local dv q qset bad=""
+	find_ifaces; qos_dev
+	# 1. the side the gaming device is on: where matches are captured
+	if [ ! -d "/sys/class/net/$LAN_IF" ]; then
+		printf 'WARN\tThe port MatchWatch listens on (%s) does not exist on this router. Clear the LAN interface under Settings, Advanced, so it is detected, or choose the right one there.\n' "$LAN_IF"
+	elif is_ipv4 "$DEVICE_IP"; then
+		dv="$(ip -4 route get "$DEVICE_IP" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)"
+		if [ -n "$dv" ] && [ "$dv" != "$LAN_IF" ]; then
+			printf 'WARN\tYour gaming device (%s) is reached through %s, but MatchWatch is listening on %s, so it cannot see its matches. Set the LAN interface to %s under Settings, Advanced.\n' "$DEVICE_IP" "$dv" "$LAN_IF" "$dv"
+		else printf 'ok\tListening on %s, the port your gaming device is reached through.\n' "$LAN_IF"; fi
+	else printf 'ok\tListening on %s.\n' "$LAN_IF"
+	fi
+	# 2. the internet side: other traffic on the line, and part of the priority check
+	dv="$(ip -4 route show default 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)"
+	if [ -z "$WAN_IF" ]; then
+		bad=1; printf 'WARN\tNo internet port was found. Choose the WAN interface under Settings, Advanced.\n'
+	elif [ ! -d "/sys/class/net/$WAN_IF" ]; then
+		bad=1; printf 'WARN\tThe internet port MatchWatch uses (%s) does not exist on this router. Clear the WAN interface under Settings, Advanced, so it is detected, or choose the right one there.\n' "$WAN_IF"
+	elif [ -n "$dv" ] && [ "$dv" != "$WAN_IF" ]; then
+		bad=1; printf 'WARN\tYour internet connection goes out through %s, but MatchWatch is using %s as the internet port. Set the WAN interface to %s under Settings, Advanced, or clear it so it is detected.\n' "$dv" "$WAN_IF" "$dv"
+	else printf 'ok\tInternet port: %s, where your connection goes out.\n' "$WAN_IF"
+	fi
+	# 3. the port QoSmate shapes: match mode, the queue record in match reports, the priority check
+	[ -x /etc/init.d/qosmate ] || return 0
+	qset="$(uci -q get qosmate.settings.WAN 2>/dev/null)"
+	if [ "$(uci -q get qosmate.global.enabled)" != 1 ]; then
+		printf 'note\tQoSmate is installed but switched off, so there are no queues to read.\n'
+	elif [ -n "$qset" ] && [ ! -d "/sys/class/net/$qset" ]; then
+		printf 'WARN\tQoSmate is set to shape a port called %s, which does not exist on this router. Correct the WAN interface in QoSmate'"'"'s own settings (Services, QoSmate).\n' "$qset"
+	else
+		q="$(tc qdisc show dev "$QWAN" root 2>/dev/null | awk '{ print $2; exit }')"
+		case "$q" in
+			cake|hfsc|htb) printf 'ok\tQoSmate'"'"'s port: %s, with its %s queue on it.\n' "$QWAN" "$q" ;;
+			*) bad=1; printf 'WARN\tQoSmate'"'"'s port is %s, but there is no QoSmate queue on it. QoSmate may need restarting, or its upload rate is set to 0. The port itself is chosen in QoSmate'"'"'s own settings (Services, QoSmate, WAN interface), not in MatchWatch.\n' "${QWAN:-not set}" ;;
+		esac
+		# two ports that differ are only "normal" when each of them checked out; next to a warning it would reassure wrongly
+		[ -z "$bad" ] && [ -n "$QWAN" ] && [ "$QWAN" != "$WAN_IF" ] && printf 'note\tQoSmate shapes %s while the internet port is %s. That is normal on a line that logs in (PPPoE), where one sits on top of the other. MatchWatch reads QoSmate'"'"'s queues on %s.\n' "$QWAN" "$WAN_IF" "$QWAN"
+	fi
+	return 0
+}
+
 cmd_doctor() {
-	local ok=1 c n
+	local ok=1 c n lvl txt
 	echo "matchwatch $VERSION"
 	for c in tcpdump awk ping mkfifo; do
 		if have "$c"; then echo "  ok       $c"; else echo "  MISSING  $c (required)"; ok=0; fi
@@ -2565,7 +2613,10 @@ cmd_doctor() {
 	done
 	if have uclient-fetch || have curl || have wget; then echo "  ok       web fetch (location lookups, notifications)"; else echo "  missing  uclient-fetch/curl/wget (optional)"; fi
 	find_ifaces; build_filter
-	echo "  LAN interface: $LAN_IF    WAN interface: ${WAN_IF:-not found}"
+	echo "  Ports:"
+	ports_check | while IFS="$TAB" read -r lvl txt; do
+		case "$lvl" in WARN) echo "  CHECK    $txt" ;; note) echo "  note     $txt" ;; *) echo "  ok       $txt" ;; esac
+	done
 	echo "  Watching: ${DEVICE_IP:-every device on the LAN}"
 	if [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid")" 2>/dev/null; then echo "  Service: running"; else echo "  Service: not running"; fi
 	if [ "$ok" = 1 ]; then
@@ -2653,6 +2704,7 @@ case "$1" in
 	matchgame) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_matchgame "$c" "$*" ;;
 	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set own; rm -f "$RUN/mm.state" ;;
 	_mmcheck) mm_check ;;
+	_ports) ports_check ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
 	_unseen) cmd_unseen "$2" "$3" ;;
@@ -4460,7 +4512,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.32.4", reloading = false;
+var BUILT = "0.33.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -5809,13 +5861,15 @@ function pageTools() {
 	// four short pages instead of one long one. The tab is part of the address, so it can be linked and reloaded.
 	var tab = RO ? "data" : (TOOLTABS.some(function (t) { return t[0] === pageArg; }) ? pageArg : "checks");
 	if (!RO) {
+		// a port that is wrong makes a feature quietly do nothing, so say so at the top of every Tools tab
+		if (i.port_warn) view.appendChild(h("div", { cls: "banner bad" }, h("p", null, h("b", "A port looks wrong. "), i.port_warn)));
 		var seg = h("div", { cls: "seg" });
 		TOOLTABS.forEach(function (t) { var a = h("a", { href: "#/tools/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
 		view.appendChild(seg);
 	}
 	if (!RO && tab === "checks") {
 		var docOut = outBox();
-		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic. Takes five seconds and changes nothing.",
+		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic, and that it is looking at the right ports: the one your gaming device is on, the internet one, and the one QoSmate shapes. Takes five seconds and changes nothing.",
 			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
 
 		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
@@ -5979,7 +6033,11 @@ function pageTools() {
 	view.appendChild(h("h2", "Settings in use"));
 	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"],
 		["Blocks last", (i.block_days || 14) + " days"], ["Automatic blocking", i.autoblock ? "On" : "Off"], ["Phone notifications", i.notify ? "On" : "Off"], ["Your PC counts towards scores", i.pc_score === false ? "No" : "Yes"], ["Server location lookups", i.geo === false ? "Off" : "On"],
-		["This dashboard without login", i.web ? "On, view only" : "Off"]]));
+		["This dashboard without login", i.web ? "On, view only" : "Off"],
+		i.lan_if ? ["Listening for matches on", i.lan_if, "The port your gaming device is on"] : null,
+		i.wan_if ? ["Internet port", i.wan_if] : null,
+		i.qos_if ? ["QoSmate's port", i.qos_if, i.qos_if !== i.wan_if ? "Differs from the internet port, which is normal on a line that logs in" : "Read from QoSmate's own settings"] : null]));
+	if (!RO && i.lan_if) view.appendChild(h("p", { cls: "note", text: "If a port here looks wrong, run \"Check MatchWatch is working\" on the Checks tab: it tests each one and says where to correct it. The first two are set under Advanced on the Settings tab; QoSmate's port is set in QoSmate." }));
 	if (RO) view.appendChild(h("p", { cls: "note", text: "This page is view only. To block servers, run checks or change settings, log in to the router and open Services, then MatchWatch." }));
 	else if (T.settings) view.appendChild(h("p", { cls: "note" }, "Change these, and the device to watch, on the ", h("a", { href: T.settings, text: "Settings tab" }), "."));
 }
@@ -7228,12 +7286,12 @@ return view.extend({
 		o.placeholder = '150';
 
 		/* ---- Advanced */
-		o = s.taboption('advanced', form.Value, 'lan_if', _('LAN interface'), _('Leave empty to detect it.'));
+		o = s.taboption('advanced', form.Value, 'lan_if', _('LAN interface'), _('The port your gaming device is on, where MatchWatch listens for its matches. Leave empty to detect it. Only set it if "Check MatchWatch is working" on the Tools page says the port is wrong, which can happen when the gaming device is on its own network or VLAN.'));
 		o.datatype = 'network_device';
 		o.placeholder = _('Detected');
 		o.rmempty = true;
 
-		o = s.taboption('advanced', form.Value, 'wan_if', _('WAN interface'), _('Leave empty to detect it.'));
+		o = s.taboption('advanced', form.Value, 'wan_if', _('WAN interface'), _('The port your internet connection goes out through. Leave empty to detect it. Only set it if the check on the Tools page says the port is wrong, which can happen with more than one internet connection. The port QoSmate shapes is not set here: MatchWatch reads that from QoSmate\'s own settings.'));
 		o.datatype = 'network_device';
 		o.placeholder = _('Detected');
 		o.rmempty = true;

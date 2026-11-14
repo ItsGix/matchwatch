@@ -150,12 +150,12 @@ return view.extend({
 		o.placeholder = '150';
 
 		/* ---- Advanced */
-		o = s.taboption('advanced', form.Value, 'lan_if', _('LAN interface'), _('Leave empty to detect it.'));
+		o = s.taboption('advanced', form.Value, 'lan_if', _('LAN interface'), _('The port your gaming device is on, where MatchWatch listens for its matches. Leave empty to detect it. Only set it if "Check MatchWatch is working" on the Tools page says the port is wrong, which can happen when the gaming device is on its own network or VLAN.'));
 		o.datatype = 'network_device';
 		o.placeholder = _('Detected');
 		o.rmempty = true;
 
-		o = s.taboption('advanced', form.Value, 'wan_if', _('WAN interface'), _('Leave empty to detect it.'));
+		o = s.taboption('advanced', form.Value, 'wan_if', _('WAN interface'), _('The port your internet connection goes out through. Leave empty to detect it. Only set it if the check on the Tools page says the port is wrong, which can happen with more than one internet connection. The port QoSmate shapes is not set here: MatchWatch reads that from QoSmate\'s own settings.'));
 		o.datatype = 'network_device';
 		o.placeholder = _('Detected');
 		o.rmempty = true;

@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.32.4 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.33.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -498,7 +498,17 @@ The Tools page has four tabs. Each tool says what it does beside its button.
 
 **Checks**
 
-- **Check MatchWatch is working.** Confirms the programs it needs are present and that it can see your device's traffic. Takes five seconds and changes nothing.
+- **Check MatchWatch is working.** Confirms the programs it needs are present, that it can see your device's traffic, and that it is looking at the right ports. Takes five seconds and changes nothing.
+
+  MatchWatch relies on three ports, and a wrong one never shows as an error: a feature just quietly does nothing. The check tests each and says where to correct it, a warning appears at the top of the Tools page if one is wrong, and all three are listed under Settings in use.
+
+  | Port | Used for | If it is wrong, correct it in |
+  |---|---|---|
+  | The one your gaming device is on | Seeing matches at all | MatchWatch: Settings, Advanced, LAN interface |
+  | The internet one | Other traffic on your line, the priority check | MatchWatch: Settings, Advanced, WAN interface |
+  | The one QoSmate shapes | Match mode, "QoSmate in this match", the priority check | QoSmate's own settings. MatchWatch reads it from there and has no setting of its own for it, so the two can never disagree |
+
+  The first two are detected and rarely need setting: a gaming device on its own network or VLAN, or more than one internet connection, are the cases that do.
 - **Test your line.** Twenty seconds of pings from the router to your provider's first hop and two public servers, with no game needed, so you can tell before you queue whether your connection is steady. Trouble seen on every target is blamed on your line; trouble with one target is not.
 - **Is my game prioritised?** Needs [QoSmate](#qosmate) and a match in progress. Changes nothing.
 - **Phone alerts.** Sends one test message.
