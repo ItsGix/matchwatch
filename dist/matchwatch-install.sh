@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.33.0"
+VERSION="0.34.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1657,8 +1657,10 @@ cmd_matchgame() { # <match start> [name] [hours] : record a match as this game. 
 			til=0; [ -n "$hours" ] && til=$((now + hours * 3600))
 			printf '%s\t%s\t%s\t%s\n' "$label" "$name" "$now" "$til" >> "$DATA/playing"
 			export_json
-			if [ -n "$hours" ]; then echo "Recorded as $name. Matches on the same network in the next $hours hour(s) are recorded as $name too; after that MatchWatch asks again."
-			else echo "Recorded as $name. Your following matches on the same network are recorded as $name too, until you choose another."; fi
+			if [ -z "$hours" ]; then echo "Recorded as $name. Your following matches under \"$label\" are recorded as $name too, until you choose another."
+			elif [ "$hours" = 24 ]; then echo "Recorded as $name. Matches under \"$label\" in the next day are recorded as $name too; after that they go back."
+			elif [ "$hours" -ge 48 ]; then echo "Recorded as $name. Matches under \"$label\" in the next $((hours / 24)) days are recorded as $name too; after that they go back."
+			else echo "Recorded as $name. Matches under \"$label\" in the next $hours hour(s) are recorded as $name too; after that they go back."; fi
 		fi
 	else
 		export_json
@@ -1702,9 +1704,10 @@ cmd_hold() { # on <game> | off <game> | (nothing = list)
 # switching match mode off all put them back, and so does anything that restarts QoSmate.
 # Speeds are in kbit; nothing, or 0, means the default for that slot.
 mm_num() { case "$1" in ""|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
-# MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 30 unless the owner chose otherwise).
-# The owner found five minutes far too long. 0 means as soon as the match is seen to have ended.
-MM_HOLD="$(mm_num "${MW_MM_HOLD:-${MM_HOLD:-30}}")"
+# MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 300 unless the owner chose otherwise).
+# The owner asked for a choice, tried 30 seconds as the default, and found that too quick: five minutes covers
+# the gap between matches. 0 means as soon as the match is seen to have ended.
+MM_HOLD="$(mm_num "${MW_MM_HOLD:-${MM_HOLD:-300}}")"
 mm_why() { # why match mode cannot work here, in a word; nothing when it can
 	[ -x /etc/init.d/qosmate ] && have tc && have uci || { echo noqos; return; }
 	[ "$(uci -q get qosmate.global.enabled)" = 1 ] || { echo disabled; return; }
@@ -2656,7 +2659,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
-  matchwatch matchgame <start> [name]   say which game a match was, when its label covers several (Steam's network)
+  matchwatch matchgame <start> [name]   say which game a match really was, when MatchWatch named it wrongly or cannot tell
   matchwatch matchmode [on|off]      with QoSmate: one pair of speeds while you play, another between matches
   matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
                                seconds is how long after a match the between-matches speeds wait (30 unless you say)
@@ -4512,7 +4515,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.33.0", reloading = false;
+var BUILT = "0.34.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -5024,14 +5027,20 @@ function liveLabel(s) {
 function liveGame(s) {
 	var lg = liveLabel(s);
 	if (!lg || !lg.name) return "";
-	if (!sharedLabel(lg.name)) return lg.name + ". ";
+	if (!sharedLabel(lg.name)) return (lg.as || lg.name) + ". ";
 	if (lg.as) return lg.as + ", on " + netWords(lg.name) + ". ";
 	return (/^Steam games/.test(lg.name) ? "A Steam game" : lg.name) + ". ";
 }
 function netWords(label) { return /^Steam games/.test(label) ? "Steam's network" : "a network several games share"; }
 // current: the name this match has now. until: when a name that carries on runs out (0 = never, null = none carrying on)
+// The box for saying which game a match really was.
+// current: the name this match has now. until: when a name that carries on runs out (0 = never, null = none carrying on).
+// For a network several games share it is the only way to know the game, so the box is always shown and the name
+// carries on for a day unless told otherwise. For any other label it is a correction, reached by a small
+// "Wrong game?" link, and it applies to that one match unless the owner asks for longer.
 function gamePick(start, label, current, until) {
-	var box = h("div", { cls: "gamepick" }), used = [], net = netWords(label), hours = 6;
+	var shared = sharedLabel(label), plain = /^Steam games/.test(label) ? "Steam games" : label;
+	var box = h("div", { cls: "gamepick" }), used = [], hours = 0;
 	D.hist.forEach(function (m) { if (m.label === label && m.game && m.game !== label && m.game !== current && used.indexOf(m.game) < 0) used.push(m.game); });
 	var inp = h("input", { type: "text", maxlength: "40", placeholder: "Which game is this?", autocomplete: "off", "aria-label": "The game this match was" });
 	inp.value = current || "";
@@ -5041,26 +5050,50 @@ function gamePick(start, label, current, until) {
 		api("matchgame", start, "&name=" + v + (hrs === "" || hrs == null ? "" : "&days=" + hrs)).then(function (j) {
 			Array.prototype.forEach.call(box.querySelectorAll("button"), function (b) { b.disabled = false; });
 			toast(j.out || j.error || "That did not work.", !j.ok);
-			if (j.ok) { inp.value = ""; L.gameKey = null; refresh(true); }
+			if (j.ok) { inp.value = ""; L.gameKey = null; L.gameOpen = null; refresh(true); }
 		});
 	};
-	// how long the name carries on to later matches on the same network
-	var spans = [[0, "This match only"], [6, "The next 6 hours"], ["", "Until I change it"]], sbox = h("div", { cls: "choice", role: "group", "aria-label": "Use this name for" });
-	var setSpan = function (v) { hours = v; Array.prototype.forEach.call(sbox.children, function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-h") === String(v) ? "true" : "false"); }); };
+	// how long the name carries on to later matches under the same label
+	var spans = [[0, "This match only"], [24, "1 day"], [720, "1 month"], ["", "Until I change it"]], sbox = h("div", { cls: "choice", role: "group", "aria-label": "Use this name for" }), shint = h("small");
+	var setSpan = function (v) {
+		hours = v;
+		Array.prototype.forEach.call(sbox.children, function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-h") === String(v) ? "true" : "false"); });
+		shint.textContent = v === 0 ? "Only this match is renamed. Your other matches keep the name MatchWatch gives them."
+			: "Every match MatchWatch would file under \"" + plain + "\" is recorded under your name " + (v === "" ? "from now until you change it." : v === 24 ? "for the next day, then it goes back." : "for the next month, then it goes back.");
+	};
 	spans.forEach(function (x) { var b = h("button", { type: "button", text: x[1], "data-h": String(x[0]) }); b.addEventListener("click", function () { setSpan(x[0]); }); sbox.appendChild(b); });
-	setSpan(until === 0 ? "" : 6);
+	setSpan(until === 0 ? "" : shared ? 24 : 0);
 	var save = h("button", { type: "button", cls: current ? "" : "solid", text: current ? "Change" : "Save" });
 	save.addEventListener("click", function () { if (!inp.value.trim()) { inp.focus(); return; } send(inp.value, hours); });
 	inp.addEventListener("keydown", function (e) { if (e.key === "Enter") save.click(); });
 	var row = h("div", { cls: "stayform" }, inp, save);
 	used.slice(0, 4).forEach(function (g) { var b = h("button", { type: "button", text: g }); b.addEventListener("click", function () { send(g, hours); }); row.appendChild(b); });
-	if (current) { var back = h("button", { type: "button", text: "Back to " + (/^Steam games/.test(label) ? "Steam games" : "the shared name") }); back.addEventListener("click", function () { send("", ""); }); row.appendChild(back); }
-	var lasts = until == null ? "" : until === 0 ? " Matches there keep this name until you change it." : " Matches there keep this name until " + when(until) + ", then MatchWatch asks again.";
-	box.appendChild(h("p", { cls: "note" }, current ? h("b", "Recorded as " + current + ". ") : h("b", "Which game is this? "),
-		current ? "It is on " + net + ", which many games use." + lasts : "It is on " + net + ", which many games use, so MatchWatch cannot tell them apart. Until you say, it is filed under \"" + (/^Steam games/.test(label) ? "Steam games" : label) + "\"."));
+	if (current) { var back = h("button", { type: "button", text: "Back to " + plain }); back.addEventListener("click", function () { send("", ""); }); row.appendChild(back); }
+	var lasts = until == null ? "" : until === 0 ? " Matches under that name keep it until you change it." : " Matches under that name keep it until " + when(until) + ".";
+	var why = shared ? "It is on " + netWords(label) + ", which many games use, so MatchWatch cannot tell them apart."
+		: "MatchWatch named it from the server's port, and ports are shared, so it can be wrong.";
+	box.appendChild(h("p", { cls: "note" }, current ? h("b", "Recorded as " + current + ". ") : h("b", shared ? "Which game is this? " : "Not " + plain + "? "),
+		current ? why + lasts : why + (shared ? " Until you say, it is filed under \"" + plain + "\"." : " Say which game it really was.")));
 	box.appendChild(row);
 	box.appendChild(h("div", { cls: "spanrow" }, h("span", "Use this name for"), sbox));
+	box.appendChild(shint);
+	box.appendChild(h("p", { cls: "note fine", text: "This changes the name only. Staying on places, strict and the lobby check still go by the server's port." + (shared ? "" : " If this port is always another game for you, add it under Tools, Games, which does change how it is filtered.") }));
 	return box;
+}
+// For a match whose name is not in doubt: nothing but a small link, which opens the box above
+// holder: where the box opens. Without one the link and the box share a line of their own; with one, the link
+// is returned bare, to sit inline beside the game's name, and the box opens in the holder.
+function gameFix(start, label, current, until, onOpen, holder) {
+	var wrap = holder || h("div", { cls: "gamefix" }), link = h("button", { type: "button", cls: "linkbtn", text: holder ? (current ? "renamed by you, change" : "wrong game?") : (current ? "Named " + current + " by you. Change" : "Wrong game?") });
+	link.addEventListener("click", function () {
+		if (holder) link.disabled = true;
+		wrap.textContent = ""; wrap.appendChild(gamePick(start, label, current, until));
+		if (onOpen) onOpen();
+		var f = wrap.querySelector("input"); if (f) f.focus();
+	});
+	if (holder) return link;
+	wrap.appendChild(link);
+	return wrap;
 }
 function waitWords(s) { return !s ? "as soon as a match ends" : (s < 90 ? s + " seconds" : Math.round(s / 60) + " minutes") + " after a match ends"; }
 // Match mode in a sentence: what QoSmate's speed limit is doing right now
@@ -5109,12 +5142,12 @@ function mmSpeeds(mm, again) {
 	};
 	none.addEventListener("click", function () { pick(false); }); some.addEventListener("click", function () { pick(true); });
 	// how soon after a match the between-matches speeds take over
-	var hold = mm.hold == null ? 30 : mm.hold, waits = [[0, "At once"], [30, "30 seconds"], [120, "2 minutes"], [300, "5 minutes"]], wbox = h("div", { cls: "choice", role: "group", "aria-label": "How soon after a match" }), whint = h("small");
+	var hold = mm.hold == null ? 300 : mm.hold, waits = [[0, "At once"], [30, "30 seconds"], [120, "2 minutes"], [300, "5 minutes"]], wbox = h("div", { cls: "choice", role: "group", "aria-label": "How soon after a match" }), whint = h("small");
 	if (!waits.some(function (w) { return w[0] === hold; })) waits.push([hold, waitWords(hold).replace(" after a match ends", "")]);
 	var setWait = function (s) {
 		hold = s;
 		Array.prototype.forEach.call(wbox.children, function (b) { b.setAttribute("aria-pressed", +b.getAttribute("data-s") === s ? "true" : "false"); });
-		whint.textContent = s === 0 ? "The moment MatchWatch sees the match has ended. If you queue again straight away, the speeds for playing come back as the next match starts." : (s <= 30 ? "A short wait, so a quick requeue does not flip the speeds back and forth." : "Long enough to cover the gap between matches, so a run of them stays at the speeds for playing.");
+		whint.textContent = s === 0 ? "The moment MatchWatch sees the match has ended. If you queue again straight away, the speeds for playing come back as the next match starts." : (s <= 30 ? "A short wait: fine if you play one match at a time. Queue again quickly and the speeds flip back as the next match starts." : "Long enough to cover the gap between matches, so a run of them stays at the speeds for playing.");
 	};
 	waits.forEach(function (w) { var b = h("button", { type: "button", text: w[1], "data-s": String(w[0]) }); b.addEventListener("click", function () { setWait(w[0]); }); wbox.appendChild(b); });
 	var rest = h("div", { cls: "speedcard" }, h("b", "Between matches"), h("div", { cls: "choice", role: "group", "aria-label": "Between matches" }, none, some), hint, rows,
@@ -5131,7 +5164,7 @@ function mmSpeeds(mm, again) {
 		if ((dl && !val.on_down) || !val.on_up || (limited && ((dl && !val.off_down) || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
 		send([k("on_down", "down"), k("on_up", "up"), limited ? val.off_down : 0, limited ? val.off_up : 0, hold].join("/"), save);
 	});
-	reset.addEventListener("click", function () { send("0/0/0/0/30", reset); });
+	reset.addEventListener("click", function () { send("0/0/0/0/300", reset); });
 	box.appendChild(h("div", { cls: "speedgrid" }, play, rest));
 	box.appendChild(h("div", { cls: "actions" }, save, reset));
 	return box;
@@ -5199,8 +5232,14 @@ function updateLive() {
 	if (L.mm) L.mm.textContent = mmLine();
 	if (L.game) {
 		// a match on a network several games share: ask which game, once per match and whenever the answer changes
-		var lg = s && !RO ? liveLabel(s) : null, gk = lg && sharedLabel(lg.name) ? s.start + "|" + lg.name + "|" + (lg.as || "") + "|" + (lg.until || 0) : "";
-		if (gk !== L.gameKey && !(L.game.querySelector("input") && L.game.querySelector("input").value && gk)) { L.gameKey = gk; L.game.textContent = ""; if (gk) L.game.appendChild(gamePick(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null)); }
+		var lg = s && !RO ? liveLabel(s) : null, named = lg && lg.name && !/^Game on port/.test(lg.name);
+		var gk = named ? s.start + "|" + lg.name + "|" + (lg.as || "") + "|" + (lg.until || 0) : "";
+		// left alone while its box is open or being typed in, so a refresh does not close it under the owner
+		if (gk !== L.gameKey && !(gk && (L.gameOpen === s.start || (L.game.querySelector("input") && L.game.querySelector("input").value)))) {
+			L.gameKey = gk; L.gameOpen = null; L.game.textContent = "";
+			if (gk && sharedLabel(lg.name)) L.game.appendChild(gamePick(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null));
+			else if (gk) L.game.appendChild(gameFix(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null, function () { L.gameOpen = s.start; }));
+		}
 	}
 	if (!s) {
 		L.title.textContent = "No match in progress";
@@ -5298,9 +5337,16 @@ function pageMatch(id) {
 		var full = !!m; m = m || sum;
 		if (!m) { view.appendChild(h("h1", "That match is no longer on file")); return; }
 		var where = place(m) || m.ip, sc = cls(m.overall);
+		// the game's name, with a small link beside it for when MatchWatch has it wrong; the box opens under the heading
+		var gbox = h("div"), fixable = sum && !RO && sum.label && !sharedLabel(sum.label) && !/^Game on port/.test(sum.label);
+		var gname = sum && sum.game ? sum.game + (sum.label && sum.label !== sum.game ? ", on " + netWords(sum.label) : "") : "";
+		var subp = h("p", { cls: "sub" }, gname, fixable ? " (" : "", fixable ? gameFix(sum.start, sum.label, sum.game !== sum.label ? sum.game : "", null, null, gbox) : null, fixable ? ")" : "", gname ? ". " : "",
+			(m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + ".");
 		view.appendChild(h("div", { cls: "head" },
-			h("div", null, h("h1", where), h("p", { cls: "sub", text: (sum && sum.game ? sum.game + (sum.label && sum.label !== sum.game ? ", on " + netWords(sum.label) : "") + ". " : "") + (m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + "." })),
+			h("div", null, h("h1", where), subp),
 			h("div", { cls: "score" }, h("b", { cls: sc }, String(m.overall), h("small", "/100")), h("span", { cls: sc, text: grade(m.overall) }))));
+		view.appendChild(gbox);
+		if (sum && !RO && sharedLabel(sum.label)) gbox.appendChild(gamePick(sum.start, sum.label, sum.game !== sum.label ? sum.game : "", null));
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
 		if (m.outside) {
 			// this match was played on a server outside the places being stayed on: say so, and why it was not turned away
@@ -5323,7 +5369,6 @@ function pageMatch(id) {
 		else a.appendChild(act("Block this server", "block", m.ip, { danger: true, confirm: "Confirm: block for " + (D.info.block_days || 14) + " days" }));
 		a.appendChild(star(m.ip, true));
 		if (!isBlocked(m.ip)) addIf(a, allowBtn(m.ip));
-		if (sum && !RO && sharedLabel(sum.label)) view.appendChild(gamePick(sum.start, sum.label, sum.game !== sum.label ? sum.game : "", null));
 		if (idx >= 0) a.appendChild(act("Remove this match", "forgetmatch", m.start, { confirm: "Confirm: remove this match", done: function (o) { toast(o); location.hash = "#/matches"; } }));
 		if (idx >= 0 && idx < D.hist.length - 1) a.appendChild(h("a", { href: "#/match/" + D.hist[idx + 1].start, text: "Earlier match" }));
 		if (idx > 0) a.appendChild(h("a", { href: "#/match/" + D.hist[idx - 1].start, text: "Later match" }));
@@ -6365,6 +6410,13 @@ ol.steps li { margin: 8px 0; }
 .gamepick .note { margin: 0 0 10px; }
 .gamepick .note b { color: var(--ink); }
 .gamepick .stayform { max-width: none; }
+.gamepick > small { display: block; margin-top: 8px; color: var(--muted); font-size: 0.85rem; }
+.gamepick .note.fine { margin: 10px 0 0; font-size: 0.82rem; }
+.gamefix { margin: 4px 0 0; }
+button.linkbtn { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; font-size: 0.85rem; text-decoration: underline; cursor: pointer; }
+button.linkbtn:hover { color: var(--pen); background: none; }
+.sub button.linkbtn { font-size: inherit; }
+button.linkbtn:disabled { text-decoration: none; cursor: default; opacity: 0.7; }
 .gamepick .spanrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 0.88rem; }
 .gamepick .spanrow .choice { margin-top: 0; flex-wrap: wrap; }
 MW_FILE_END_15

@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.33.0"
+VERSION="0.34.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1602,8 +1602,10 @@ cmd_matchgame() { # <match start> [name] [hours] : record a match as this game. 
 			til=0; [ -n "$hours" ] && til=$((now + hours * 3600))
 			printf '%s\t%s\t%s\t%s\n' "$label" "$name" "$now" "$til" >> "$DATA/playing"
 			export_json
-			if [ -n "$hours" ]; then echo "Recorded as $name. Matches on the same network in the next $hours hour(s) are recorded as $name too; after that MatchWatch asks again."
-			else echo "Recorded as $name. Your following matches on the same network are recorded as $name too, until you choose another."; fi
+			if [ -z "$hours" ]; then echo "Recorded as $name. Your following matches under \"$label\" are recorded as $name too, until you choose another."
+			elif [ "$hours" = 24 ]; then echo "Recorded as $name. Matches under \"$label\" in the next day are recorded as $name too; after that they go back."
+			elif [ "$hours" -ge 48 ]; then echo "Recorded as $name. Matches under \"$label\" in the next $((hours / 24)) days are recorded as $name too; after that they go back."
+			else echo "Recorded as $name. Matches under \"$label\" in the next $hours hour(s) are recorded as $name too; after that they go back."; fi
 		fi
 	else
 		export_json
@@ -1647,9 +1649,10 @@ cmd_hold() { # on <game> | off <game> | (nothing = list)
 # switching match mode off all put them back, and so does anything that restarts QoSmate.
 # Speeds are in kbit; nothing, or 0, means the default for that slot.
 mm_num() { case "$1" in ""|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
-# MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 30 unless the owner chose otherwise).
-# The owner found five minutes far too long. 0 means as soon as the match is seen to have ended.
-MM_HOLD="$(mm_num "${MW_MM_HOLD:-${MM_HOLD:-30}}")"
+# MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 300 unless the owner chose otherwise).
+# The owner asked for a choice, tried 30 seconds as the default, and found that too quick: five minutes covers
+# the gap between matches. 0 means as soon as the match is seen to have ended.
+MM_HOLD="$(mm_num "${MW_MM_HOLD:-${MM_HOLD:-300}}")"
 mm_why() { # why match mode cannot work here, in a word; nothing when it can
 	[ -x /etc/init.d/qosmate ] && have tc && have uci || { echo noqos; return; }
 	[ "$(uci -q get qosmate.global.enabled)" = 1 ] || { echo disabled; return; }
@@ -2601,7 +2604,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
-  matchwatch matchgame <start> [name]   say which game a match was, when its label covers several (Steam's network)
+  matchwatch matchgame <start> [name]   say which game a match really was, when MatchWatch named it wrongly or cannot tell
   matchwatch matchmode [on|off]      with QoSmate: one pair of speeds while you play, another between matches
   matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
                                seconds is how long after a match the between-matches speeds wait (30 unless you say)

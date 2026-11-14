@@ -262,5 +262,12 @@ ol.steps li { margin: 8px 0; }
 .gamepick .note { margin: 0 0 10px; }
 .gamepick .note b { color: var(--ink); }
 .gamepick .stayform { max-width: none; }
+.gamepick > small { display: block; margin-top: 8px; color: var(--muted); font-size: 0.85rem; }
+.gamepick .note.fine { margin: 10px 0 0; font-size: 0.82rem; }
+.gamefix { margin: 4px 0 0; }
+button.linkbtn { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; font-size: 0.85rem; text-decoration: underline; cursor: pointer; }
+button.linkbtn:hover { color: var(--pen); background: none; }
+.sub button.linkbtn { font-size: inherit; }
+button.linkbtn:disabled { text-decoration: none; cursor: default; opacity: 0.7; }
 .gamepick .spanrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 0.88rem; }
 .gamepick .spanrow .choice { margin-top: 0; flex-wrap: wrap; }

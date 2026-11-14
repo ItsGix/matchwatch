@@ -53,7 +53,7 @@ def build(site):
         s = {"server": 100, "route": 100, "line": 100, "pc": 100}
         if code in s: s[code] = max(2, overall - 20)
         p = round(ping + random.uniform(-0.4, 0.4), 1)
-        m = {"game": "Fortnite" if cc == "SE" else "Call of Duty", "start": start, "dur": dur, "analysed": dur - 6, "device": "192.168.1.50", "ip": ip, "port": 30120, "cc": cc, "city": city, "org": org, "asn": "AS64500",
+        m = {"game": "Fortnite" if cc == "SE" else "Call of Duty", "label": "Fortnite" if cc == "SE" else "Call of Duty", "start": start, "dur": dur, "analysed": dur - 6, "device": "192.168.1.50", "ip": ip, "port": 30120, "cc": cc, "city": city, "org": org, "asn": "AS64500",
              "tick": 20.1, "jit": 2.68 if code == "server" else round(random.uniform(0.2, 0.6), 2), "late": 2.78 if code == "server" else 0.03, "lost": 2.4 if code == "server" else round(random.uniform(0, 0.1), 2),
              "clump": 3.1 if code == "route" else 0.0, "freeze": 3 if code == "server" else 0, "rough": 51.0 if code == "server" else (18.0 if bad else 0.0), "uprate": 95.2, "upjit": 0.2,
              "hitch": 4 if code == "pc" else 0, "farkind": "server", "ping": p, "pingjit": 3.9 if code == "route" else 0.3, "pingloss": 1.5 if code == "route" else 0.0, "nearping": 3.7, "nearjit": 0.3, "nearloss": 0,
@@ -100,7 +100,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.33.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.34.0", "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Fortnite", "ports": "9000-9100", "kind": "", "hosts": ""}, {"name": "Call of Duty", "ports": "3074,30000-45000", "kind": "", "hosts": "vultr,as20473"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -111,7 +111,7 @@ def build(site):
         {"game": "Call of Duty", "city": "Tokyo", "cc": "JP", "org": "Example Hosting Tokyo", "networks": 6, "nets": ["203.0.113.0/24"], "matches": 41, "rating": 88, "mine": False, "in": False},
         {"game": "Fortnite", "city": "Sydney", "cc": "AU", "org": "Example Hosting Sydney", "networks": 4, "nets": ["192.0.2.0/24"], "matches": 17, "rating": 92, "mine": False, "in": False}]
     out["hold"] = [{"name": "Call of Duty", "on": False, "ok": True, "ports": "3074 30000-45000", "host": True}, {"name": "Fortnite", "on": True, "ok": True, "ports": "9000-9100", "host": False}, {"name": "Roblox", "on": False, "ok": False, "ports": "49152-65535", "host": True}]
-    out["matchmode"] = {"on": True, "can": True, "state": "tight", "up": 18000, "down": 68000, "on_up": 16000, "on_down": 55000, "off_up": 19500, "off_down": 76000, "hold": 30}
+    out["matchmode"] = {"on": True, "can": True, "state": "tight", "up": 18000, "down": 68000, "on_up": 16000, "on_down": 55000, "off_up": 19500, "off_down": 76000, "hold": 300}
     out["coverage"] = {"hosts": "Vultr (Call of Duty)", "known": 441, "refusing": True, "refused": 412, "places": [{"name": "Germany", "ranges": 26}, {"name": "Sweden", "ranges": 2}], "suggest": []}
     out["shared"] = {"undo": True, "have": {"games": 3, "regions": 0, "places": 2, "ratings": 6},
                      "ratings": [{"p": "203.0.113.0/24", "n": 14, "avg": 38, "city": "Madrid", "cc": "ES", "org": "Example Hosting Madrid", "blocked": True},
@@ -187,11 +187,11 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace") out = "1";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.33.0.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.34.0.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the Tools screenshots: press what a visitor would, so each picture shows a result
-setTimeout(function () { Array.prototype.forEach.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { if (["Choose what to share", "Test my line", "Trace the route now", "Check for an update"].indexOf(x.textContent) >= 0) x.click(); }); }, 3000);
+setTimeout(function () { Array.prototype.forEach.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { if (["Choose what to share", "Test my line", "Trace the route now", "Check for an update"].indexOf(x.textContent) >= 0 || (x.textContent === "wrong game?" && /shot=wronggame/.test(location.search))) x.click(); }); }, 3000);
 </script></body></html>""" % (RES, RES))
     global OUTSIDE
     OUTSIDE = [m for m in hist if m["cc"] == "ES"][0]["start"]
@@ -230,6 +230,9 @@ if __name__ == "__main__":
     # a match that was played outside the pool: just the top of its report, where that is said
     shoot(browser, f"#/match/{OUTSIDE}", f"{ROOT}/docs/outside.png", 2600)
     Image.open(f"{ROOT}/docs/outside.png").crop((0, 0, 1180, 420)).save(f"{ROOT}/docs/outside.png", optimize=True)
+    # the "Wrong game?" box, opened on a match report
+    shoot(browser, f"?shot=wronggame#/match/{bad}", f"{ROOT}/docs/wronggame.png", 2600)
+    Image.open(f"{ROOT}/docs/wronggame.png").crop((0, 0, 1180, 640)).save(f"{ROOT}/docs/wronggame.png", optimize=True)
     # match mode's two sets of speeds, on their own
     Image.open(f"{ROOT}/docs/update.png").crop((0, 780, 1180, 1560)).save(f"{ROOT}/docs/matchmode.png", optimize=True)
     # the map with what is let in, on its own
