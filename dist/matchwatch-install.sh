@@ -23,7 +23,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/matchgames" "$R/etc/matchwatch/playing" "$R/etc/matchwatch/hold" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/mm.own" "$R/etc/matchwatch/matchgames" "$R/etc/matchwatch/playing" "$R/etc/matchwatch/hold" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.32.2"
+VERSION="0.32.3"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1691,29 +1691,61 @@ mm_num() { case "$1" in ""|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 # MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 30 unless the owner chose otherwise).
 # The owner found five minutes far too long. 0 means as soon as the match is seen to have ended.
 MM_HOLD="$(mm_num "${MW_MM_HOLD:-${MM_HOLD:-30}}")"
-mm_ok() { # can it work here? QoSmate installed, switched on, in a cake mode, and cake on the internet port
-	[ -x /etc/init.d/qosmate ] && have tc && have uci || return 1
-	[ "$(uci -q get qosmate.global.enabled)" = 1 ] && [ "$(uci -q get qosmate.settings.ROOT_QDISC)" = cake ] || return 1
+mm_why() { # why match mode cannot work here, in a word; nothing when it can
+	[ -x /etc/init.d/qosmate ] && have tc && have uci || { echo noqos; return; }
+	[ "$(uci -q get qosmate.global.enabled)" = 1 ] || { echo disabled; return; }
+	[ "$(uci -q get qosmate.settings.ROOT_QDISC)" = cake ] || { echo notcake; return; }
+	# QoSmate's autorate changes the very speed match mode switches, several times a second: the two would fight
+	[ "$(uci -q get qosmate.autorate.enabled)" = 1 ] && { echo autorate; return; }
 	[ -n "$WAN_IF" ] || find_ifaces
-	[ -n "$WAN_IF" ] && tc qdisc show dev "$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'
+	[ -n "$WAN_IF" ] && tc qdisc show dev "$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' || echo noqueue
+}
+mm_ok() { [ -z "$(mm_why)" ]; }
+mm_whytext() {
+	case "$1" in
+		noqos) echo "QoSmate is not installed." ;;
+		disabled) echo "QoSmate is switched off." ;;
+		notcake) echo "QoSmate is not in one of its cake modes." ;;
+		autorate) echo "QoSmate's autorate is on. Autorate keeps changing the same speed limit match mode switches, so only one of the two can be used." ;;
+		noqueue) echo "QoSmate has no speed limit on the internet port at the moment (its upload rate may be set to 0, which switches shaping off)." ;;
+	esac
+}
+# QoSmate's own speeds, "up down" in kbit. They are read from the queues themselves whenever the queues are
+# as QoSmate left them, and remembered in mm.own for when they are not. QoSmate's settings are only the
+# last resort: a friend of the owner saw no speeds at all, because QoSmate fills in its defaults when the
+# options are missing and caps the download rate at a multiple of the upload, so the settings can be
+# empty, or say something other than what is in force.
+mm_own() {
+	local a b l
+	[ -n "$WAN_IF" ] || find_ifaces
+	if [ ! -s "$RUN/mm.state" ] && [ -n "$WAN_IF" ]; then
+		a="$(mm_num "$(mm_actual "$WAN_IF")")"; b="$(mm_num "$(mm_actual "ifb-$WAN_IF")")"
+		if [ "$a" -gt 0 ]; then
+			[ "$(cat "$DATA/mm.own" 2>/dev/null)" = "$a $b" ] || echo "$a $b" > "$DATA/mm.own"
+			echo "$a $b"; return
+		fi
+	fi
+	l="$(cat "$DATA/mm.own" 2>/dev/null)"
+	case "$l" in [1-9]*\ [0-9]*) echo "$l"; return ;; esac
+	echo "$(mm_num "$(uci -q get qosmate.settings.UPRATE 2>/dev/null)") $(mm_num "$(uci -q get qosmate.settings.DOWNRATE 2>/dev/null)")"
 }
 mm_rates() { # tight | loose | own -> "up down" in kbit, 0 meaning no limit
-	local qu qd u d
-	qu="$(mm_num "$(uci -q get qosmate.settings.UPRATE 2>/dev/null)")"; qd="$(mm_num "$(uci -q get qosmate.settings.DOWNRATE 2>/dev/null)")"
+	local q u d
+	q="$(mm_own)"
 	case "$1" in
 		loose) u="$(mm_num "$MM_OFF_UP")"; d="$(mm_num "$MM_OFF_DOWN")" ;;
-		tight) u="$(mm_num "$MM_ON_UP")"; d="$(mm_num "$MM_ON_DOWN")"; [ "$u" -gt 0 ] || u="$qu"; [ "$d" -gt 0 ] || d="$qd" ;;
-		*) u="$qu"; d="$qd" ;;
+		tight) u="$(mm_num "$MM_ON_UP")"; d="$(mm_num "$MM_ON_DOWN")"; [ "$u" -gt 0 ] || u="${q% *}"; [ "$d" -gt 0 ] || d="${q#* }" ;;
+		*) u="${q% *}"; d="${q#* }" ;;
 	esac
 	echo "$u $d"
 }
 mm_json() {
-	local st can=false on off own
+	local st can=false on off own why
 	[ -d "$RUN/www" ] || return 0
-	mm_ok && can=true
+	why="$(mm_why)"; [ -z "$why" ] && can=true
 	own="$(mm_rates own)"; on="$(mm_rates tight)"; off="$(mm_rates loose)"
 	if [ "$MATCH_MODE" != 1 ]; then st=off; elif [ "$can" != true ]; then st=unsupported; else st="$(cat "$RUN/mm.state" 2>/dev/null)"; fi
-	printf '{"on":%s,"can":%s,"state":"%s","up":%s,"down":%s,"on_up":%s,"on_down":%s,"off_up":%s,"off_down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "${st:-tight}" \
+	printf '{"on":%s,"can":%s,"why":"%s","whytext":"%s","state":"%s","up":%s,"down":%s,"on_up":%s,"on_down":%s,"off_up":%s,"off_down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "$why" "$(mm_whytext "$why")" "${st:-tight}" \
 		"${own% *}" "${own#* }" "${on% *}" "${on#* }" "${off% *}" "${off#* }" "$MM_HOLD" > "$RUN/www/matchmode.json.tmp" && mv -f "$RUN/www/matchmode.json.tmp" "$RUN/www/matchmode.json"
 }
 mm_tc() { # device kbit : that rate, or no limit for 0
@@ -1736,7 +1768,7 @@ mm_same() { # tight | loose | own : are the queues really at those speeds now?
 	return 0
 }
 mm_check() { # once a minute from the service: put the speeds back to what they should be if something has moved them
-	local st
+	local st a
 	[ "$MATCH_MODE" = 1 ] || return 0
 	st="$(cat "$RUN/mm.state" 2>/dev/null)"
 	case "$st" in tight|loose) ;; *) return 0 ;; esac
@@ -1745,22 +1777,27 @@ mm_check() { # once a minute from the service: put the speeds back to what they 
 	# between matches with nothing being played, or during one: either way the state is right and the queues are not
 	if [ "$st" = loose ] && ! mm_idle; then st=tight; fi
 	logger -t matchwatch "match mode: the speeds had been changed from outside (QoSmate was probably restarted), so they are set again" 2>/dev/null
+	# what is in the queues now is what QoSmate has just put there: its own speeds, perhaps new ones
+	a="$(mm_num "$(mm_actual "$WAN_IF")")"; [ "$a" -gt 0 ] && echo "$a $(mm_num "$(mm_actual "ifb-$WAN_IF")")" > "$DATA/mm.own"
 	mm_set "$st" force
 }
 mm_set() { # tight | loose | own [force] : the speeds for playing, for between matches, or QoSmate's own
-	local want="$1" r up dn was
-	mkdir -p "$RUN"
+	local want="$1" r up dn was ifb
+	mkdir -p "$RUN" "$DATA"
 	# anything but "between matches" also cancels a switch to it that was waiting
 	[ "$want" = loose ] || echo "$(date +%s).$$" > "$RUN/mm.stamp"
 	was="$(cat "$RUN/mm.state" 2>/dev/null)"
 	mm_ok || { rm -f "$RUN/mm.state"; mm_json; return 1; }
 	# already there? Only if the queues say so themselves
 	[ "$want" = loose ] && [ "$was" = loose ] && [ "$2" != force ] && mm_same loose && return 0
-	r="$(mm_rates "$want")"; up="${r% *}"; dn="${r#* }"
+	r="$(mm_rates "$want")"; up="${r% *}"; dn="${r#* }"; ifb="ifb-$WAN_IF"
 	# the speeds for playing must be real ones: without QoSmate's rate and without one of the owner's, leave things be
-	if [ "$want" != loose ]; then [ "$up" -gt 0 ] && [ "$dn" -gt 0 ] || return 1; fi
+	if [ "$want" != loose ]; then [ "$up" -gt 0 ] || return 1; fi
 	mm_tc "$WAN_IF" "$up" || return 1
-	tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' && mm_tc "ifb-$WAN_IF" "$dn"
+	if tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'; then
+		# downloads are shaped too: a speed for playing must be a real one there as well
+		if [ "$want" = loose ] || [ "$dn" -gt 0 ]; then mm_tc "$ifb" "$dn"; fi
+	fi
 	if [ "$want" = own ]; then rm -f "$RUN/mm.state"
 	else
 		echo "$want" > "$RUN/mm.state"
@@ -1795,7 +1832,7 @@ mm_idle() { grep -q '"sessions":\[\],"candidates":0' "$RUN/www/status.json" 2>/d
 cmd_matchmode() { # on | off | speeds <down> <up> <down> <up> | (nothing = status)
 	local r v n
 	case "$1" in
-		on) mm_ok || die "match mode needs QoSmate installed, switched on and in one of its cake modes. QoSmate does the prioritising; MatchWatch only switches its speed limit."
+		on) mm_ok || die "match mode cannot be turned on: $(mm_whytext "$(mm_why)") It needs QoSmate switched on, in one of its cake modes, with autorate off. QoSmate does the prioritising; MatchWatch only switches its speed limit."
 			mm_save 1; mm_set tight force
 			if mm_idle; then mm_later 20; echo "Match mode is on. Nothing is being played, so the between-matches speeds apply in a few seconds; the speeds for playing come back the moment a match starts."
 			else echo "Match mode is on. A match is being played, so the speeds for playing stay on; the between-matches speeds apply $MM_HOLD seconds after it ends."; fi ;;
@@ -1823,7 +1860,7 @@ cmd_matchmode() { # on | off | speeds <down> <up> <down> <up> | (nothing = statu
 			echo "Saved. While playing: ${r#* } kbit down, ${r% *} kbit up$( [ -z "$MM_ON_DOWN$MM_ON_UP" ] && echo " (QoSmate's own)"). Between matches: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up.$( [ "$MATCH_MODE" = 1 ] || echo " Match mode is off, so these wait until you turn it on.") They apply $( [ "$MM_HOLD" -gt 0 ] && echo "$MM_HOLD seconds after" || echo "as soon as" ) a match ends." ;;
 		""|status) r="$(mm_rates tight)"; v="$(mm_rates loose)"
 			if [ "$MATCH_MODE" != 1 ]; then echo "Match mode is off."
-			elif ! mm_ok; then echo "Match mode is on but cannot work: it needs QoSmate switched on and in one of its cake modes."
+			elif ! mm_ok; then echo "Match mode is on but cannot work: $(mm_whytext "$(mm_why)")"
 			elif [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then echo "Match mode is on. Nothing is being played: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up."
 			else echo "Match mode is on. The speeds for playing are on: ${r#* } kbit down, ${r% *} kbit up."; fi
 			echo "While playing: ${r#* } kbit down, ${r% *} kbit up. Between matches: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up." ;;
@@ -2449,7 +2486,9 @@ cmd_run() {
 	find_ifaces; build_filter
 	apply_blocklist
 	# match mode: start from QoSmate's own limits, and lift them only once a minute has passed with no match
-	if [ "$MATCH_MODE" = 1 ]; then rm -f "$RUN/mm.state"; ( sleep 8; mm_set tight; mm_later 60 ) >/dev/null 2>&1 & fi
+	[ -s "$RUN/mm.state" ] && mm_set own    # left over from an unclean stop: the queues may still hold our speeds
+	rm -f "$RUN/mm.state"
+	if [ "$MATCH_MODE" = 1 ]; then ( sleep 8; mm_set tight; mm_later 60 ) >/dev/null 2>&1 & fi
 	# strict games are switched on a few seconds after the engine is listening, never before
 	rm -f "$RUN/hold.ports"; nft flush set inet matchwatch hold_ports 2>/dev/null
 	[ -s "$DATA/hold" ] && [ -s "$DATA/stay" ] && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
@@ -4406,7 +4445,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.32.2", reloading = false;
+var BUILT = "0.32.3", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4962,16 +5001,17 @@ function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" 
 function mmLine() {
 	var m = D.mm;
 	if (!m || !m.on) return "";
-	if (m.state === "unsupported") return "Match mode is on but cannot work: it needs QoSmate switched on, in one of its cake modes.";
-	var od = m.on_down || m.down, ou = m.on_up || m.up, lim = function (k) { return k ? mbit(k) : "no limit"; };
+	if (m.state === "unsupported") return "Match mode is on but cannot work. " + (m.whytext || "It needs QoSmate switched on, in one of its cake modes.");
+	var od = m.on_down || m.down, ou = m.on_up || m.up, lim = function (k) { return k ? mbit(k) : "no limit"; }, both = function (d, u) { return d ? mbit(d) + " down and " + mbit(u) + " up" : mbit(u) + " up (QoSmate is not limiting downloads)"; };
 	if (m.state === "loose") return "Match mode: nothing is being played, so the between-matches speeds apply (" + (m.off_down || m.off_up ? lim(m.off_down) + " down, " + lim(m.off_up) + " up" : "no limit") + "). The speeds for playing come back the moment a match starts.";
-	return "Match mode: the speeds for playing are on, " + mbit(od) + " down and " + mbit(ou) + " up, with QoSmate keeping your game ahead of everything else. The between-matches speeds apply " + waitWords(m.hold) + ".";
+	return "Match mode: the speeds for playing are on, " + both(od, ou) + ", with QoSmate keeping your game ahead of everything else. The between-matches speeds apply " + waitWords(m.hold) + ".";
 }
 // The speeds match mode switches between: a box to type in and a slider for each, kept in step.
 // A slider works in percent of QoSmate's own rate, which is the one figure both sides can be measured against.
 function mmSpeeds(mm, again) {
 	var own = { down: mm.down || 0, up: mm.up || 0 }, val = {}, box = h("div", { cls: "speeds" });
-	if (!own.down || !own.up) { box.appendChild(h("p", { cls: "note", text: "QoSmate's own download and upload rates could not be read, so speeds cannot be chosen here yet." })); return box; }
+	if (!own.up) { box.appendChild(h("p", { cls: "note", text: "QoSmate's own speeds could not be read from its queues, so speeds cannot be chosen here yet. Check that QoSmate is running with an upload rate set." })); return box; }
+	var dl = own.down > 0;   // QoSmate can be set to leave downloads unshaped; then there is only an upload speed to choose
 	function one(key, dir, label, lo, hi, start) {
 		var base = own[dir];
 		var num = h("input", { type: "number", min: "0.1", step: "0.1", inputmode: "decimal", "aria-label": label + ", megabits per second" });
@@ -4990,10 +5030,10 @@ function mmSpeeds(mm, again) {
 		return h("div", { cls: "speed" }, h("span", { cls: "dir", text: label }), h("span", { cls: "numwrap" }, num, h("i", "Mbit")), rng, pct);
 	}
 	var play = h("div", { cls: "speedcard" }, h("b", "While you play"), h("small", "QoSmate holds your line to these and keeps the game in front."),
-		one("on_down", "down", "Download", 5, 100, mm.on_down || own.down), one("on_up", "up", "Upload", 5, 100, mm.on_up || own.up));
+		dl ? one("on_down", "down", "Download", 5, 100, mm.on_down || own.down) : null, one("on_up", "up", "Upload", 5, 100, mm.on_up || own.up));
 	var limited = !!(mm.off_down || mm.off_up);
 	var none = h("button", { type: "button", text: "No limit" }), some = h("button", { type: "button", text: "Choose speeds" });
-	var rows = h("div", null, one("off_down", "down", "Download", 50, 200, mm.off_down || own.down), one("off_up", "up", "Upload", 50, 200, mm.off_up || own.up));
+	var rows = h("div", null, dl ? one("off_down", "down", "Download", 50, 200, mm.off_down || own.down) : null, one("off_up", "up", "Upload", 50, 200, mm.off_up || own.up));
 	var hint = h("small");
 	var pick = function (lim) {
 		limited = lim; rows.style.display = lim ? "" : "none";
@@ -5021,7 +5061,7 @@ function mmSpeeds(mm, again) {
 	};
 	save.addEventListener("click", function () {
 		var k = function (key, dir) { var v = val[key] || 0; return v === own[dir] && key.indexOf("on_") === 0 ? 0 : v; };   // QoSmate's own rate is stored as "follow QoSmate"
-		if (!val.on_down || !val.on_up || (limited && (!val.off_down || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
+		if ((dl && !val.on_down) || !val.on_up || (limited && ((dl && !val.off_down) || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
 		send([k("on_down", "down"), k("on_up", "up"), limited ? val.off_down : 0, limited ? val.off_up : 0, hold].join("/"), save);
 	});
 	reset.addEventListener("click", function () { send("0/0/0/0/30", reset); });
@@ -5910,7 +5950,7 @@ function pageTools() {
 			view.appendChild(tool("Match mode", mmDesc,
 				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
 					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
-				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") }),
+				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet. " + (mm.whytext || "QoSmate must be switched on and in one of its cake modes.") : "Off: QoSmate's limits are on all the time" + (mm.up ? ", " + (mm.down ? mbit(mm.down) + " down and " : "") + mbit(mm.up) + " up." : ".") }),
 				mm.can === false ? null : mmSpeeds(mm, again)));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));

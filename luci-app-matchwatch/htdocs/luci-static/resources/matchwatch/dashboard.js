@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.32.2", reloading = false;
+var BUILT = "0.32.3", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -584,16 +584,17 @@ function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" 
 function mmLine() {
 	var m = D.mm;
 	if (!m || !m.on) return "";
-	if (m.state === "unsupported") return "Match mode is on but cannot work: it needs QoSmate switched on, in one of its cake modes.";
-	var od = m.on_down || m.down, ou = m.on_up || m.up, lim = function (k) { return k ? mbit(k) : "no limit"; };
+	if (m.state === "unsupported") return "Match mode is on but cannot work. " + (m.whytext || "It needs QoSmate switched on, in one of its cake modes.");
+	var od = m.on_down || m.down, ou = m.on_up || m.up, lim = function (k) { return k ? mbit(k) : "no limit"; }, both = function (d, u) { return d ? mbit(d) + " down and " + mbit(u) + " up" : mbit(u) + " up (QoSmate is not limiting downloads)"; };
 	if (m.state === "loose") return "Match mode: nothing is being played, so the between-matches speeds apply (" + (m.off_down || m.off_up ? lim(m.off_down) + " down, " + lim(m.off_up) + " up" : "no limit") + "). The speeds for playing come back the moment a match starts.";
-	return "Match mode: the speeds for playing are on, " + mbit(od) + " down and " + mbit(ou) + " up, with QoSmate keeping your game ahead of everything else. The between-matches speeds apply " + waitWords(m.hold) + ".";
+	return "Match mode: the speeds for playing are on, " + both(od, ou) + ", with QoSmate keeping your game ahead of everything else. The between-matches speeds apply " + waitWords(m.hold) + ".";
 }
 // The speeds match mode switches between: a box to type in and a slider for each, kept in step.
 // A slider works in percent of QoSmate's own rate, which is the one figure both sides can be measured against.
 function mmSpeeds(mm, again) {
 	var own = { down: mm.down || 0, up: mm.up || 0 }, val = {}, box = h("div", { cls: "speeds" });
-	if (!own.down || !own.up) { box.appendChild(h("p", { cls: "note", text: "QoSmate's own download and upload rates could not be read, so speeds cannot be chosen here yet." })); return box; }
+	if (!own.up) { box.appendChild(h("p", { cls: "note", text: "QoSmate's own speeds could not be read from its queues, so speeds cannot be chosen here yet. Check that QoSmate is running with an upload rate set." })); return box; }
+	var dl = own.down > 0;   // QoSmate can be set to leave downloads unshaped; then there is only an upload speed to choose
 	function one(key, dir, label, lo, hi, start) {
 		var base = own[dir];
 		var num = h("input", { type: "number", min: "0.1", step: "0.1", inputmode: "decimal", "aria-label": label + ", megabits per second" });
@@ -612,10 +613,10 @@ function mmSpeeds(mm, again) {
 		return h("div", { cls: "speed" }, h("span", { cls: "dir", text: label }), h("span", { cls: "numwrap" }, num, h("i", "Mbit")), rng, pct);
 	}
 	var play = h("div", { cls: "speedcard" }, h("b", "While you play"), h("small", "QoSmate holds your line to these and keeps the game in front."),
-		one("on_down", "down", "Download", 5, 100, mm.on_down || own.down), one("on_up", "up", "Upload", 5, 100, mm.on_up || own.up));
+		dl ? one("on_down", "down", "Download", 5, 100, mm.on_down || own.down) : null, one("on_up", "up", "Upload", 5, 100, mm.on_up || own.up));
 	var limited = !!(mm.off_down || mm.off_up);
 	var none = h("button", { type: "button", text: "No limit" }), some = h("button", { type: "button", text: "Choose speeds" });
-	var rows = h("div", null, one("off_down", "down", "Download", 50, 200, mm.off_down || own.down), one("off_up", "up", "Upload", 50, 200, mm.off_up || own.up));
+	var rows = h("div", null, dl ? one("off_down", "down", "Download", 50, 200, mm.off_down || own.down) : null, one("off_up", "up", "Upload", 50, 200, mm.off_up || own.up));
 	var hint = h("small");
 	var pick = function (lim) {
 		limited = lim; rows.style.display = lim ? "" : "none";
@@ -643,7 +644,7 @@ function mmSpeeds(mm, again) {
 	};
 	save.addEventListener("click", function () {
 		var k = function (key, dir) { var v = val[key] || 0; return v === own[dir] && key.indexOf("on_") === 0 ? 0 : v; };   // QoSmate's own rate is stored as "follow QoSmate"
-		if (!val.on_down || !val.on_up || (limited && (!val.off_down || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
+		if ((dl && !val.on_down) || !val.on_up || (limited && ((dl && !val.off_down) || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
 		send([k("on_down", "down"), k("on_up", "up"), limited ? val.off_down : 0, limited ? val.off_up : 0, hold].join("/"), save);
 	});
 	reset.addEventListener("click", function () { send("0/0/0/0/30", reset); });
@@ -1532,7 +1533,7 @@ function pageTools() {
 			view.appendChild(tool("Match mode", mmDesc,
 				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
 					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
-				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet: QoSmate must be switched on and in one of its cake modes." : "Off: QoSmate's limits are on all the time" + (mm.down ? ", " + mbit(mm.down) + " down and " + mbit(mm.up) + " up." : ".") }),
+				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet. " + (mm.whytext || "QoSmate must be switched on and in one of its cake modes.") : "Off: QoSmate's limits are on all the time" + (mm.up ? ", " + (mm.down ? mbit(mm.down) + " down and " : "") + mbit(mm.up) + " up." : ".") }),
 				mm.can === false ? null : mmSpeeds(mm, again)));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
