@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.34.0"
+VERSION="0.34.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -4515,7 +4515,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.34.0", reloading = false;
+var BUILT = "0.34.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -5084,7 +5084,8 @@ function gamePick(start, label, current, until) {
 // holder: where the box opens. Without one the link and the box share a line of their own; with one, the link
 // is returned bare, to sit inline beside the game's name, and the box opens in the holder.
 function gameFix(start, label, current, until, onOpen, holder) {
-	var wrap = holder || h("div", { cls: "gamefix" }), link = h("button", { type: "button", cls: "linkbtn", text: holder ? (current ? "renamed by you, change" : "wrong game?") : (current ? "Named " + current + " by you. Change" : "Wrong game?") });
+	var wrap = holder || h("div", { cls: "gamefix" }), ask = sharedLabel(label) && !current,
+		link = h("button", { type: "button", cls: "linkbtn", text: holder ? (current ? "change" : ask ? "which game?" : "wrong game?") : (current ? "Named " + current + " by you. Change" : ask ? "Which game is this?" : "Wrong game?") });
 	link.addEventListener("click", function () {
 		if (holder) link.disabled = true;
 		wrap.textContent = ""; wrap.appendChild(gamePick(start, label, current, until));
@@ -5237,7 +5238,7 @@ function updateLive() {
 		// left alone while its box is open or being typed in, so a refresh does not close it under the owner
 		if (gk !== L.gameKey && !(gk && (L.gameOpen === s.start || (L.game.querySelector("input") && L.game.querySelector("input").value)))) {
 			L.gameKey = gk; L.gameOpen = null; L.game.textContent = "";
-			if (gk && sharedLabel(lg.name)) L.game.appendChild(gamePick(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null));
+			if (gk && sharedLabel(lg.name) && !lg.as) L.game.appendChild(gamePick(s.start, lg.name, "", null));
 			else if (gk) L.game.appendChild(gameFix(s.start, lg.name, lg.as || "", lg.as ? (lg.until || 0) : null, function () { L.gameOpen = s.start; }));
 		}
 	}
@@ -5338,15 +5339,15 @@ function pageMatch(id) {
 		if (!m) { view.appendChild(h("h1", "That match is no longer on file")); return; }
 		var where = place(m) || m.ip, sc = cls(m.overall);
 		// the game's name, with a small link beside it for when MatchWatch has it wrong; the box opens under the heading
-		var gbox = h("div"), fixable = sum && !RO && sum.label && !sharedLabel(sum.label) && !/^Game on port/.test(sum.label);
-		var gname = sum && sum.game ? sum.game + (sum.label && sum.label !== sum.game ? ", on " + netWords(sum.label) : "") : "";
+		var gbox = h("div"), fixable = sum && !RO && sum.label && !/^Game on port/.test(sum.label);
+		var gname = !(sum && sum.game) ? "" : sum.label && sum.label !== sum.game ? sum.game + (sharedLabel(sum.label) ? ", on " + netWords(sum.label) : "")
+			: /^Steam games/.test(sum.game) ? "A Steam game" : sum.game;
 		var subp = h("p", { cls: "sub" }, gname, fixable ? " (" : "", fixable ? gameFix(sum.start, sum.label, sum.game !== sum.label ? sum.game : "", null, null, gbox) : null, fixable ? ")" : "", gname ? ". " : "",
 			(m.org && m.org !== "-" ? m.org + ". " : "") + when(m.start) + ". " + mins(m.dur) + " played, " + mins(m.analysed) + " analysed. Server " + m.ip + ":" + m.port + ".");
 		view.appendChild(h("div", { cls: "head" },
 			h("div", null, h("h1", where), subp),
 			h("div", { cls: "score" }, h("b", { cls: sc }, String(m.overall), h("small", "/100")), h("span", { cls: sc, text: grade(m.overall) }))));
 		view.appendChild(gbox);
-		if (sum && !RO && sharedLabel(sum.label)) gbox.appendChild(gamePick(sum.start, sum.label, sum.game !== sum.label ? sum.game : "", null));
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
 		if (m.outside) {
 			// this match was played on a server outside the places being stayed on: say so, and why it was not turned away
