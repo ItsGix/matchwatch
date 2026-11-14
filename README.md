@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.32.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.32.2 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -547,6 +547,7 @@ Each speed has a box to type megabits into and a slider beside it, kept in step.
 - The speeds for playing come on when the game first reaches for a game server, or at the latest when the match itself starts.
 - MatchWatch never writes QoSmate's settings and does not restart it. It gives the queue a rate, or "unlimited", and nothing else, so no option you chose in QoSmate is lost and there is no blip.
 - It fails towards QoSmate's own limits. Stopping or restarting MatchWatch, switching match mode off, or anything that restarts QoSmate all put QoSmate's own rates back.
+- If QoSmate is restarted while match mode is on, its own rates come back with it. MatchWatch checks the queues once a minute and sets your speeds again, so the most you see is a minute at QoSmate's rates.
 - The Live page says which speeds are in force, and Recent activity records each switch.
 - It needs QoSmate switched on and in one of its cake modes. Turn it on under Tools, Data and settings, or in Settings. It is off by default.
 

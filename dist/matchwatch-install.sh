@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.32.1"
+VERSION="0.32.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1720,14 +1720,42 @@ mm_tc() { # device kbit : that rate, or no limit for 0
 	if [ "$2" -gt 0 ]; then tc qdisc change dev "$1" root cake bandwidth "${2}kbit" 2>/dev/null; else tc qdisc change dev "$1" root cake unlimited 2>/dev/null; fi
 }
 mm_say() { [ "$1" -gt 0 ] && echo "$1 kbit" || echo "no limit"; }
+mm_actual() { # device -> the rate cake has on it now, in kbit; 0 for no limit; nothing when it cannot be read
+	tc qdisc show dev "$1" root 2>/dev/null | awk '/^qdisc cake/ { for (i = 1; i < NF; i++) if ($i == "bandwidth") {
+		v = $(i + 1); if (v == "unlimited") { print 0; exit }
+		n = v + 0; if (v ~ /Gbit$/) n *= 1000000; else if (v ~ /Mbit$/) n *= 1000; else if (v ~ /[Kk]bit$/) n *= 1; else n /= 1000
+		printf "%d\n", n + 0.5; exit } }'
+}
+mm_same() { # tight | loose | own : are the queues really at those speeds now?
+	# What MatchWatch remembers doing is not proof: anything that restarts QoSmate puts QoSmate's own
+	# rates back without a word. The owner ran a speed test "between matches" and got the limited speed.
+	local r a
+	r="$(mm_rates "$1")"
+	a="$(mm_actual "$WAN_IF")"; [ -n "$a" ] && [ "$a" = "${r% *}" ] || return 1
+	if tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'; then a="$(mm_actual "ifb-$WAN_IF")"; [ "$a" = "${r#* }" ] || return 1; fi
+	return 0
+}
+mm_check() { # once a minute from the service: put the speeds back to what they should be if something has moved them
+	local st
+	[ "$MATCH_MODE" = 1 ] || return 0
+	st="$(cat "$RUN/mm.state" 2>/dev/null)"
+	case "$st" in tight|loose) ;; *) return 0 ;; esac
+	mm_ok || return 0
+	mm_same "$st" && return 0
+	# between matches with nothing being played, or during one: either way the state is right and the queues are not
+	if [ "$st" = loose ] && ! mm_idle; then st=tight; fi
+	logger -t matchwatch "match mode: the speeds had been changed from outside (QoSmate was probably restarted), so they are set again" 2>/dev/null
+	mm_set "$st" force
+}
 mm_set() { # tight | loose | own [force] : the speeds for playing, for between matches, or QoSmate's own
 	local want="$1" r up dn was
 	mkdir -p "$RUN"
 	# anything but "between matches" also cancels a switch to it that was waiting
 	[ "$want" = loose ] || echo "$(date +%s).$$" > "$RUN/mm.stamp"
 	was="$(cat "$RUN/mm.state" 2>/dev/null)"
-	[ "$want" = loose ] && [ "$was" = loose ] && [ "$2" != force ] && return 0
 	mm_ok || { rm -f "$RUN/mm.state"; mm_json; return 1; }
+	# already there? Only if the queues say so themselves
+	[ "$want" = loose ] && [ "$was" = loose ] && [ "$2" != force ] && mm_same loose && return 0
 	r="$(mm_rates "$want")"; up="${r% *}"; dn="${r#* }"
 	# the speeds for playing must be real ones: without QoSmate's rate and without one of the owner's, leave things be
 	if [ "$want" != loose ]; then [ "$up" -gt 0 ] && [ "$dn" -gt 0 ] || return 1; fi
@@ -2397,7 +2425,7 @@ CGI
 }
 stop_children() {
 	local d f
-	kill $TPID $HPID $APID $UPID 2>/dev/null
+	kill $TPID $HPID $APID $UPID $MPID 2>/dev/null
 	for d in "$RUN"/probe.*; do
 		[ -d "$d" ] || continue
 		touch "$d/stop"
@@ -2444,6 +2472,10 @@ cmd_run() {
 	echo $$ > "$RUN/pid"
 	trap 'stop_children; exit 0' INT TERM
 	( sleep 20; regions_stale && cmd_regions measure >/dev/null 2>&1 ) &
+	# match mode: once a minute, see that the queues are still at the speeds they should be. A fresh
+	# process each time, so switching match mode on or off from the dashboard needs no restart of this one.
+	( sleep 90; while :; do "$SELF" _mmcheck >/dev/null 2>&1; sleep 60; done ) >/dev/null 2>&1 &
+	MPID=$!
 	# the daily look for a newer version, when switched on: soon after starting, then checked for each hour
 	( sleep 40; while :; do update_due && { update_note >/dev/null 2>&1; export_json; }; sleep 3600; done ) >/dev/null 2>&1 &
 	UPID=$!
@@ -2566,6 +2598,7 @@ case "$1" in
 	matchmode) shift; cmd_matchmode "$@" ;;
 	matchgame) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_matchgame "$c" "$*" ;;
 	_mmstop) [ "$MATCH_MODE" = 1 ] && mm_set own; rm -f "$RUN/mm.state" ;;
+	_mmcheck) mm_check ;;
 	strict) c="$2"; if [ $# -ge 2 ]; then shift 2; else shift; fi; cmd_hold "$c" "$*" ;;
 	_hold) cmd_hold_check "$2" "$3" ;;
 	_unseen) cmd_unseen "$2" "$3" ;;
@@ -4373,7 +4406,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.32.1", reloading = false;
+var BUILT = "0.32.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
