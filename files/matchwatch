@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.32.3"
+VERSION="0.32.4"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -180,19 +180,32 @@ qm_tins() { # device -> packets, drops, marks and current worst delay (microseco
 		$1 == "pk_delay" { top["d"] = us($NF); m = 0; for (i = 2; i < NF; i++) if (us($i) > m) m = us($i); rest["d"] = m }
 		END { if (got) printf "%d %d %d %d %d %d %d %d\n", top["pkts"], top["drops"], top["marks"], top["d"], rest["pkts"], rest["drops"], rest["marks"], rest["d"] }'
 }
+# The port QoSmate shapes (QWAN). QoSmate has its own setting for it, and it need not be the port OpenWrt
+# calls the internet: on a fibre line with a login (PPPoE) OpenWrt's is "pppoe-wan" while QoSmate is often
+# set to the physical port underneath, or the other way round. A friend of the owner had match mode say
+# QoSmate had no speed limit, because MatchWatch was looking at the other one. QoSmate's setting wins when
+# that port exists; its downloads queue is always "ifb-" and that name.
+qos_dev() {
+	[ -n "$QWAN" ] && return 0
+	[ -n "$WAN_IF" ] || find_ifaces
+	QWAN="$(uci -q get qosmate.settings.WAN 2>/dev/null)"
+	case "$QWAN" in ""|*[!A-Za-z0-9_.@-]*) QWAN="" ;; esac
+	[ -n "$QWAN" ] && [ -d "/sys/class/net/$QWAN" ] || QWAN="$WAN_IF"
+	return 0
+}
 qm_loop() { # note where the counters stood at the start, then keep the longest delay seen: cake only shows the latest
 	local d="$PD" a b i=0
 	have tc || return 0
-	find_ifaces
-	[ -n "$WAN_IF" ] || return 0
-	a="$(qm_tins "$WAN_IF")"
+	qos_dev
+	[ -n "$QWAN" ] || return 0
+	a="$(qm_tins "$QWAN")"
 	[ -n "$a" ] || return 0
 	echo "$a" > "$d/qm.up0"
-	b="$(qm_tins "ifb-$WAN_IF")"; [ -n "$b" ] && echo "$b" > "$d/qm.dn0"
+	b="$(qm_tins "ifb-$QWAN")"; [ -n "$b" ] && echo "$b" > "$d/qm.dn0"
 	echo "0 0 0 0" > "$d/qm.peak"
 	while [ -d "$d" ] && [ ! -e "$d/stop" ] && [ "$i" -lt 2880 ]; do
 		sleep 5; i=$((i + 1))
-		a="$(qm_tins "$WAN_IF")"; b="$(qm_tins "ifb-$WAN_IF")"
+		a="$(qm_tins "$QWAN")"; b="$(qm_tins "ifb-$QWAN")"
 		[ -d "$d" ] && [ ! -e "$d/stop" ] || break
 		echo "${a:-0 0 0 0 0 0 0 0} ${b:-0 0 0 0 0 0 0 0}" | awk -v f="$d/qm.peak" '{
 			getline p < f; split(p, m, " ")
@@ -203,8 +216,8 @@ qm_loop() { # note where the counters stood at the start, then keep the longest 
 qm_sum() { # the match is over: what each queue carried, dropped and slowed, as one line of JSON for the report
 	local d="$PD" a b
 	[ -f "$d/qm.up0" ] || return 0
-	find_ifaces
-	a="$(qm_tins "$WAN_IF")"; b="$(qm_tins "ifb-$WAN_IF")"
+	qos_dev
+	a="$(qm_tins "$QWAN")"; b="$(qm_tins "ifb-$QWAN")"
 	[ -n "$a" ] || return 0
 	awk -v a0="$(cat "$d/qm.up0")" -v a1="$a" -v b0="$(cat "$d/qm.dn0" 2>/dev/null)" -v b1="$b" -v pk="$(cat "$d/qm.peak" 2>/dev/null)" -v sch="$(qos_scheme)" '
 		function side(name, s0, s1, p1, p2,   A, B) {
@@ -1642,17 +1655,17 @@ mm_why() { # why match mode cannot work here, in a word; nothing when it can
 	[ "$(uci -q get qosmate.settings.ROOT_QDISC)" = cake ] || { echo notcake; return; }
 	# QoSmate's autorate changes the very speed match mode switches, several times a second: the two would fight
 	[ "$(uci -q get qosmate.autorate.enabled)" = 1 ] && { echo autorate; return; }
-	[ -n "$WAN_IF" ] || find_ifaces
-	[ -n "$WAN_IF" ] && tc qdisc show dev "$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake' || echo noqueue
+	qos_dev
+	[ -n "$QWAN" ] && tc qdisc show dev "$QWAN" root 2>/dev/null | grep -q '^qdisc cake' || echo noqueue
 }
-mm_ok() { [ -z "$(mm_why)" ]; }
+mm_ok() { qos_dev; [ -z "$(mm_why)" ]; }   # qos_dev here, in this shell: inside $(...) what it finds would be lost again
 mm_whytext() {
 	case "$1" in
 		noqos) echo "QoSmate is not installed." ;;
 		disabled) echo "QoSmate is switched off." ;;
 		notcake) echo "QoSmate is not in one of its cake modes." ;;
 		autorate) echo "QoSmate's autorate is on. Autorate keeps changing the same speed limit match mode switches, so only one of the two can be used." ;;
-		noqueue) echo "QoSmate has no speed limit on the internet port at the moment (its upload rate may be set to 0, which switches shaping off)." ;;
+		noqueue) qos_dev; echo "QoSmate has no cake queue on its port (${QWAN:-none found}) at the moment. Its upload rate may be set to 0, which switches shaping off, or QoSmate may need restarting." ;;
 	esac
 }
 # QoSmate's own speeds, "up down" in kbit. They are read from the queues themselves whenever the queues are
@@ -1662,9 +1675,9 @@ mm_whytext() {
 # empty, or say something other than what is in force.
 mm_own() {
 	local a b l
-	[ -n "$WAN_IF" ] || find_ifaces
-	if [ ! -s "$RUN/mm.state" ] && [ -n "$WAN_IF" ]; then
-		a="$(mm_num "$(mm_actual "$WAN_IF")")"; b="$(mm_num "$(mm_actual "ifb-$WAN_IF")")"
+	qos_dev
+	if [ ! -s "$RUN/mm.state" ] && [ -n "$QWAN" ]; then
+		a="$(mm_num "$(mm_actual "$QWAN")")"; b="$(mm_num "$(mm_actual "ifb-$QWAN")")"
 		if [ "$a" -gt 0 ]; then
 			[ "$(cat "$DATA/mm.own" 2>/dev/null)" = "$a $b" ] || echo "$a $b" > "$DATA/mm.own"
 			echo "$a $b"; return
@@ -1708,8 +1721,8 @@ mm_same() { # tight | loose | own : are the queues really at those speeds now?
 	# rates back without a word. The owner ran a speed test "between matches" and got the limited speed.
 	local r a
 	r="$(mm_rates "$1")"
-	a="$(mm_actual "$WAN_IF")"; [ -n "$a" ] && [ "$a" = "${r% *}" ] || return 1
-	if tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'; then a="$(mm_actual "ifb-$WAN_IF")"; [ "$a" = "${r#* }" ] || return 1; fi
+	a="$(mm_actual "$QWAN")"; [ -n "$a" ] && [ "$a" = "${r% *}" ] || return 1
+	if tc qdisc show dev "ifb-$QWAN" root 2>/dev/null | grep -q '^qdisc cake'; then a="$(mm_actual "ifb-$QWAN")"; [ "$a" = "${r#* }" ] || return 1; fi
 	return 0
 }
 mm_check() { # once a minute from the service: put the speeds back to what they should be if something has moved them
@@ -1723,7 +1736,7 @@ mm_check() { # once a minute from the service: put the speeds back to what they 
 	if [ "$st" = loose ] && ! mm_idle; then st=tight; fi
 	logger -t matchwatch "match mode: the speeds had been changed from outside (QoSmate was probably restarted), so they are set again" 2>/dev/null
 	# what is in the queues now is what QoSmate has just put there: its own speeds, perhaps new ones
-	a="$(mm_num "$(mm_actual "$WAN_IF")")"; [ "$a" -gt 0 ] && echo "$a $(mm_num "$(mm_actual "ifb-$WAN_IF")")" > "$DATA/mm.own"
+	a="$(mm_num "$(mm_actual "$QWAN")")"; [ "$a" -gt 0 ] && echo "$a $(mm_num "$(mm_actual "ifb-$QWAN")")" > "$DATA/mm.own"
 	mm_set "$st" force
 }
 mm_set() { # tight | loose | own [force] : the speeds for playing, for between matches, or QoSmate's own
@@ -1735,11 +1748,11 @@ mm_set() { # tight | loose | own [force] : the speeds for playing, for between m
 	mm_ok || { rm -f "$RUN/mm.state"; mm_json; return 1; }
 	# already there? Only if the queues say so themselves
 	[ "$want" = loose ] && [ "$was" = loose ] && [ "$2" != force ] && mm_same loose && return 0
-	r="$(mm_rates "$want")"; up="${r% *}"; dn="${r#* }"; ifb="ifb-$WAN_IF"
+	r="$(mm_rates "$want")"; up="${r% *}"; dn="${r#* }"; ifb="ifb-$QWAN"
 	# the speeds for playing must be real ones: without QoSmate's rate and without one of the owner's, leave things be
 	if [ "$want" != loose ]; then [ "$up" -gt 0 ] || return 1; fi
-	mm_tc "$WAN_IF" "$up" || return 1
-	if tc qdisc show dev "ifb-$WAN_IF" root 2>/dev/null | grep -q '^qdisc cake'; then
+	mm_tc "$QWAN" "$up" || return 1
+	if tc qdisc show dev "ifb-$QWAN" root 2>/dev/null | grep -q '^qdisc cake'; then
 		# downloads are shaped too: a speed for playing must be a real one there as well
 		if [ "$want" = loose ] || [ "$dn" -gt 0 ]; then mm_tc "$ifb" "$dn"; fi
 	fi
@@ -2173,7 +2186,8 @@ dscp_name() {
 }
 qos_scheme() { # which priority scheme is live on the WAN port: hfsc | diffserv3 | diffserv4 | diffserv8 | besteffort | unknown
 	local q
-	q="$(tc qdisc show dev "$WAN_IF" 2>/dev/null)"
+	qos_dev
+	q="$(tc qdisc show dev "$QWAN" 2>/dev/null)"
 	case "$q" in
 		*"qdisc hfsc"*) echo hfsc ;;
 		*diffserv3*) echo diffserv3 ;;
@@ -2236,9 +2250,10 @@ qos_probe() { # server-ip server-port -> prints: state class source   (state: to
 }
 rt_packets() { # scheme -> packets sent so far through the top queue on the WAN port
 	have tc || return 0
+	qos_dev
 	case "$1" in
-		hfsc) tc -s class show dev "$WAN_IF" 2>/dev/null | awk '/^class hfsc 1:11 / { f = 1; next } /^class / { f = 0 } f && $1 == "Sent" { print $4; exit }' ;;
-		diffserv3|diffserv4) tc -s qdisc show dev "$WAN_IF" 2>/dev/null | awk '/^qdisc cake/ { c++ } c == 1 && $1 == "pkts" { print $NF; exit }' ;;
+		hfsc) tc -s class show dev "$QWAN" 2>/dev/null | awk '/^class hfsc 1:11 / { f = 1; next } /^class / { f = 0 } f && $1 == "Sent" { print $4; exit }' ;;
+		diffserv3|diffserv4) tc -s qdisc show dev "$QWAN" 2>/dev/null | awk '/^qdisc cake/ { c++ } c == 1 && $1 == "pkts" { print $NF; exit }' ;;
 	esac
 }
 tos_dscp() { # file of "tcpdump -v" output -> most common DSCP value

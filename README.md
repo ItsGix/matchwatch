@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.32.3 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.32.4 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -550,6 +550,7 @@ Each speed has a box to type megabits into and a slider beside it, kept in step.
 - If QoSmate is restarted while match mode is on, its own rates come back with it. MatchWatch checks the queues once a minute and sets your speeds again, so the most you see is a minute at QoSmate's rates.
 - The Live page says which speeds are in force, and Recent activity records each switch.
 - It needs QoSmate switched on, in one of its cake modes, with QoSmate's autorate off: autorate keeps changing the same speed limit, so only one of the two can be used. If it cannot work, the Tools page says which of these is the reason. Turn it on under Tools, Data and settings, or in Settings. It is off by default.
+- MatchWatch looks at the port QoSmate itself is set to shape, which on a line with a login (PPPoE) is often not the one OpenWrt calls the internet.
 - "QoSmate's own" speeds are read from QoSmate's queues, so they are what is really in force, including QoSmate's defaults and its cap on download speed. If QoSmate is set to leave downloads unshaped, only an upload speed is offered.
 
 Over SSH: `matchwatch matchmode on`, `matchmode off`, and `matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]`, in kbit, where 0 means the default for that slot.
