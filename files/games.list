@@ -2,6 +2,9 @@
 #
 #   ports  the SERVER's UDP port: single ports or ranges, separated by commas
 #   kind   empty = a game. "voice" = voice chat, which is never recorded and never blocked.
+#          "relay" = a game's own relay or helper servers: recorded like the game if a match ever
+#          runs on one, but never turned away by places, a ping range or a strict game, and never
+#          announced. Give a relay line hosts, and put it above the game's own lines.
 #   hosts  optional. Words looked for in the name of the company hosting the server (its isp, org
 #          and AS name, any case). The label only matches when one is found. Use it where a port
 #          range is shared with something else. It needs "Look up where servers are" switched on.
@@ -31,6 +34,11 @@ League of Legends|5000-5500||riot,as6507
 Overwatch 2|12000-64000||blizzard,as57976
 iRacing|15000-52500||iracing
 War Thunder|20000-30000||gaijin
+# Call of Duty's relays (unconfirmed: no publisher source). Beside the game server, a match keeps a
+# few packets going to a host on Microsoft's network on the same ports. Turned away, the game sits
+# on "connecting to relay". Seen on one router: 39 matches, none played on Microsoft, and during a
+# match 8 packets each way to one beside 1,800 to the game server.
+Call of Duty|3074,30000-45000|relay|microsoft,as8075
 Call of Duty|3074,30000-45000||vultr,constant company,choopa,as20473
 
 # ---- games on a narrow range of their own

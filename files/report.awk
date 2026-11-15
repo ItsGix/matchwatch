@@ -141,8 +141,8 @@ function named(start, port, host,   lab) {
 	return lab
 }
 function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3]; GM[ngame, 4] = g[4] } close(file) }
-# is this server labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
-function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice") : 0 }
+# is this server labelled as a game (not voice chat, not a game's relay, not unlabelled)? Only those are ever blocked by stay mode.
+function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice" && GM[i, 3] != "relay") : 0 }
 # which measured region is this match's server in? nearest, within 150 km
 function region_of(lat, lon,   i, best, bd, d) {
 	if (!known(lat) || !known(lon)) return ""

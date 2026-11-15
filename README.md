@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.36.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.36.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -353,6 +353,7 @@ On Servers, Where I play, under **Ping range**, drag the two handles on the line
 - **Where the ping comes from.** It has to be known before the game connects, because measuring it as the game joins would let the game join and then throw you out of the lobby. MatchWatch uses the lowest ping of your own matches on that server's address block, and otherwise the measured ping of the nearest datacentre in the regions table, within 250 km. The regions table is measured again every few hours, and what is turned away is worked out again when a datacentre crosses an edge of your range.
 - **A server whose ping is not known is let in.** MatchWatch does not guess. For a strict game the server is being held anyway, so it is pinged then and judged on that.
 - **Whole regions ahead of time.** For hosts whose address lists MatchWatch has (see below), every range whose city has a measured datacentre outside your range is refused before the game tries it.
+- **A game's relays are never turned away.** Beside its game server, Call of Duty keeps a few packets going to a relay on Microsoft's network, usually the one nearest you. A lowest ping, or places far from home, used to turn that relay away with the game servers, and the game sat on "connecting to relay". Relays are now left alone by the ping range, your places and strict games; game servers are judged as before.
 - **Single servers in the pool** are always let in, whatever their ping. A favourite is not, unless you add it.
 - If no measured datacentre is inside the range, MatchWatch says so when you set it: games hosted in them would not find a match.
 

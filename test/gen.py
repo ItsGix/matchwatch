@@ -52,6 +52,12 @@ elif sc=="sweep":
         for j in range(4):
             out.append(line(T0+5+i*0.06+j*0.3,PC,3074,s,p,48)); out.append(line(T0+5.02+i*0.06+j*0.3,s,p,PC,3074,48))
     stream(out,False,10,20,start=40,srv="198.51.100.200",sport=44998); stream(out,True,10,20,start=40,srv="198.51.100.200",sport=44998)
+elif sc=="relay":
+    # a game reaching for a server, with a few packets to its relay on the same port beside it. Run with
+    # -v GAMES=files/games.list -v GEOF=test/geo_relay.tsv and a DATA folder whose sessions.tsv has a match on port 44998
+    for j in range(8):
+        for s in ("203.0.113.9","203.0.113.60"):
+            out.append(line(T0+5+j*1.5,PC,3074,s,44998,90)); out.append(line(T0+5.02+j*1.5,s,44998,PC,3074,76))
 elif sc=="bursts":
     # video from a content network on a port nobody has named: eleven seconds every minute, five times over
     for b in range(5):

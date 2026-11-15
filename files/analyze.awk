@@ -177,7 +177,10 @@ function early_check(f,    ip, avg, p) {
 # the company that hosts its servers (hosts: words looked for in the server's isp, org and AS name).
 # Such a label only matches once the host is known, and the lookup takes a second or two; until then
 # the stream falls through to whatever label comes next.
-# kindof() answers "game", "voice" or "" (nobody has named it).
+# kindof() answers "game", "voice", "relay" or "" (nobody has named it). A relay is a game's own helper
+# server: it is tracked and named like the game, so a match on one would be recorded, but it is not "a game"
+# to anything that turns servers away. The owner set a ping range of 15 to 40 ms, Call of Duty's relay near
+# them answered in 3, was turned away with the game servers, and the game sat on "connecting to relay".
 #   game   tracked, and the only kind ever alerted on, turned away or blocked automatically
 #   voice  not tracked at all: voice chat is not a match, and must never be cut off
 #   ""     tracked and rated, but left alone until it has a name
@@ -189,7 +192,7 @@ function load_games(file,    l, g, k, a, i, r) {
 		for (i = 1; i <= k; i++) {
 			NGP++
 			if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 }
-			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4]); GP_name[NGP] = clean(g[1])
+			GP_kind[NGP] = (g[3] == "voice") ? "voice" : (g[3] == "relay") ? "relay" : "game"; GP_host[NGP] = tolower(g[4]); GP_name[NGP] = clean(g[1])
 		}
 	}
 	close(file)
@@ -250,7 +253,7 @@ function gamename(port, ip,    i) {
 	for (i = 1; i <= NGP; i++) {
 		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
 		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
-		return (GP_kind[i] == "game") ? GP_name[i] : ""
+		return (GP_kind[i] != "voice") ? GP_name[i] : ""
 	}
 	return ""
 }
@@ -266,7 +269,7 @@ function hostgame(port, ip,    i) {
 # does any game label covering this port ask for a host? Then the answer may change once the server has been looked up
 function hostpending(port, ip,    i) {
 	if (ip in HOST) return 0
-	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] == "game") return 1
+	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] != "voice") return 1
 	return 0
 }
 

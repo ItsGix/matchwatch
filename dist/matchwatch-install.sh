@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.36.0"
+VERSION="0.36.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -450,7 +450,7 @@ export_json() {
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
-	gameplaces json > "$RUN/www/gameplaces.json.tmp" 2>/dev/null && mv -f "$RUN/www/gameplaces.json.tmp" "$RUN/www/gameplaces.json"
+	gameplaces json > "$RUN/www/gameplaces.json.tmp.$$" 2>/dev/null && mv -f "$RUN/www/gameplaces.json.tmp.$$" "$RUN/www/gameplaces.json"
 	share_json > "$RUN/www/shared.json.tmp" && mv -f "$RUN/www/shared.json.tmp" "$RUN/www/shared.json"
 	# keep the sixty most recent match detail files
 	if [ -d "$DATA/matches" ]; then
@@ -1076,6 +1076,7 @@ cmd_pingrange() { # <lowest ms> <highest ms> | off | (nothing = status)
 		off)
 			[ -s "$DATA/pingrange" ] || { echo "No ping range was set."; return 0; }
 			rm -f "$DATA/pingrange" "$RUN/ping.sig"
+			logger -t matchwatch "ping range removed" 2>/dev/null
 			if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; echo "The ping range is removed. You are still staying on $(stay_names)."
 			else stay_off; echo "The ping range is removed. Nothing is turned away for its ping any more."; fi ;;
 		*)
@@ -1086,6 +1087,7 @@ cmd_pingrange() { # <lowest ms> <highest ms> | off | (nothing = status)
 			[ "$2" = 0 ] || [ "$1" -lt "$2" ] || die "the lowest ping has to be under the highest"
 			echo "$(($1 + 0)) $(($2 + 0))" > "$DATA/pingrange"
 			ping_load
+			logger -t matchwatch "ping range set: only servers with a ping of $(ping_words) are let in" 2>/dev/null
 			echo "Letting in servers with a ping of $(ping_words)$( [ -s "$DATA/stay" ] && echo ", inside the places you stay on" )."
 			if [ ! -s "$DATA/regions.tsv" ]; then
 				( cmd_regions measure >/dev/null 2>&1 & )
@@ -1678,7 +1680,7 @@ cmd_allow() { # add <ip> | remove <ip> | (nothing = list)
 # drops the gaming device's UDP to a held port unless the server is in okay. The engine sees the device's
 # packets before that rule (it listens on the LAN side) and asks for a verdict with _hold.
 # Everything fails open: no stay pool, no device, a stopped service or a failed lookup all mean no holding.
-label_kind() { # server-port "isp org asn" [name] -> game | voice | nothing (or the label's name). First matching label wins, as in the engine
+label_kind() { # server-port "isp org asn" [name] -> game | voice | relay | nothing (or the label's name). First matching label wins, as in the engine
 	touch "$DATA/games.local" 2>/dev/null
 	awk -F'|' -v p="$1" -v want="$3" -v info="$(echo "$2" | tr 'A-Z' 'a-z')" '
 		/^#/ || $0 == "" { next }
@@ -1686,14 +1688,14 @@ label_kind() { # server-port "isp org asn" [name] -> game | voice | nothing (or 
 		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } if (p + 0 >= lo + 0 && p + 0 <= hi + 0) hit = 1 }
 		  if (!hit) next
 		  if ($4 != "") { m = 0; k = split(tolower($4), w, ","); for (i = 1; i <= k; i++) if (w[i] != "" && index(info, w[i]) > 0) m = 1; if (!m) next }
-		  if (want == "name") { if ($3 != "voice") print $1 } else if (want == "how") { if ($3 != "voice") print ($4 != "" ? "host" : "port") } else print ($3 == "voice" ? "voice" : "game")
+		  if (want == "name") { if ($3 != "voice") print $1 } else if (want == "how") { if ($3 == "relay") print "relay"; else if ($3 != "voice") print ($4 != "" ? "host" : "port") } else print ($3 == "voice" ? "voice" : ($3 == "relay" ? "relay" : "game"))
 		  exit }' "$DATA/games.local" "$LIB/games.list" 2>/dev/null
 }
 hold_list() { # every game name: name, held (0/1), can be held (0/1), its ports, the ports that would be held
 	touch "$DATA/games.local" "$DATA/hold" 2>/dev/null
 	awk -F'|' -v HF="$DATA/hold" '
 		BEGIN { while ((getline l < HF) > 0) on[l] = 1; close(HF) }
-		/^#/ || $0 == "" || NF < 2 { next }
+		/^#/ || $0 == "" || NF < 2 || $3 == "relay" { next }
 		{ n = split($2, a, ",")
 		  for (i = 1; i <= n; i++) { lo = a[i]; hi = a[i]; if (a[i] ~ /-/) { split(a[i], r, "-"); lo = r[1]; hi = r[2] } c++; L[c] = lo + 0; H[c] = hi + 0; N[c] = $1; V[c] = ($3 == "voice") }
 		  if ($3 != "voice" && !($1 in seen)) { seen[$1] = 1; order[++k] = $1 } }
@@ -3137,7 +3139,10 @@ function early_check(f,    ip, avg, p) {
 # the company that hosts its servers (hosts: words looked for in the server's isp, org and AS name).
 # Such a label only matches once the host is known, and the lookup takes a second or two; until then
 # the stream falls through to whatever label comes next.
-# kindof() answers "game", "voice" or "" (nobody has named it).
+# kindof() answers "game", "voice", "relay" or "" (nobody has named it). A relay is a game's own helper
+# server: it is tracked and named like the game, so a match on one would be recorded, but it is not "a game"
+# to anything that turns servers away. The owner set a ping range of 15 to 40 ms, Call of Duty's relay near
+# them answered in 3, was turned away with the game servers, and the game sat on "connecting to relay".
 #   game   tracked, and the only kind ever alerted on, turned away or blocked automatically
 #   voice  not tracked at all: voice chat is not a match, and must never be cut off
 #   ""     tracked and rated, but left alone until it has a name
@@ -3149,7 +3154,7 @@ function load_games(file,    l, g, k, a, i, r) {
 		for (i = 1; i <= k; i++) {
 			NGP++
 			if (a[i] ~ /-/) { split(a[i], r, "-"); GP_lo[NGP] = r[1] + 0; GP_hi[NGP] = r[2] + 0 } else { GP_lo[NGP] = a[i] + 0; GP_hi[NGP] = a[i] + 0 }
-			GP_kind[NGP] = (g[3] == "voice") ? "voice" : "game"; GP_host[NGP] = tolower(g[4]); GP_name[NGP] = clean(g[1])
+			GP_kind[NGP] = (g[3] == "voice") ? "voice" : (g[3] == "relay") ? "relay" : "game"; GP_host[NGP] = tolower(g[4]); GP_name[NGP] = clean(g[1])
 		}
 	}
 	close(file)
@@ -3210,7 +3215,7 @@ function gamename(port, ip,    i) {
 	for (i = 1; i <= NGP; i++) {
 		if (port + 0 < GP_lo[i] || port + 0 > GP_hi[i]) continue
 		if (GP_host[i] != "" && !hostmatch(GP_host[i], hostinfo(ip))) continue
-		return (GP_kind[i] == "game") ? GP_name[i] : ""
+		return (GP_kind[i] != "voice") ? GP_name[i] : ""
 	}
 	return ""
 }
@@ -3226,7 +3231,7 @@ function hostgame(port, ip,    i) {
 # does any game label covering this port ask for a host? Then the answer may change once the server has been looked up
 function hostpending(port, ip,    i) {
 	if (ip in HOST) return 0
-	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] == "game") return 1
+	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] != "voice") return 1
 	return 0
 }
 
@@ -4097,8 +4102,8 @@ function named(start, port, host,   lab) {
 	return lab
 }
 function load_games(file,   l, g) { if (file == "") return; while ((getline l < file) > 0) { if (l ~ /^#/ || l == "") continue; split(l, g, "|"); ngame++; GM[ngame, 1] = g[1]; GM[ngame, 2] = g[2]; GM[ngame, 3] = g[3]; GM[ngame, 4] = g[4] } close(file) }
-# is this server labelled as a game (not voice chat, not unlabelled)? Only those are ever blocked by stay mode.
-function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice") : 0 }
+# is this server labelled as a game (not voice chat, not a game's relay, not unlabelled)? Only those are ever blocked by stay mode.
+function is_game_port(port, host,   i) { i = which_label(port, host); return i ? (GM[i, 3] != "voice" && GM[i, 3] != "relay") : 0 }
 # which measured region is this match's server in? nearest, within 150 km
 function region_of(lat, lon,   i, best, bd, d) {
 	if (!known(lat) || !known(lon)) return ""
@@ -4604,6 +4609,9 @@ cat > "$R/usr/lib/matchwatch/games.list.new" <<'MW_FILE_END_9'
 #
 #   ports  the SERVER's UDP port: single ports or ranges, separated by commas
 #   kind   empty = a game. "voice" = voice chat, which is never recorded and never blocked.
+#          "relay" = a game's own relay or helper servers: recorded like the game if a match ever
+#          runs on one, but never turned away by places, a ping range or a strict game, and never
+#          announced. Give a relay line hosts, and put it above the game's own lines.
 #   hosts  optional. Words looked for in the name of the company hosting the server (its isp, org
 #          and AS name, any case). The label only matches when one is found. Use it where a port
 #          range is shared with something else. It needs "Look up where servers are" switched on.
@@ -4633,6 +4641,11 @@ League of Legends|5000-5500||riot,as6507
 Overwatch 2|12000-64000||blizzard,as57976
 iRacing|15000-52500||iracing
 War Thunder|20000-30000||gaijin
+# Call of Duty's relays (unconfirmed: no publisher source). Beside the game server, a match keeps a
+# few packets going to a host on Microsoft's network on the same ports. Turned away, the game sits
+# on "connecting to relay". Seen on one router: 39 matches, none played on Microsoft, and during a
+# match 8 packets each way to one beside 1,800 to the game server.
+Call of Duty|3074,30000-45000|relay|microsoft,as8075
 Call of Duty|3074,30000-45000||vultr,constant company,choopa,as20473
 
 # ---- games on a narrow range of their own
@@ -4852,7 +4865,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.36.0", reloading = false;
+var BUILT = "0.36.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -5760,6 +5773,7 @@ function pageMatch(id) {
 			// this match was played on a server outside the places being stayed on: say so, and why it was not turned away
 			var og = m.game || "this game", why = m.outside === "allowed" ? "You added this server to the pool yourself, so it is always let through."
 				: m.outside === "port" ? og + " is known by its port alone, and no match had been played on this port or address block before, so MatchWatch could not be sure it was the game. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to stop the first one too."
+				: m.outside === "relay" ? "It is on a network " + og + " uses for its relays, and MatchWatch never turns a game's relay away: with its relay refused, the game is left trying to connect to it."
 				: m.outside === "host" ? "It connected in the moment before it could be looked up, or your places changed while you were playing. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to hold new servers until they have been placed."
 				: "The game on this port has no name yet, and MatchWatch never turns an unnamed game away. Name it under Tools, Games.";
 			view.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "Played outside what you let in. "), "This server is in " + (place(m) || "a place") + ", outside your places or your ping range. " + why)));
