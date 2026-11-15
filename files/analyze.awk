@@ -81,7 +81,7 @@ $1 == "TICK" {
 	advance(now - 2)
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
 	# names can change while running (the Tools page, matchwatch game name), so look again now and then
-	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) write_skipped(now) }
+	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) { write_skipped(now); wan_find() } }
 	if (HOLDF != "") load_hold()
 	next
 }
@@ -386,6 +386,13 @@ function advance(sec,    guard) {
 	if (cursec < sec) cursec = sec
 }
 
+# Started before the internet port was up: the service writes its name to wan.if once it is found.
+function wan_find(    l, f) {
+	if (WANDEV != "") return
+	f = RUN "/wan.if"
+	if ((getline l < f) > 0 && l ~ /^[A-Za-z0-9_.@-]+$/) { WANDEV = l; print "WAN " l }
+	close(f)
+}
 function wan_sample(    rx, tx) {
 	if (WANDEV == "") return
 	rx = read_num("/sys/class/net/" WANDEV "/statistics/rx_bytes")

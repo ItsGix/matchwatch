@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.35.1"
+VERSION="0.35.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2604,15 +2604,28 @@ cmd_qos() {
 }
 
 # ---- service
+# OpenWrt's network.sh keeps its answer in an exported variable, so a service started at boot before the
+# internet port had an address handed "no internet port" to everything it ran, for as long as it ran. The
+# owner's router did that after a restart: the banner said no port was found seven hours later, and the
+# engine had no port to read the line's load from. So the answer is thrown away before every look, the
+# default route is asked when OpenWrt names nothing, and the port is written to wan.if, which the engine
+# reads while it has none.
 find_ifaces() {
 	if [ -z "$LAN_IF" ] || [ -z "$WAN_IF" ]; then
 		if [ -f /lib/functions/network.sh ]; then
 			. /lib/functions/network.sh
+			network_flush_cache
 			[ -z "$LAN_IF" ] && network_get_device LAN_IF lan
 			if [ -z "$WAN_IF" ]; then local w; network_find_wan w && network_get_device WAN_IF "$w"; fi
 		fi
+		if [ -z "$WAN_IF" ]; then
+			WAN_IF="$(ip -4 route show default 2>/dev/null | sed -n 's/.* dev \([A-Za-z0-9_.@-]*\).*/\1/p' | head -n 1)"
+			[ -n "$WAN_IF" ] && [ -d "/sys/class/net/$WAN_IF" ] || WAN_IF=""
+		fi
 	fi
 	[ -n "$LAN_IF" ] || LAN_IF="br-lan"
+	if [ -n "$WAN_IF" ] && [ -d "$RUN" ] && [ "$(cat "$RUN/wan.if" 2>/dev/null)" != "$WAN_IF" ]; then echo "$WAN_IF" > "$RUN/wan.if"; fi
+	return 0
 }
 build_filter() {
 	local p
@@ -2648,7 +2661,7 @@ CGI
 }
 stop_children() {
 	local d f
-	kill $TPID $HPID $APID $UPID $MPID 2>/dev/null
+	kill $TPID $HPID $APID $UPID $MPID $WPID 2>/dev/null
 	for d in "$RUN"/probe.*; do
 		[ -d "$d" ] || continue
 		touch "$d/stop"
@@ -2669,6 +2682,7 @@ cmd_run() {
 	rm -rf "$RUN"/probe.* "$RUN/pipe"
 	: > "$RUN/marks"
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
+	rm -f "$RUN/wan.if"
 	find_ifaces; build_filter
 	apply_blocklist
 	# match mode: start from QoSmate's own limits, and lift them only once a minute has passed with no match
@@ -2701,6 +2715,13 @@ cmd_run() {
 	# process each time, so switching match mode on or off from the dashboard needs no restart of this one.
 	( sleep 90; while :; do "$SELF" _mmcheck >/dev/null 2>&1; sleep 60; done ) >/dev/null 2>&1 &
 	MPID=$!
+	# started before the internet port was up (a restart, a power cut with the modem still waking): keep
+	# looking, and tell the dashboard once it is there. The engine picks the port up from wan.if.
+	WPID=""
+	if [ -z "$WAN_IF" ]; then
+		( while [ ! -s "$RUN/wan.if" ]; do sleep 10; WAN_IF=""; find_ifaces; done; QWAN=""; export_json; logger -t matchwatch "internet port found: $WAN_IF" 2>/dev/null ) >/dev/null 2>&1 &
+		WPID=$!
+	fi
 	# the daily look for a newer version, when switched on: soon after starting, then checked for each hour
 	( sleep 40; while :; do update_due && { update_note >/dev/null 2>&1; export_json; }; sleep 3600; done ) >/dev/null 2>&1 &
 	UPID=$!
@@ -2988,7 +3009,7 @@ $1 == "TICK" {
 	advance(now - 2)
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
 	# names can change while running (the Tools page, matchwatch game name), so look again now and then
-	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) write_skipped(now) }
+	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) { write_skipped(now); wan_find() } }
 	if (HOLDF != "") load_hold()
 	next
 }
@@ -3293,6 +3314,13 @@ function advance(sec,    guard) {
 	if (cursec < sec) cursec = sec
 }
 
+# Started before the internet port was up: the service writes its name to wan.if once it is found.
+function wan_find(    l, f) {
+	if (WANDEV != "") return
+	f = RUN "/wan.if"
+	if ((getline l < f) > 0 && l ~ /^[A-Za-z0-9_.@-]+$/) { WANDEV = l; print "WAN " l }
+	close(f)
+}
 function wan_sample(    rx, tx) {
 	if (WANDEV == "") return
 	rx = read_num("/sys/class/net/" WANDEV "/statistics/rx_bytes")
@@ -4791,7 +4819,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.35.1", reloading = false;
+var BUILT = "0.35.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
