@@ -23,7 +23,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rmdir "$R/usr/lib/matchwatch" "$R/www/matchwatch" "$R/www/luci-static/resources/matchwatch" "$R/www/luci-static/resources/view/matchwatch" 2>/dev/null
 	[ -z "$R" ] && luci_refresh
 	if [ "$1" = purge ]; then
-		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/mm.own" "$R/etc/matchwatch/matchgames" "$R/etc/matchwatch/playing" "$R/etc/matchwatch/hold" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
+		rm -f "$R/etc/config/matchwatch" "$R/etc/matchwatch/config" "$R/etc/matchwatch/config.imported" "$R/etc/matchwatch/sessions.tsv" "$R/etc/matchwatch/blocklist" "$R/etc/matchwatch/geo.cache" "$R/etc/matchwatch/last.txt" "$R/etc/matchwatch/token" "$R/etc/matchwatch/stay" "$R/etc/matchwatch/regions.tsv" "$R/etc/matchwatch/games.local" "$R/etc/matchwatch/regions.local" "$R/etc/matchwatch/ratings.shared" "$R/etc/matchwatch/favourites" "$R/etc/matchwatch/allow" "$R/etc/matchwatch/mm.own" "$R/etc/matchwatch/pingrange" "$R/etc/matchwatch/matchgames" "$R/etc/matchwatch/playing" "$R/etc/matchwatch/hold" "$R/etc/matchwatch/tried" "$R/etc/matchwatch/gameplaces.shared" "$R/etc/matchwatch/ranges.cache" "$R/etc/matchwatch/cities.cache" "$R/etc/matchwatch/geofeeds.local"
 		rm -rf "$R/etc/matchwatch/share.undo"
 		for f in "$R"/etc/matchwatch/matches/*.json; do [ -f "$f" ] && rm -f "$f"; done
 		rmdir "$R/etc/matchwatch/matches" 2>/dev/null
@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.34.2"
+VERSION="0.35.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -421,8 +421,8 @@ cmd_probe_stop() {
 			IFS="$TAB" read -r cc country city lat lon isp org asn < "$PD/geo"
 			printf 'cc=%s\ncountry=%s\ncity=%s\nlat=%s\nlon=%s\nisp=%s\norg=%s\nasn=%s\n' "$cc" "$country" "$city" "$lat" "$lon" "$isp" "$org" "$asn"
 			# played on a server outside the places being stayed on? Note it, and why it was not turned away
-			if [ -s "$DATA/stay" ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && outside_stay "$lat" "$lon" "$cc"; then
-				read -r f country < "$PD/server" 2>/dev/null
+			read -r f country < "$PD/server" 2>/dev/null
+			if staying && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && outside_pool "$lat" "$lon" "$cc" "$f"; then
 				if is_allowed "$f"; then echo "outside=allowed"
 				else f="$(label_kind "${country:-0}" "$isp $org $asn" how)"; echo "outside=${f:-unnamed}"; fi
 			fi
@@ -446,7 +446,7 @@ export_json() {
 	awk -v MODE=dc_json -v BLOCK="$DATA/blocklist" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv" > "$RUN/www/datacentres.json.tmp" && mv -f "$RUN/www/datacentres.json.tmp" "$RUN/www/datacentres.json"
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
 	find_ifaces; qos_dev
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s","lan_if":"%s","wan_if":"%s","qos_if":"%s","port_warn":"%s"}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" "$(jesc "$LAN_IF")" "$(jesc "$WAN_IF")" "$( [ -x /etc/init.d/qosmate ] && jesc "$QWAN" )" "$(jesc "$(ports_check | awk -F'\t' '$1 == "WARN" { printf "%s%s", (n++ ? " " : ""), $2 }')")" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s","lan_if":"%s","wan_if":"%s","qos_if":"%s","port_warn":"%s","ping":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" "$(jesc "$LAN_IF")" "$(jesc "$WAN_IF")" "$( [ -x /etc/init.d/qosmate ] && jesc "$QWAN" )" "$(jesc "$(ports_check | awk -F'\t' '$1 == "WARN" { printf "%s%s", (n++ ? " " : ""), $2 }')")" "$(ping_load; echo "$PLO,$PHI")" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -518,7 +518,7 @@ nft_ready() {
 	[ "$NFT_FILLING" = 1 ] || { NFT_FILLING=1; fill_blocklist; NFT_FILLING=0; }
 	allow_fill
 	[ "$HOLD_FILLING" = 1 ] || { HOLD_FILLING=1; MW_NOWAIT=1 hold_apply; HOLD_FILLING=0; }
-	[ -s "$DATA/stay" ] && [ "$RANGES_RUNNING" != 1 ] && ( stay_ranges >/dev/null 2>&1 & )
+	staying && [ "$RANGES_RUNNING" != 1 ] && ( stay_ranges >/dev/null 2>&1 & )
 	return 0
 }
 in_away() { nft get element inet matchwatch away "{ $1 }" >/dev/null 2>&1; }
@@ -619,9 +619,9 @@ cmd_lobby() { # server-ip port device-ip [first|tell]
 	mkdir -p "$RUN/www"
 	# a game server is being reached for: have QoSmate's limits on before the match itself starts
 	[ "$MATCH_MODE" = 1 ] && [ "$mode" != first ] && mm_set tight
-	if [ -s "$DATA/stay" ] && ! is_allowed "$ip" && in_away "$ip"; then
+	if staying && ! is_allowed "$ip" && in_away "$ip"; then
 		[ "$mode" = tell ] && return 0
-		printf '{"ts":%s,"ip":"%s","port":%s,"loc":"","org":"","ping":null,"verdict":"good","blocked":true,"msg":"A server in a region outside the places you stay on. Its whole range is turned away, so the game should move on quickly."}\n' "$(date +%s)" "$ip" "${port:-0}" > "$RUN/www/lobby.json.$$" && mv -f "$RUN/www/lobby.json.$$" "$RUN/www/lobby.json"
+		printf '{"ts":%s,"ip":"%s","port":%s,"loc":"","org":"","ping":null,"verdict":"good","blocked":true,"msg":"A server in a region you are not letting in. Its whole range is turned away, so the game should move on quickly."}\n' "$(date +%s)" "$ip" "${port:-0}" > "$RUN/www/lobby.json.$$" && mv -f "$RUN/www/lobby.json.$$" "$RUN/www/lobby.json"
 		return 0
 	fi
 	# turned away a moment ago by the first step: that has been said
@@ -633,8 +633,8 @@ EOF
 	key="$asn|$city|$cc"
 	# Staying somewhere? Decide first. Every second spent measuring is a second the game spends joining
 	# this server, and turning it away late throws the player out of a lobby they had already reached.
-	if [ "$mode" != tell ] && [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && ! is_allowed "$ip"; then
-		if outside_stay "$lat" "$lon" "$cc"; then MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay && blocked=true; fi
+	if [ "$mode" != tell ] && staying && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && ! is_allowed "$ip"; then
+		if outside_pool "$lat" "$lon" "$cc" "$ip"; then MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay && blocked=true; fi
 	fi
 	# let in by the first step: the second step, or the note of a ping sweep, records and tells
 	[ "$mode" = first ] && [ "$blocked" != true ] && return 0
@@ -684,7 +684,7 @@ EOF
 		fi
 	fi
 	if [ "$blocked" = true ]; then
-		msg="$msg Turned away, because you are staying on $(stay_names). The game should search again."
+		msg="$msg Turned away, because $(out_words). The game should search again."
 		short="Turned away a server in $where."
 	fi
 	printf '{"ts":%s,"ip":"%s","port":%s,"loc":"%s","org":"%s","ping":%s,"verdict":"%s","blocked":%s,"msg":"%s"}\n' \
@@ -753,6 +753,7 @@ EOF
 		cat "$tmp"/* > "$DATA/regions.tsv.tmp" 2>/dev/null && mv -f "$DATA/regions.tsv.tmp" "$DATA/regions.tsv"
 		rm -f "$tmp"/*; rmdir "$tmp" 2>/dev/null
 		regions_export
+		if [ -s "$DATA/pingrange" ] && [ "$(ping_sig)" != "$(cat "$RUN/ping.sig" 2>/dev/null)" ]; then ( stay_apply >/dev/null 2>&1 & ); fi
 	fi
 	awk -v MODE=regions_txt -v REG="$DATA/regions.tsv" $(stay_vars) -f "$LIB/report.awk" "$DATA/sessions.tsv"
 }
@@ -806,10 +807,22 @@ ranges_cities() { # put every city named in the lists on the map, once: "city|CC
 		[ "$got" = 1 ] && printf '%s|%s\t%s\t%s\n' "$city" "$cc" "${lat:--}" "${lon:--}" >> "$DATA/cities.cache"
 	done
 }
-ranges_outside() { # addresses of matches in progress -> the ranges that lie outside every place in the pool
-	awk -F'\t' -v LIVE="$1" '
+ranges_outside() { # addresses of matches in progress -> the ranges that lie outside every place in the pool, or outside the ping range
+	touch "$DATA/stay" "$DATA/regions.tsv" "$DATA/cities.cache"; ping_load
+	awk -F'\t' -v LIVE="$1" -v LO="$PLO" -v HI="$PHI" -v REG="$DATA/regions.tsv" '
 		function ipn(s,   a) { split(s, a, "."); return ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4] }
-		BEGIN { nl = split(LIVE, L, " ") }
+		# the measured ping of the nearest datacentre within 250 km, or "" when none is that near
+		function est(la, lo,   i, x, x2, cs, dy, dx, d, bd, b) {
+			b = ""
+			for (i = 1; i <= nr; i++) {
+				x = (la + RA[i]) / 2 * 0.0174533; x2 = x * x; cs = 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720
+				dy = (la - RA[i]) * 111.2; dx = (lo - RO[i]) * 111.2 * cs; d = dx * dx + dy * dy
+				if (d <= 62500 && (b == "" || d < bd)) { bd = d; b = RP[i] }
+			}
+			return b
+		}
+		BEGIN { nl = split(LIVE, L, " ")
+			if (LO + 0 > 0 || HI + 0 > 0) { while ((getline l < REG) > 0) { if (split(l, r, "\t") >= 8 && r[8] ~ /^[0-9.]+$/ && r[5] ~ /^-?[0-9.]+$/) { nr++; RA[nr] = r[5]; RO[nr] = r[6]; RP[nr] = r[8] } } close(REG) } }
 		FILENAME == ARGV[1] { if (NF >= 4) { n++; for (i = 1; i <= 5; i++) SP[n, i] = $i; if ($5 == "" || $5 == "-") hascity = 1 } next }
 		FILENAME == ARGV[2] { C[$1] = $2 "\t" $3; next }
 		{
@@ -822,8 +835,10 @@ ranges_outside() { # addresses of matches in progress -> the ranges that lie out
 				dy = (lat - SP[i, 2]) * 111.2; dx = (lon - SP[i, 3]) * 111.2 * cs
 				if (dx * dx + dy * dy <= SP[i, 4] * SP[i, 4]) ok = 1
 			}
-			if (ok || n == 0) next
-			if (lat == "-" && hascity) next                    # could be inside a city in the pool: not known, so left alone
+			out = 0
+			if (n > 0 && !ok && !(lat == "-" && hascity)) out = 1          # a place not known could be inside a city in the pool: left alone
+			if (!out && nr > 0 && lat != "-") { e = est(lat, lon); if (e != "" && ((LO > 0 && e + 0 < LO) || (HI > 0 && e + 0 > HI))) out = 1 }
+			if (!out) next
 			split($1, pr, "/"); base = ipn(pr[1]); size = 2 ^ (32 - pr[2])
 			for (i = 1; i <= nl; i++) { v = ipn(L[i]); if (v >= base && v < base + size) next }   # never cut off a match in progress
 			print $1
@@ -843,9 +858,10 @@ stay_ranges() { # fill, or empty, the set of whole ranges. The first run looks c
 stay_ranges_run() {
 	local live n=0 f="$RUN/away.$$" refuse=1
 	nft_ready || return 1
-	if [ ! -s "$DATA/stay" ]; then
+	if ! staying; then
 		nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count" "$RUN/www/coverage.json" "$RUN/coverage.sug"; export_json; return 0
 	fi
+	touch "$DATA/stay" "$DATA/regions.tsv"
 	[ "$STAY_RANGES" = 1 ] && [ -n "$DEVICE_IP" ] || refuse=0
 	if ! ranges_fetch; then nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count" "$RUN/www/coverage.json"; export_json; return 1; fi
 	ranges_cities
@@ -860,7 +876,7 @@ stay_ranges_run() {
 		nft -f "$f" 2>/dev/null || n=0
 		rm -f "$f" "$f.list"
 		echo "$n" > "$RUN/away.count"
-		logger -t matchwatch "Turning away $n whole address range(s) outside the places you stay on, for the gaming device's game traffic" 2>/dev/null
+		logger -t matchwatch "Turning away $n whole address range(s) outside what you let in, for the gaming device's game traffic" 2>/dev/null
 	else
 		nft flush set inet matchwatch away 2>/dev/null; rm -f "$RUN/away.count"
 	fi
@@ -931,8 +947,8 @@ cmd_stay_suggest() { # n : add one of the suggested places with servers to the p
 }
 cmd_ranges() { # (nothing) = what is known | refresh
 	touch "$DATA/ranges.cache"
-	if [ "$1" = refresh ]; then ranges_fetch force || die "the lists could not be downloaded"; [ -s "$DATA/stay" ] && stay_ranges; fi
-	if [ "$1" = list ]; then [ -s "$DATA/stay" ] || die "stay mode is off, so nothing is turned away"; touch "$DATA/cities.cache"; ranges_outside ""; return 0; fi
+	if [ "$1" = refresh ]; then ranges_fetch force || die "the lists could not be downloaded"; staying && stay_ranges; fi
+	if [ "$1" = list ]; then staying || die "you are not staying on places and have no ping range, so nothing is turned away"; touch "$DATA/cities.cache"; ranges_outside ""; return 0; fi
 	echo "Lists of address ranges by city, from hosting companies:"
 	feed_list | awk -F'|' '{ printf "  %s%s  %s\n", $1, ($3 != "" ? " (" $3 ")" : ""), $2 }'
 	echo "Ranges known: $(cnt "$DATA/ranges.cache")$(awk -F'\t' '{ c[$4]++ } END { for (h in c) printf "  (%s: %d)", h, c[h] }' "$DATA/ranges.cache")"
@@ -958,13 +974,15 @@ tried_note() { # ip port cc city org asn lat lon
 }
 gameplaces() { # share | json
 	touch "$DATA/sessions.tsv"
-	awk -v MODE=gameplaces -v ARG="$1" -v TRIED="$DATA/tried" -v SHARED="$DATA/gameplaces.shared" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" $( [ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay" ) -f "$LIB/report.awk" "$DATA/sessions.tsv"
+	awk -v MODE=gameplaces -v ARG="$1" -v TRIED="$DATA/tried" -v SHARED="$DATA/gameplaces.shared" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" $(staying && echo "-v STAYF=$DATA/stay -v PINGF=$DATA/pingrange -v REGP=$DATA/regions.tsv") -f "$LIB/report.awk" "$DATA/sessions.tsv"
 }
 
 # ---- stay on one datacentre
 stay_off() {
 	local ip
 	touch "$DATA/blocklist"
+	# a ping range is still set: only the places go, and what is turned away is worked out again
+	if [ -s "$DATA/pingrange" ]; then rm -f "$DATA/stay"; stay_apply >/dev/null; return 0; fi
 	awk -F'\t' '$4 == "stay" { print $1 }' "$DATA/blocklist" | while read -r ip; do nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null; done
 	awk -F'\t' '$4 != "stay"' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
 	rm -f "$DATA/stay"
@@ -973,7 +991,7 @@ stay_off() {
 	export_json
 }
 stay_vars() { # awk variable naming the file of places being kept to (nothing when stay mode is off)
-	[ -s "$DATA/stay" ] && echo "-v STAYF=$DATA/stay -v GAMES=$LIB/games.list -v GAMESL=$DATA/games.local"
+	staying && echo "-v STAYF=$DATA/stay -v GAMES=$LIB/games.list -v GAMESL=$DATA/games.local -v PINGF=$DATA/pingrange -v REGP=$DATA/regions.tsv"
 }
 stay_names() { awk -F'\t' 'NF >= 4 { s = s (n++ ? " + " : "") $1 } END { printf "%s", s }' "$DATA/stay" 2>/dev/null; }
 outside_stay() { # lat lon cc : true when a server is outside every place in the pool
@@ -985,6 +1003,105 @@ outside_stay() { # lat lon cc : true when a server is outside every place in the
 			if (dx * dx + dy * dy <= $4 * $4) ok = 1
 		}
 		END { exit ok ? 1 : 0 }' "$DATA/stay"
+}
+# ---- the ping range ("ping assist"). /etc/matchwatch/pingrange holds "lowest highest" in ms, 0 for no
+# limit on that side. A game server whose ping is known and falls outside the range is turned away with
+# the same machinery as one outside the places: the address block at the lobby check, whole ranges ahead
+# of time, strict games while held. Places and the range both have to pass; either works without the other.
+# The ping has to be known beforehand, because measuring as the game joins lets it join and then throws
+# the player out. Two sources: the lowest ping of your own matches on that address block, and otherwise
+# the measured ping of the nearest datacentre in the regions table, within 250 km. A server with neither
+# is let in. Never guess: a wrong guess turns away the wrong region.
+staying() { [ -s "$DATA/stay" ] || [ -s "$DATA/pingrange" ]; }
+ping_load() { # sets PLO and PHI; false when no range is set
+	PLO=0; PHI=0
+	[ -s "$DATA/pingrange" ] || return 1
+	read -r PLO PHI < "$DATA/pingrange"
+	case "$PLO" in ""|*[!0-9]*) PLO=0 ;; esac
+	case "$PHI" in ""|*[!0-9]*) PHI=0 ;; esac
+	[ "$PLO" -gt 0 ] || [ "$PHI" -gt 0 ]
+}
+ping_words() { # the range in words, from PLO and PHI
+	if [ "$PLO" -gt 0 ] && [ "$PHI" -gt 0 ]; then echo "$PLO to $PHI ms"
+	elif [ "$PHI" -gt 0 ]; then echo "$PHI ms or less"
+	else echo "$PLO ms or more"; fi
+}
+ping_known() { # ip lat lon -> the ping in ms known for that server beforehand, or nothing
+	touch "$DATA/regions.tsv" "$DATA/sessions.tsv"
+	awk -F'\t' -v ip="$1" -v a="$2" -v b="$3" '
+		BEGIN { split(ip, o, "."); p = o[1] "." o[2] "." o[3] "." }
+		FILENAME == ARGV[1] {
+			if ($8 !~ /^[0-9.]+$/ || a !~ /^-?[0-9.]+$/ || b !~ /^-?[0-9.]+$/ || $5 !~ /^-?[0-9.]+$/) next
+			x = (a + $5) / 2 * 0.0174533; x2 = x * x; cs = 1 - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720
+			dy = (a - $5) * 111.2; dx = (b - $6) * 111.2 * cs; d = dx * dx + dy * dy
+			if (d <= 62500 && (near == "" || d < bd)) { bd = d; near = $8 }
+			next
+		}
+		index($5, p) == 1 && ($21 == "server" || $21 == "serverudp") && $22 ~ /^[0-9.]+$/ && $22 > 0 { if (own == "" || $22 + 0 < own + 0) own = $22 }
+		END { if (own != "") print own; else if (near != "") print near }' "$DATA/regions.tsv" "$DATA/sessions.tsv"
+}
+ping_outside() { awk -v p="$1" -v lo="$PLO" -v hi="$PHI" 'BEGIN { exit !((lo > 0 && p + 0 < lo) || (hi > 0 && p + 0 > hi)) }'; }
+# Is this server to be turned away? Afterwards OUT_WHY says which test it failed (place or ping) and
+# OUT_PING the ping that was known. With "measure" a ping that is not known is measured now: only for a
+# strict game, whose packets are being held anyway.
+outside_pool() { # lat lon cc ip [measure]
+	local p
+	OUT_WHY=""; OUT_PING=""
+	if [ -s "$DATA/stay" ] && outside_stay "$1" "$2" "$3"; then OUT_WHY=place; return 0; fi
+	ping_load || return 1
+	p="$(ping_known "$4" "$1" "$2")"
+	if [ -z "$p" ] && [ "$5" = measure ]; then p="$(ping -c 2 -W 1 "$4" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | sort -n | head -n 1)"; fi
+	[ -n "$p" ] || return 1
+	OUT_PING="$p"
+	if ping_outside "$p"; then OUT_WHY=ping; return 0; fi
+	return 1
+}
+out_words() { # why the last server was turned away, for the log and the Live page
+	if [ "$OUT_WHY" = ping ]; then ping_load; echo "its ping is about ${OUT_PING%.*} ms and you are only letting in $(ping_words)"
+	else echo "you are staying on $(stay_names)"; fi
+}
+ping_sig() { # the datacentres inside the range, as one word: when it changes, what is turned away has to be worked out again
+	ping_load || { echo off; return; }
+	awk -F'\t' -v lo="$PLO" -v hi="$PHI" '$8 ~ /^[0-9.]+$/ && !((lo > 0 && $8 + 0 < lo) || (hi > 0 && $8 + 0 > hi)) { s = s $1 "," } END { print lo "-" hi ":" s }' "$DATA/regions.tsv" 2>/dev/null
+}
+cmd_pingrange() { # <lowest ms> <highest ms> | off | (nothing = status)
+	local n all names
+	mkdir -p "$DATA"; touch "$DATA/sessions.tsv" "$DATA/blocklist" "$DATA/regions.tsv"
+	case "$1" in
+		""|status)
+			if ping_load; then
+				echo "Letting in servers with a ping of $(ping_words)."
+				awk -F'\t' -v lo="$PLO" -v hi="$PHI" '$8 ~ /^[0-9.]+$/ { printf "%s\t  %-4s %-18s %-3s %7s ms\n", $8, (((lo > 0 && $8 + 0 < lo) || (hi > 0 && $8 + 0 > hi)) ? "out" : "in"), $2, $3, $8 }' "$DATA/regions.tsv" | sort -n | cut -f2-
+			else echo "No ping range is set. Set one with: matchwatch pingrange <lowest ms> <highest ms>   (0 for no limit on that side)"; fi ;;
+		off)
+			[ -s "$DATA/pingrange" ] || { echo "No ping range was set."; return 0; }
+			rm -f "$DATA/pingrange" "$RUN/ping.sig"
+			if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; echo "The ping range is removed. You are still staying on $(stay_names)."
+			else stay_off; echo "The ping range is removed. Nothing is turned away for its ping any more."; fi ;;
+		*)
+			case "$1" in ""|*[!0-9]*) die "usage: matchwatch pingrange <lowest ms> <highest ms> | off   (0 for no limit on that side)" ;; esac
+			case "$2" in ""|*[!0-9]*) die "usage: matchwatch pingrange <lowest ms> <highest ms> | off   (0 for no limit on that side)" ;; esac
+			[ "${#1}" -le 4 ] && [ "${#2}" -le 4 ] && [ "$1" -le 2000 ] && [ "$2" -le 2000 ] || die "a ping is between 1 and 2000 ms"
+			[ "$1" -gt 0 ] || [ "$2" -gt 0 ] || die "give a lowest ping, a highest ping, or both. To remove the range: matchwatch pingrange off"
+			[ "$2" = 0 ] || [ "$1" -lt "$2" ] || die "the lowest ping has to be under the highest"
+			echo "$(($1 + 0)) $(($2 + 0))" > "$DATA/pingrange"
+			ping_load
+			echo "Letting in servers with a ping of $(ping_words)$( [ -s "$DATA/stay" ] && echo ", inside the places you stay on" )."
+			if [ ! -s "$DATA/regions.tsv" ]; then
+				( cmd_regions measure >/dev/null 2>&1 & )
+				echo "The ping to each datacentre has not been measured yet. That is being done now, and the range takes effect in about half a minute."
+			else
+				all="$(awk -F'\t' '$8 ~ /^[0-9.]+$/ { n++ } END { print n + 0 }' "$DATA/regions.tsv")"
+				names="$(awk -F'\t' -v lo="$PLO" -v hi="$PHI" '$8 ~ /^[0-9.]+$/ && !((lo > 0 && $8 + 0 < lo) || (hi > 0 && $8 + 0 > hi)) { n++; if (n <= 8) s = s (n > 1 ? ", " : "") $2 " (" int($8 + 0.5) ")" } END { if (n > 8) s = s " and " (n - 8) " more"; print n + 0 "\t" s }' "$DATA/regions.tsv")"
+				n="${names%%$TAB*}"; names="${names#*$TAB}"
+				if [ "$n" = 0 ]; then echo "None of the $all datacentres MatchWatch measures is inside that range, so games hosted in them will not find a match. Widen the range, or check the pings on the Servers page under Regions and games."
+				else echo "$n of the $all measured datacentres are inside it: $names."; fi
+				ping_sig > "$RUN/ping.sig" 2>/dev/null
+				n="$(stay_apply)"
+				echo "$n address block(s) you have played on are turned away now; others are turned away as the game tries them."
+			fi
+			echo "A server is judged by the lowest ping of your own matches on it, or else by the nearest measured datacentre within 250 km. One whose ping is not known is let in. Favourites follow the same rule unless you add them to the pool." ;;
+	esac
 }
 # turn a city name into coordinates (Open-Meteo geocoding; sends only the name typed). prints: name, CC <tab> lat <tab> lon
 geocode() {
@@ -1028,6 +1145,7 @@ add_places() { # comma separated list -> appended to the pool (skipping ones alr
 stay_apply() { # make the blocks match the pool. Prints how many address blocks are now turned away
 	local ip p g cc lat lon live n=0
 	touch "$DATA/blocklist" "$DATA/geo.cache"
+	mkdir -p "$RUN"; ping_sig > "$RUN/ping.sig" 2>/dev/null
 	live="$(grep -o '"ip":"[0-9.]*"' "$RUN/www/status.json" 2>/dev/null | sed 's/"ip":"\([0-9]*\.[0-9]*\.[0-9]*\)\..*/ \1.0\/24 /' | tr -d '\n')"
 	rm -f "$RUN/stay.spared"
 	# Blocks already made for staying: keep each one that is still outside the pool. Many were made as the
@@ -1037,7 +1155,7 @@ stay_apply() { # make the blocks match the pool. Prints how many address blocks 
 		p="${ip%.*}"
 		g="$(awk -F'\t' -v p="$p." 'index($1, p) == 1 { l = $2 "\t" $5 "\t" $6 } END { print l }' "$DATA/geo.cache")"
 		cc="$(echo "$g" | cut -f1)"; lat="$(echo "$g" | cut -f2)"; lon="$(echo "$g" | cut -f3)"
-		if [ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && outside_stay "$lat" "$lon" "$cc"; then
+		if [ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && outside_pool "$lat" "$lon" "$cc" "$p.0"; then
 			case "$live" in *" $ip "*) ;; *) n=$((n + 1)); continue ;; esac
 		fi
 		nft delete element inet matchwatch blocked "{ $ip }" 2>/dev/null
@@ -1101,7 +1219,7 @@ cmd_stay() { # <places> | add <places> | remove <n> | circle <lat> <lon> <km> | 
 	local n
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	case "$1" in
-		off) if [ -s "$DATA/stay" ]; then stay_off; echo "No longer staying anywhere. The blocks it added are removed."; else echo "Stay mode was not on."; fi ;;
+		off) if [ -s "$DATA/stay" ]; then stay_off; if ping_load; then echo "No longer staying on places. Your ping range, $(ping_words), still applies."; else echo "No longer staying anywhere. The blocks it added are removed."; fi; else echo "Stay mode was not on."; fi ;;
 		""|status)
 			if [ -s "$DATA/stay" ]; then echo "Staying on:"; awk -F'\t' '{ printf "  %d  %s  (%s)\n", NR, $1, ($5 != "" && $5 != "-" ? "anywhere in it" : "within " $4 " km") }' "$DATA/stay"
 			else echo "Stay mode is off. Turn it on with: matchwatch stay <places, separated by commas>"; fi ;;
@@ -1113,7 +1231,7 @@ cmd_stay() { # <places> | add <places> | remove <n> | circle <lat> <lon> <km> | 
 		remove) case "$2" in ""|*[!0-9]*) die "usage: matchwatch stay remove <number from 'matchwatch stay'>" ;; esac
 			[ -s "$DATA/stay" ] && [ "$2" -ge 1 ] && [ "$2" -le "$(wc -l < "$DATA/stay")" ] || die "no place number $2 in the pool"
 			sed -i "${2}d" "$DATA/stay"
-			if [ -s "$DATA/stay" ]; then stay_report "$(stay_apply)"; else stay_off; echo "That was the last place, so stay mode is off."; fi ;;
+			if [ -s "$DATA/stay" ]; then stay_report "$(stay_apply)"; else stay_off; if ping_load; then echo "That was the last place. Your ping range, $(ping_words), still applies."; else echo "That was the last place, so stay mode is off."; fi; fi ;;
 		*)  # replace the pool
 			cp "$DATA/stay" "$DATA/stay.bak" 2>/dev/null || : > "$DATA/stay.bak"
 			: > "$DATA/stay"
@@ -1548,7 +1666,7 @@ cmd_allow() { # add <ip> | remove <ip> | (nothing = list)
 	echo "$ip" >> "$DATA/allow"
 	nft add element inet matchwatch allowed "{ $ip }" 2>/dev/null
 	export_json
-	if [ -s "$DATA/stay" ]; then echo "$ip is now let through, whatever region it is in. The game still decides whether to offer it to you."
+	if staying; then echo "$ip is now let through, whatever region it is in or its ping. The game still decides whether to offer it to you."
 	else echo "$ip will be let through when you stay on places. You are not staying anywhere at the moment."; fi
 }
 
@@ -1603,7 +1721,7 @@ hold_apply() { # make the firewall and the engine agree with the list of held ga
 	# first stop holding, then throw the old verdicts away: they were made for the pool as it was
 	nft flush set inet matchwatch hold_ports 2>/dev/null
 	nft flush set inet matchwatch okay 2>/dev/null
-	[ -s "$DATA/stay" ] && [ -s "$DATA/hold" ] && is_ipv4 "$DEVICE_IP" || return 0
+	staying && [ -s "$DATA/hold" ] && is_ipv4 "$DEVICE_IP" || return 0
 	nft list set inet matchwatch hold_ports >/dev/null 2>&1 || nft_ready || return 1
 	# a match being played keeps its server, whatever the pool now says
 	for ip in $(grep -o '"ip":"[0-9.]*"' "$RUN/www/status.json" 2>/dev/null | sed 's/"ip":"\([0-9.]*\)"/\1/'); do nft add element inet matchwatch okay "{ $ip }" 2>/dev/null; done
@@ -1618,7 +1736,7 @@ hold_apply() { # make the firewall and the engine agree with the list of held ga
 cmd_hold_check() { # server-ip port : the engine saw the device reach for a server on a held port. Decide
 	local ip="$1" port="$2" g cc country city lat lon isp org asn
 	is_ipv4 "$ip" || return 1
-	[ -s "$DATA/stay" ] && [ -s "$RUN/hold.ports" ] || return 0
+	staying && [ -s "$RUN/hold.ports" ] || return 0
 	nft get element inet matchwatch okay "{ $ip }" >/dev/null 2>&1 && return 0
 	nft get element inet matchwatch blocked "{ $ip }" >/dev/null 2>&1 && return 0
 	is_allowed "$ip" && return 0
@@ -1629,7 +1747,7 @@ $g
 EOF
 	# anything that cannot be placed, and anything that is not a game server, goes through
 	if [ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && [ "$(label_kind "$port" "$isp $org $asn")" = game ] \
-		&& ! grep -q "\"ip\":\"${ip%.*}\\." "$RUN/www/status.json" 2>/dev/null && outside_stay "$lat" "$lon" "$cc"; then
+		&& ! grep -q "\"ip\":\"${ip%.*}\\." "$RUN/www/status.json" 2>/dev/null && outside_pool "$lat" "$lon" "$cc" "$ip" measure; then
 		tried_note "$ip" "${port:-0}" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
 		MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay
 		logger -t matchwatch "strict: held a new server in ${city:+$city, }$cc and turned it away before it could connect" 2>/dev/null
@@ -1644,21 +1762,21 @@ EOF
 cmd_unseen() { # server-ip port
 	local ip="$1" port="$2" g cc country city lat lon isp org asn name
 	is_ipv4 "$ip" || return 1
-	[ -s "$DATA/stay" ] || return 0
+	staying || return 0
 	is_allowed "$ip" && return 0
 	nft get element inet matchwatch blocked "{ $ip }" >/dev/null 2>&1 && return 0
 	g="$(geo_lookup "$ip")"
 	IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
 $g
 EOF
-	[ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && outside_stay "$lat" "$lon" "$cc" || return 0
+	[ -n "$cc" ] && [ -n "$lat" ] && [ -n "$lon" ] && outside_pool "$lat" "$lon" "$cc" "$ip" || return 0
 	name="$(label_kind "$port" "$isp $org $asn" name)"
 	[ -n "$name" ] || return 0
 	grep -qxF "$name" "$DATA/hold" 2>/dev/null && return 0
 	mkdir -p "$RUN/www"
 	printf '{"ts":%s,"ip":"%s","port":%s,"loc":"%s","org":"%s","ping":null,"verdict":"far","blocked":false,"strictname":"%s","msg":"%s"}\n' \
 		"$(date +%s)" "$ip" "${port:-0}" "$(jesc "${city:+$city, }$cc")" "$(jesc "$org")" "$(jesc "$name")" \
-		"$(jesc "This server is in ${city:+$city, }$cc, outside your places, and was let through. $name is known by its port alone, and you have not played a match on this port or address block yet, so MatchWatch cannot be sure it is the game. Make $name strict and servers like this are held and turned away before they connect.")" \
+		"$(jesc "This server is in ${city:+$city, }$cc, outside $( [ "$OUT_WHY" = ping ] && echo "your ping range" || echo "your places" ), and was let through. $name is known by its port alone, and you have not played a match on this port or address block yet, so MatchWatch cannot be sure it is the game. Make $name strict and servers like this are held and turned away before they connect.")" \
 		> "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
 	logger -t matchwatch "let through a server in ${city:+$city, }$cc, outside your places: $name is known by port alone and no match has been played there yet. Make it strict to hold such servers." 2>/dev/null
 	return 0
@@ -2202,6 +2320,9 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		staycircle) set -- $(echo "$arg" | tr '/' ' '); [ $# = 3 ] || die "that is not a circle"; cmd_stay circle "$1" "$2" "$3" ;;
 		stayset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || die "that is not a circle"; cmd_stay set "$1" "$2" "$3" "$4" ;;
 		staysuggest) cmd_stay_suggest "$arg" ;;
+		# the ping range, as lowest/highest in ms
+		pingrange) set -- $(echo "$arg" | tr '/' ' '); [ $# = 2 ] || die "that is not a lowest and a highest ping"; cmd_pingrange "$1" "$2" ;;
+		pingoff) cmd_pingrange off ;;
 		qos) cmd_qos ;;
 		qosfix) cmd_qos_fix ;;
 		qosunfix) cmd_qos_unfix ;;
@@ -2556,8 +2677,8 @@ cmd_run() {
 	if [ "$MATCH_MODE" = 1 ]; then ( sleep 8; mm_set tight; mm_later 60 ) >/dev/null 2>&1 & fi
 	# strict games are switched on a few seconds after the engine is listening, never before
 	rm -f "$RUN/hold.ports"; nft flush set inet matchwatch hold_ports 2>/dev/null
-	[ -s "$DATA/hold" ] && [ -s "$DATA/stay" ] && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
-	[ -s "$DATA/stay" ] && ( sleep 3; stay_ranges >/dev/null 2>&1 ) &
+	[ -s "$DATA/hold" ] && staying && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
+	staying && ( sleep 3; stay_ranges >/dev/null 2>&1 ) &
 	web_setup; export_json
 	echo '{"ts":0,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
 	echo "Starting up..." > "$RUN/status.txt"
@@ -2703,6 +2824,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch unblock <ip>|all  remove a block
   matchwatch blocklist         show blocked servers
   matchwatch fav [add|remove <ip>]   your favourite servers; a favourite is never blocked automatically
+  matchwatch pingrange <lowest ms> <highest ms> | off     only let in game servers whose ping is in that range
+                               (0 for no limit on that side); works with or without places
   matchwatch allow [add|remove <ip>] single servers let through the places you stay on, whatever their region
   matchwatch strict [on|off <game>]  hold every new server of a game until it has been placed
   matchwatch matchgame <start> [name]   say which game a match really was, when MatchWatch named it wrongly or cannot tell
@@ -2738,6 +2861,7 @@ case "$1" in
 	game) cmd_game "$2" "$3" "$4" "$5" "$6" ;;
 	device) cmd_device "$2" ;;
 	regions) cmd_regions "$2" ;;
+	pingrange) cmd_pingrange "$2" "$3" ;;
 	places) awk -F'|' '/^area/ { printf "%-18s %-18s %s\n", $2, $3, $4 }' "$LIB/places.list"; echo; echo "Also any country by name or two-letter code, and any city by name." ;;
 	_lobby) cmd_lobby "$2" "$3" "$4" "$5" ;;
 	_sweep) cmd_sweep "$2" ;;
@@ -2844,7 +2968,7 @@ BEGIN {
 	QUALIFY = 8; ENDIDLE = 10; DROPIDLE = 30; TL = 120; MAXFLOWS = 200
 	HIST = DATA "/sessions.tsv"
 	if (GEOF == "") GEOF = DATA "/geo.cache"
-	STAYF = DATA "/stay"; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
+	STAYF = DATA "/stay"; PINGF = DATA "/pingrange"; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
 	while ((getline line < HIST) > 0) {
 		n = split(line, c, "\t")
 		if (n >= 6) { if (c[6] + 0 >= 1024) KPORT[c[6]] = 1; K24[pfx(c[5])] = 1 }
@@ -3103,6 +3227,8 @@ function lobby_check(f,    ip) {
 function staying(    l, r) {
 	if (STAY_c == cursec) return STAY_is
 	STAY_c = cursec; r = (getline l < STAYF); close(STAYF); STAY_is = (r > 0)
+	# a ping range on its own turns servers away too
+	if (!STAY_is) { r = (getline l < PINGF); close(PINGF); STAY_is = (r > 0) }
 	return STAY_is
 }
 function lobby_queue(f, kind,    ip) {
@@ -3774,6 +3900,7 @@ cat > "$R/usr/lib/matchwatch/report.awk.new" <<'MW_FILE_END_2'
 #        | dc_key | dc_others | dc_recent | dc_last | lobby     (KEY = datacentre key, STAY = key being kept to)
 #        | regions_txt | regions_json                             (REG = measured regions file)
 #        | dc_loc | area_others | area_recent      (STAYF = file of places being kept to; PLACE = one of them)
+#                                                    (PINGF = the ping range, "lowest highest"; REGP = measured regions, to judge it by)
 #        | hours_txt | recap_txt | games_txt        (GAMES, GAMESL = game label files)
 # ARG = count, server ip, or datacentre number ; BLOCK = blocklist file
 #
@@ -3792,6 +3919,10 @@ function where(i,   s) { s = (CITY[i] != "-" ? CITY[i] : ""); if (CC[i] != "-") 
 BEGIN {
 	FS = "\t"
 	if (STAYF != "") { while ((getline l < STAYF) > 0) { if (split(l, rr, "\t") >= 4) { nsp++; for (j = 1; j <= 5; j++) SP[nsp, j] = rr[j] } } close(STAYF) }
+	# the ping range, and the measured ping of each datacentre it is judged by
+	if (PINGF != "") { if ((getline l < PINGF) > 0) { split(l, rr, " "); PLO = rr[1] + 0; PHI = rr[2] + 0 } close(PINGF) }
+	PRANGE = (PLO > 0 || PHI > 0)
+	if (PRANGE && REGP != "") { while ((getline l < REGP) > 0) { if (split(l, rr, "\t") >= 8 && rr[8] ~ /^[0-9.]+$/ && rr[5] ~ /^-?[0-9.]+$/) { npr++; PRa[npr] = rr[5]; PRo[npr] = rr[6]; PRp[npr] = rr[8] } } close(REGP) }
 	load_games(GAMESL); load_games(GAMES)
 	if (GAMESL != "") {
 		l = GAMESL; sub(/games\.local$/, "", l); MGF = l "matchgames"; STKF = l "playing"
@@ -3817,6 +3948,7 @@ NF >= 39 {
 	S_port[ip] = $6; S_asn[ip] = $10; if (known($40) && known($41)) { S_lat[ip] = $40; S_lon[ip] = $41 }
 	S_tick[ip] += $11; S_secs[ip] += $2
 	if ($22 != "-") { S_ping[ip] += $22; S_pingn[ip]++ }
+	if (($21 == "server" || $21 == "serverudp") && $22 ~ /^[0-9.]+$/ && $22 > 0 && (!(p24(ip) in P24own) || $22 + 0 < P24own[p24(ip)] + 0)) P24own[p24(ip)] = $22
 	if ($37 == 1) { S_rn[ip]++; S_rsum[ip] += $36 }
 	S_all[ip] += $36
 	if (!(ip in S_worst) || $36 < S_worst[ip]) S_worst[ip] = $36
@@ -3839,7 +3971,7 @@ NF >= 39 {
 	if (!((dk, p24(ip)) in D_haspfx)) { D_haspfx[dk, p24(ip)] = 1; D_pfx[dk, ++D_npfx[dk]] = p24(ip) }
 	if (!(dk in D_worst) || $36 < D_worst[dk]) D_worst[dk] = $36
 }
-function dstay(k) { return (D_ln[k] > 0 && inside(D_lat[k] / D_ln[k], D_lon[k] / D_ln[k], D_cc[k]) == 1) }
+function dstay(k) { return (D_ln[k] > 0 && pool_in(D_lat[k] / D_ln[k], D_lon[k] / D_ln[k], D_cc[k], "") == 1) }
 function dblocked(k,   i) { for (i = 1; i <= D_npfx[k]; i++) if (!(D_pfx[k, i] in BLKP)) return 0; return 1 }
 function p24(ip,   o) { split(ip, o, "."); return o[1] "." o[2] "." o[3] }
 function blocked(ip) { return ((ip in BLK) || (p24(ip) in BLKP)) }
@@ -3863,6 +3995,20 @@ function place_of(lat, lon, cc,   i, unk) {
 	return unk ? "" : 0
 }
 function inside(lat, lon, cc,   p) { p = place_of(lat, lon, cc); return (p == "") ? "" : (p > 0 ? 1 : 0) }
+# The ping range. A server's ping has to be known beforehand: the lowest of the owner's own matches on its
+# address block (own), or else the measured ping of the nearest datacentre within 250 km. The same rule as
+# ping_known and ranges_outside in the script; change them together.
+function est_ping(lat, lon,   i, d, bd, b) { b = ""; for (i = 1; i <= npr; i++) { d = km2(lat, lon, PRa[i], PRo[i]); if (d <= 62500 && (b == "" || d < bd)) { bd = d; b = PRp[i] } } return b }
+function ping_out(p) { return ((PLO > 0 && p + 0 < PLO) || (PHI > 0 && p + 0 > PHI)) }
+# Is a server let in? 1 yes, 0 no, "" when that cannot be told or nothing is being filtered.
+# The places and the ping range both have to pass; a ping that is not known passes.
+function pool_in(lat, lon, cc, own,   io, e) {
+	io = (nsp == 0) ? (PRANGE ? 1 : "") : inside(lat, lon, cc)
+	if (!PRANGE || (io "") == "0") return io
+	e = known(own) ? own : ((known(lat) && known(lon)) ? est_ping(lat, lon) : "")
+	if (e == "") return io
+	return ping_out(e) ? 0 : io
+}
 # Labels: name|ports|kind|hosts (see games.list). which_label() gives the first label whose port range
 # holds this port and, where the label names hosts, whose words appear in this server's org or AS.
 function which_label(port, host,   i, k, a, lo, r, w, n, j, ok) {
@@ -3943,10 +4089,10 @@ END {
 		}
 		printf "["
 		for (i = 1; i <= ngg; i++) {
-			gk = ggo[i]; pl = (nsp > 0) ? place_of(((gk in Gla) ? Gla[gk] : "-"), ((gk in Glo) ? Glo[gk] : "-"), Gcc[gk]) : ""
+			gk = ggo[i]; pl = pool_in(((gk in Gla) ? Gla[gk] : "-"), ((gk in Glo) ? Glo[gk] : "-"), Gcc[gk], "")
 			printf "%s{\"game\":%s,\"city\":%s,\"cc\":%s,\"org\":%s,\"networks\":%d,\"nets\":[%s],\"matches\":%d,\"rating\":%s,\"mine\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""),
 				q(Gg[gk]), q(Gcity[gk] == "-" ? "" : Gcity[gk]), q(Gcc[gk] == "-" ? "" : Gcc[gk]), q(Gorg[gk] == "-" ? "" : Gorg[gk]), Gnet[gk], Gnets[gk], Gn[gk],
-				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl > 0 ? "true" : "false")), ((gk in Gla) ? Gla[gk] + 0 : "null"), ((gk in Glo) ? Glo[gk] + 0 : "null")
+				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl ? "true" : "false")), ((gk in Gla) ? Gla[gk] + 0 : "null"), ((gk in Glo) ? Glo[gk] + 0 : "null")
 		}
 		print "]"
 		exit
@@ -3978,7 +4124,16 @@ END {
 		}
 		exit
 	}
-	if (MODE == "area_others") { for (i = 1; i <= nout; i++) print OUT[i]; exit }
+	if (MODE == "area_others") {
+		for (i = 1; i <= nout; i++) print OUT[i]
+		# and the address blocks played on whose ping is outside the range
+		if (PRANGE) for (i = 1; i <= ns; i++) {
+			ip = order[i]
+			if ((p24(ip) in OUT_seen) || !is_game_port(S_port[ip], S_org[ip] " " S_asn[ip])) continue
+			if ((pool_in(S_lat[ip], S_lon[ip], S_cc[ip], P24own[p24(ip)]) "") == "0") { OUT_seen[p24(ip)] = 1; print p24(ip) ".0/24" }
+		}
+		exit
+	}
 	if (MODE == "area_recent") {
 		t = 0; j = 0
 		if (PLACE != "") { for (i = PN[PLACE] + 0; i >= 1 && j < 3; i--) { t += PH[PLACE, i]; j++ } }
@@ -4034,7 +4189,7 @@ END {
 			if (nreg == 0) { print "No regions measured yet. Run: matchwatch regions measure"; exit }
 			printf "%-16s %-3s %-14s %8s %8s %8s %7s %11s\n", "Region", "", "Area", "Ping ms", "Jitter", "Matches", "Rating", "Match ping"
 			for (i = 1; i <= nreg; i++) { r = ri[i]; c = RG[r, 1]
-				printf "%-16s %-3s %-14s %8s %8s %8s %7s %11s  %s\n", RG[r, 2], RG[r, 3], RG[r, 4], (RG[r, 8] == "-" ? "no reply" : RG[r, 8]), RG[r, 9], (RP_n[c] + 0), (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "-"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "-"), (inside(RG[r, 5], RG[r, 6], RG[r, 3]) == 1 ? "STAYING HERE" : "")
+				printf "%-16s %-3s %-14s %8s %8s %8s %7s %11s  %s\n", RG[r, 2], RG[r, 3], RG[r, 4], (RG[r, 8] == "-" ? "no reply" : RG[r, 8]), RG[r, 9], (RP_n[c] + 0), (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "-"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "-"), (pool_in(RG[r, 5], RG[r, 6], RG[r, 3], RG[r, 8]) == 1 ? "LET IN" : "")
 			}
 			print ""
 			print "Pings are to the host's test server in each datacentre, measured " strftime("%d %b %H:%M", RG[1, 11]) "."
@@ -4042,7 +4197,7 @@ END {
 		}
 		printf "["
 		for (i = 1; i <= nreg; i++) { r = ri[i]; c = RG[r, 1]
-			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (inside(RG[r, 5], RG[r, 6], RG[r, 3]) == 1 ? "true" : "false")
+			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (pool_in(RG[r, 5], RG[r, 6], RG[r, 3], RG[r, 8]) == 1 ? "true" : "false")
 		}
 		print "]"
 		exit
@@ -4118,7 +4273,7 @@ END {
 		printf "["
 		for (i = 1; i <= ns; i++) {
 			ip = idx[i]
-			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = inside(S_lat[ip], S_lon[ip], S_cc[ip])) == "" ? "null" : (w ? "true" : "false")), ((ip in S_lat) ? S_lat[ip] + 0 : "null"), ((ip in S_lon) ? S_lon[ip] + 0 : "null")
+			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = pool_in(S_lat[ip], S_lon[ip], S_cc[ip], P24own[p24(ip)])) == "" ? "null" : (w ? "true" : "false")), ((ip in S_lat) ? S_lat[ip] + 0 : "null"), ((ip in S_lon) ? S_lon[ip] + 0 : "null")
 		}
 		print "]"
 		exit
@@ -4503,7 +4658,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff"
 
 reply() { # ok(0|1) text
 	json_init
@@ -4636,7 +4791,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.34.2", reloading = false;
+var BUILT = "0.35.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -4860,7 +5015,7 @@ function gamePlacesSection() {
 	if (!rows.length) { box.appendChild(h("p", { cls: "empty", text: "Nothing learned yet. Each match, and each server a game tries, adds to this. Share files from other players add the rest of the world." })); return box; }
 	var games = []; rows.forEach(function (r) { if (games.indexOf(r.game) < 0) games.push(r.game); }); games.sort();
 	if (games.indexOf(gpGame) < 0) gpGame = "";
-	var staying = (D.info.stays || []).length > 0;
+	var staying = filtering();
 	if (games.length > 1) {
 		var sel = h("select", { "aria-label": "Show one game" }); sel.appendChild(h("option", { value: "", text: "Every game" }));
 		games.forEach(function (g) { var o = h("option", { value: g, text: g }); if (g === gpGame) o.selected = true; sel.appendChild(o); });
@@ -4869,7 +5024,7 @@ function gamePlacesSection() {
 	}
 	var list = rows.filter(function (r) { return !gpGame || r.game === gpGame; }).sort(function (a, b) { return a.game < b.game ? -1 : a.game > b.game ? 1 : (b.matches - a.matches) || (b.networks - a.networks); });
 	var heads = [["Game"], ["Where"], ["Hosted by"], ["Server networks", "num"], ["Matches", "num"], ["Rating", "num"], ["Known from"]];
-	if (staying) heads.push(["In your places"]);
+	if (staying) heads.push([pingRange().on ? "Let in" : "In your places"]);
 	var t = table(heads);
 	(gpAll ? list : list.slice(0, 12)).forEach(function (r) {
 		var net = h("td", { cls: "num", text: String(r.networks) }); net.title = (r.nets || []).join(", ") + (r.networks > (r.nets || []).length ? " and more" : "");
@@ -4916,16 +5071,54 @@ function star(ip, wordy) {
 	});
 	return b;
 }
+// ---------- the ping range: only servers whose ping is known to be inside it are let in
+function pingRange() { var p = D.info.ping || [0, 0], lo = +p[0] || 0, hi = +p[1] || 0; return { lo: lo, hi: hi, on: lo > 0 || hi > 0 }; }
+function pingWords(lo, hi) { return lo && hi ? lo + " to " + hi + " ms" : hi ? hi + " ms or less" : lo + " ms or more"; }
+function pingOut(ms, lo, hi) { return (lo > 0 && ms < lo) || (hi > 0 && ms > hi); }
+// is anything being turned away at all: places, a ping range, or both
+function filtering() { return (D.info.stays || []).length > 0 || pingRange().on; }
+function pingSection() {
+	var pr = pingRange(), box = h("div", null, h("h2", "Ping range"));
+	var lo = h("input", { type: "number", min: "0", max: "2000", step: "1", inputmode: "numeric", placeholder: "No lowest", "aria-label": "Lowest ping to let in, in ms" });
+	var hi = h("input", { type: "number", min: "0", max: "2000", step: "1", inputmode: "numeric", placeholder: "No highest", "aria-label": "Highest ping to let in, in ms" });
+	if (pr.lo) lo.value = pr.lo; if (pr.hi) hi.value = pr.hi;
+	var out = h("p", { cls: "note pingsay" }), set = h("button", { type: "button", cls: "solid", text: pr.on ? "Change the range" : "Set the range" });
+	function vals() { return { a: Math.max(0, parseInt(lo.value, 10) || 0), b: Math.max(0, parseInt(hi.value, 10) || 0) }; }
+	// say what the numbers typed would let in, before anything is changed
+	function preview() {
+		var v = vals(), rg = (D.regions || []).filter(function (r) { return r.ping != null; });
+		set.disabled = (!v.a && !v.b) || (v.a && v.b && v.a >= v.b) || (v.a === pr.lo && v.b === pr.hi);
+		if (!v.a && !v.b) { out.textContent = pr.on ? "Type new numbers to change the range, or remove it." : "Type a lowest ping, a highest ping, or both."; return; }
+		if (v.a && v.b && v.a >= v.b) { out.textContent = "The lowest has to be under the highest."; return; }
+		if (!rg.length) { out.textContent = "The ping to each datacentre has not been measured yet. It is measured when you set a range."; return; }
+		var inn = rg.filter(function (r) { return !pingOut(r.ping, v.a, v.b); });
+		out.textContent = inn.length + " of the " + rg.length + " measured datacentres " + (inn.length === 1 ? "is" : "are") + " inside " + pingWords(v.a, v.b) + (inn.length
+			? ": " + inn.slice(0, 8).map(function (r) { return r.city + " (" + Math.round(r.ping) + ")"; }).join(", ") + (inn.length > 8 ? " and " + (inn.length - 8) + " more" : "") + "."
+			: ". Games hosted in them would not find a match, so widen it.");
+	}
+	lo.addEventListener("input", preview); hi.addEventListener("input", preview);
+	set.addEventListener("click", function () {
+		var v = vals(); set.disabled = true; set.textContent = "Working...";
+		api("pingrange", v.a + "/" + v.b).then(function (j) { toast(j.out || j.error || "That did not work.", !j.ok); refresh(true); });
+	});
+	var go = function (e) { if (e.key === "Enter" && !set.disabled) set.click(); };
+	lo.addEventListener("keydown", go); hi.addEventListener("keydown", go);
+	box.appendChild(h("div", { cls: "stayform pingform" }, h("label", null, h("span", "Lowest ms"), lo), h("label", null, h("span", "Highest ms"), hi), set, pr.on ? act("Remove the range", "pingoff", null, {}) : null));
+	box.appendChild(out);
+	box.appendChild(brief("Only game servers whose ping is inside this range are let in, and the rest are turned away like servers outside your places. Leave a box empty for no limit on that side: a highest alone keeps you on near servers, a lowest alone keeps you off them. A server is judged by a ping MatchWatch already has: the lowest of your own matches on it, or else the nearest measured datacentre within 250 km (the table under Regions and games). One whose ping is not known is let in, because measuring it as the game connects would let it connect first. If you also stay on places, a server has to pass both. Single servers you add to the pool are always let in; a favourite is not, unless you add it."));
+	preview();
+	return box;
+}
 // One server let through the places being stayed on. Offered while staying; shown as a tag once it is in.
 function isAllowed(ip) { return (D.info.allowed || []).indexOf(ip) >= 0; }
 function allowBtn(ip) {
-	if (isAllowed(ip)) return h("span", { cls: "tag keep", title: "Let through the places you stay on. Remove it under the places, at the top of the Servers page.", text: "In the pool" });
-	if (RO || !(D.info.stays || []).length) return null;
-	// already inside the places being stayed on: nothing to add, and a button that does nothing misleads
+	if (isAllowed(ip)) return h("span", { cls: "tag keep", title: "Let through whatever its place or ping. Take it out under Favourites, or under What is let in on the Servers page.", text: "In the pool" });
+	if (RO || !filtering()) return null;
+	// already let in by the places and the ping range: nothing to add, and a button that does nothing misleads
 	var known = D.servers.filter(function (x) { return x.ip === ip; })[0];
-	if (known && known["in"] === true) return h("span", { cls: "kept", title: "This server is inside the places you stay on, so it is already allowed.", text: "In your places" });
+	if (known && known["in"] === true) return h("span", { cls: "kept", title: "Your places and ping range already let this server in.", text: pingRange().on ? "Let in already" : "In your places" });
 	var b = act("Add to pool", "allow", ip, {});
-	b.title = "Let this one server through, whatever region it is in";
+	b.title = "Let this one server through, whatever region it is in and whatever its ping";
 	return b;
 }
 function addIf(parent, el) { if (el) parent.appendChild(el); }
@@ -5111,7 +5304,7 @@ function strictSection() {
 	D.hist.forEach(function (m) { if (m.game) played[m.game] = 1; });
 	(D.hold || []).forEach(function (g) { if (g.on || played[g.name] || allGames) rows.push(g); else more++; });
 	if (!rows.length && !more) return null;
-	var staying = (D.info.stays || []).length, box = h("div", null, h("h2", "How each game is filtered"));
+	var staying = filtering(), box = h("div", null, h("h2", "How each game is filtered"));
 	box.appendChild(brief("A game MatchWatch knows by its port and by who hosts it is filtered from the first server it tries. One it knows by port alone is only filtered on ports and address blocks where you have played a match, because other things use those ports too. Make a game strict and every new server on its ports is held for a moment and judged before it can connect, whichever kind it is. All of this applies to your gaming device only." + (staying ? "" : " It only does anything while you are staying on places.")));
 	var t = table([["Game"], ["Server ports"], ["Servers outside your places"], ["", ""]]);
 	rows.forEach(function (g) {
@@ -5304,13 +5497,17 @@ function favSection() {
 			.forEach(function (s) {
 				var td = h("td", { cls: "act" });
 				td.appendChild(star(s.ip));
-				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" })); else addIf(td, allowBtn(s.ip));
+				if (s.blocked || isBlocked(s.ip)) td.appendChild(h("span", { cls: "tag", text: "Blocked" }));
+				else if (isAllowed(s.ip) && !RO) {
+					td.appendChild(h("span", { cls: "tag keep", text: "In the pool" }));
+					var out = act("Take out of pool", "unallow", s.ip, {}); out.title = "Stop letting this one server through. It stays a favourite."; td.appendChild(out);
+				} else addIf(td, allowBtn(s.ip));
 				t.lastChild.appendChild(row([[s.ip], [place(s)], [s.org && s.org !== "-" ? s.org : ""], [s.matches == null ? "" : String(s.matches), "num"], [s.rating == null ? "" : String(s.rating), "num s " + cls(s.rating)],
 					[s.ping == null ? "" : fmt(s.ping, 1), "num"], [s.last ? when(s.last) : "Not played on yet"], td]));
 			});
 		box.appendChild(h("div", { cls: "tablewrap" }, t));
 	});
-	box.appendChild(h("p", { cls: "note", text: "Best rated first within each game. A favourite is never blocked automatically, and the lobby alert tells you when you land on one. The game still decides which server you get: a favourite cannot be requested." }));
+	box.appendChild(brief("Best rated first within each game. A favourite is never blocked automatically for a bad rating, and the lobby alert tells you when you land on one. The star and the pool are separate: your places and ping range treat a favourite like any other server unless you press Add to pool beside it, and Take out of pool undoes that without removing the star. The game still decides which server you get: a favourite cannot be requested."));
 	return box;
 }
 
@@ -5476,7 +5673,7 @@ function pageMatch(id) {
 				: m.outside === "port" ? og + " is known by its port alone, and no match had been played on this port or address block before, so MatchWatch could not be sure it was the game. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to stop the first one too."
 				: m.outside === "host" ? "It connected in the moment before it could be looked up, or your places changed while you were playing. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to hold new servers until they have been placed."
 				: "The game on this port has no name yet, and MatchWatch never turns an unnamed game away. Name it under Tools, Games.";
-			view.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "Played outside your places. "), "This server is in " + (place(m) || "a place") + ", outside the places you stay on. " + why)));
+			view.appendChild(h("div", { cls: "banner far" }, h("p", null, h("b", "Played outside what you let in. "), "This server is in " + (place(m) || "a place") + ", outside your places or your ping range. " + why)));
 		}
 		view.appendChild(chain(m));
 		if (full && m.tl_d && m.tl_d.length) {
@@ -5624,14 +5821,14 @@ function pageMatches() {
 function pageServers() {
 	view.textContent = ""; view.appendChild(h("h1", "Servers"));
 	var days = D.info.block_days || 14;
-	var stays = D.info.stays || [];
+	var stays = D.info.stays || [], prg = pingRange();
 	var tab = SERVTABS.some(function (t) { return t[0] === pageArg; }) ? pageArg : "places";
 	var seg = h("div", { cls: "seg" });
 	SERVTABS.forEach(function (t) { var a = h("a", { href: "#/servers/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
 	view.appendChild(seg);
 	if (tab === "places") {
 	if (stays.length) {
-		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed. Servers anywhere else are turned away as the game tries them. " + "A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
+		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed" + (prg.on ? ", if its ping is " + pingWords(prg.lo, prg.hi) : "") + ". Servers anywhere else are turned away as the game tries them. " + "A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
 		view.appendChild(bn);
 		// which hosts the up-front refusal covers, and whether the places in the pool have any servers at all
 		var cov = h("div"); view.appendChild(cov);
@@ -5649,17 +5846,19 @@ function pageServers() {
 			cov.appendChild(brief((c.refusing ? "Whole regions are refused ahead of time for games hosted by " + c.hosts + ": " + c.refused + " of its " + c.known + " address ranges, for your gaming device only. " : "MatchWatch knows where the servers are for games hosted by " + c.hosts + ". ") + "Servers of any other game are turned away one at a time, as the game tries them, and MatchWatch cannot tell in advance whether such a game has servers in your places."));
 		})(D.cov);
 	}
+	if (prg.on && !stays.length) view.appendChild(h("div", { cls: "banner" }, h("p", null, h("b", "Letting in " + pingWords(prg.lo, prg.hi) + ". "), "A game server whose ping is known to be outside that is turned away as the game tries it, wherever it is. One whose ping is not known is let in."), act("Remove the range", "pingoff", null, {})));
 	view.appendChild(h("h2", "Map"));
 	view.appendChild(mapSection());
 	// everything that is let in, in one list beside the map: the places, then the single servers
 	var lets = D.info.allowed || [];
-	if ((stays.length || lets.length) && !RO) {
+	if ((stays.length || lets.length || prg.on) && !RO) {
 		view.appendChild(h("h2", "What is let in"));
 		var pl = h("div", { cls: "actions" });
 		stays.forEach(function (nm, i) { pl.appendChild(act("Remove " + nm, "stayrm", i + 1, stays.length === 1 ? { confirm: "Confirm: this stops staying" } : {})); });
+		if (prg.on) pl.appendChild(act("Remove ping range " + pingWords(prg.lo, prg.hi), "pingoff", null, {}));
 		lets.forEach(function (ip) { var s = D.servers.filter(function (x) { return x.ip === ip; })[0] || D.favInfo[ip]; pl.appendChild(act("Remove server " + ip + (s && place(s) ? ", " + place(s) : ""), "unallow", ip, {})); });
 		view.appendChild(pl);
-		view.appendChild(brief(lets.length ? "Each button removes one place or one single server. A single server is let through even when it is outside your places. Only its exact address is allowed, so its neighbours in the same datacentre are still turned away, and the game still decides whether to offer it to you." + (stays.length ? "" : " Single servers only matter while you are staying on places.")
+		view.appendChild(brief(lets.length ? "Each button removes one place or one single server. A single server is let through even when it is outside your places. Only its exact address is allowed, so its neighbours in the same datacentre are still turned away, and the game still decides whether to offer it to you." + (stays.length || prg.on ? "" : " Single servers only matter while you are staying on places or have a ping range.")
 			: "Each button removes one place. To let one server through from outside your places, press Add to pool beside it under Favourites or Servers, on the map, or on a match report."));
 	}
 	// stay anywhere: cities, countries or wider areas, as one pool
@@ -5684,6 +5883,7 @@ function pageServers() {
 	view.appendChild(h("div", { cls: "stayform" }, inp, stays.length ? add : null, go));
 	view.appendChild(brief("Type one place or several, separated by commas: cities, countries, or these areas: uk-ireland, western-europe, southern-europe, northern-europe, eastern-europe, europe, north-america, south-america, middle-east, asia, oceania. A city allows servers within about 150 km of it; a country or area allows any server located there. Several places make one pool, and the game picks among them, which keeps queues shorter than a single place."));
 	}
+	if (!RO) view.appendChild(pingSection());
 	addIf(view, strictSection());
 	}
 	if (tab === "favourites") {
@@ -5740,7 +5940,7 @@ function pageServers() {
 		(regionsAll ? rg : rg.slice(0, 4)).forEach(function (r) {
 			tr.lastChild.appendChild(row([[r.city + ", " + r.cc], [r.area], [r.ping == null ? "No reply" : fmt(r.ping, 1), "num s"], [pingLetter(r.ping) || "", "s " + gradeCls(pingLetter(r.ping))], [r.jit == null ? "" : fmt(r.jit, 1), "num"],
 				[r.matches ? String(r.matches) : "", "num"], [r.rating == null ? "" : String(r.rating), "num s " + cls(r.rating)], [r.matchping == null ? "" : fmt(r.matchping, 1), "num"],
-				(function () { var td = h("td", { cls: "act" }); if (r.stay) td.appendChild(h("span", { cls: "tag keep", text: "In the pool" })); else if (r.ping != null && stays.length) td.appendChild(act("Add", "stayadd", null, { extra: "&region=" + r.code })); else if (r.ping != null) td.appendChild(act("Stay here", "stay", null, { extra: "&region=" + r.code, confirm: "Confirm: turn the others away" })); return td; })()]));
+				(function () { var td = h("td", { cls: "act" }); if (r.stay) td.appendChild(h("span", { cls: "tag keep", text: stays.length ? "In the pool" : "Let in" })); else if (r.ping != null && prg.on && pingOut(r.ping, prg.lo, prg.hi)) td.appendChild(h("span", { cls: "tag", title: "Its ping is outside " + pingWords(prg.lo, prg.hi), text: "Outside your ping range" })); else if (r.ping != null && stays.length) td.appendChild(act("Add", "stayadd", null, { extra: "&region=" + r.code })); else if (r.ping != null) td.appendChild(act("Stay here", "stay", null, { extra: "&region=" + r.code, confirm: "Confirm: turn the others away" })); return td; })()]));
 		});
 		view.appendChild(h("div", { cls: "tablewrap" }, tr));
 	}
@@ -6198,7 +6398,7 @@ function pageTools() {
 	}
 	if (tab !== "data") return;
 	view.appendChild(h("h2", "Settings in use"));
-	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"],
+	view.appendChild(kv([["Version", i.version || "n/a"], ["Watching", i.device || "Every device on the LAN"], ["Staying on", i.stay ? i.stay : "Nowhere in particular"], ["Ping range", pingRange().on ? pingWords(pingRange().lo, pingRange().hi) : "None"],
 		["Blocks last", (i.block_days || 14) + " days"], ["Automatic blocking", i.autoblock ? "On" : "Off"], ["Phone notifications", i.notify ? "On" : "Off"], ["Your PC counts towards scores", i.pc_score === false ? "No" : "Yes"], ["Server location lookups", i.geo === false ? "Off" : "On"],
 		["This dashboard without login", i.web ? "On, view only" : "Off"],
 		i.lan_if ? ["Listening for matches on", i.lan_if, "The port your gaming device is on"] : null,
@@ -6336,6 +6536,10 @@ select { padding: 7px 10px; max-width: 100%; }
 .stayform input { flex: 1; min-width: 200px; }
 .banner .stayform { flex: 1; min-width: 260px; }
 td .stayform { max-width: 420px; }
+.pingform { align-items: flex-end; max-width: 640px; }
+.pingform label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); flex: 0 1 130px; }
+.pingform label input { min-width: 0; width: 100%; flex: none; }
+.pingsay { min-height: 1.4em; margin-top: 10px; }
 td .stayform input { min-width: 140px; }
 
 /* ---- chart */

@@ -61,7 +61,7 @@ BEGIN {
 	QUALIFY = 8; ENDIDLE = 10; DROPIDLE = 30; TL = 120; MAXFLOWS = 200
 	HIST = DATA "/sessions.tsv"
 	if (GEOF == "") GEOF = DATA "/geo.cache"
-	STAYF = DATA "/stay"; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
+	STAYF = DATA "/stay"; PINGF = DATA "/pingrange"; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
 	while ((getline line < HIST) > 0) {
 		n = split(line, c, "\t")
 		if (n >= 6) { if (c[6] + 0 >= 1024) KPORT[c[6]] = 1; K24[pfx(c[5])] = 1 }
@@ -320,6 +320,8 @@ function lobby_check(f,    ip) {
 function staying(    l, r) {
 	if (STAY_c == cursec) return STAY_is
 	STAY_c = cursec; r = (getline l < STAYF); close(STAYF); STAY_is = (r > 0)
+	# a ping range on its own turns servers away too
+	if (!STAY_is) { r = (getline l < PINGF); close(PINGF); STAY_is = (r > 0) }
 	return STAY_is
 }
 function lobby_queue(f, kind,    ip) {

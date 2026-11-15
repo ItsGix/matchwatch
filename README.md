@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.34.2 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.35.0 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -50,6 +50,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 **Acts, when you ask**
 
 - Blocks a bad server or datacentre, or keeps you to a pool of places you choose, turning whole regions away before the game tries them. Single servers from anywhere can be let through, and a game can be made strict so that no unplaced server ever connects.
+- A ping range: only servers whose ping is between a lowest and a highest you choose are let in, with or without places.
 - Alerts your phone through ntfy: when a match starts, when a poor server is ahead, after a bad match.
 - Tests your line before you queue, traces the route to a server, and grades both from A+ to F.
 - Checks that QoSmate is prioritising your game, and reports what its queues did in each match.
@@ -62,6 +63,14 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Leaves voice chat alone: Discord and other calls are not recorded and can never be blocked.
 - Makes share files you choose the contents of, item by item. Nothing is ever uploaded.
 - Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
+
+| The ping range: a lowest and a highest, and what they would let in |
+| --- |
+| ![Ping range](docs/pingrange.png) |
+
+| Favourites: the star and the pool are separate |
+| --- |
+| ![Favourites](docs/favourites.png) |
 
 | The map: your places as circles and your servers by rating |
 | --- |
@@ -282,6 +291,7 @@ Blocks live in their own nftables table, so your firewall rules are untouched.
 Press the star beside any server, on the Servers page, the Live page or a match report. The Servers page lists your favourites at the top, grouped by game and best rated first.
 
 - A favourite is never blocked automatically, however it rates. You can still block one yourself.
+- A star does not put a server in the pool. Your places and your ping range treat a favourite like any other server unless you press **Add to pool** beside it. **Take out of pool**, on the Favourites tab, undoes that and leaves the star where it is.
 - The lobby check tells you when the game is sending you to one.
 - Favourites can be shared. Ones you take from someone else show under the same games, marked "Not played on yet" until you land on them.
 - Clearing your match history keeps your favourites.
@@ -325,14 +335,30 @@ The map pictures are tiles from OpenStreetMap, fetched by your browser while the
 
 ### Single servers in the pool
 
-Sometimes one server outside your places is worth keeping: a favourite, or one you played well on last night. While you are staying on places, **Add to pool** appears beside every server in your favourites and the server list, and on each match report. It lets that one server through, whatever region it is in. A server already inside your places shows "In your places" instead, since there is nothing to add. The region lock itself is unchanged: everything else outside your places is still turned away.
+Sometimes one server outside your places or your ping range is worth keeping: a favourite, or one you played well on last night. While you are staying on places or have a ping range, **Add to pool** appears beside every server in your favourites and the server list, and on each match report. It lets that one server through, whatever region it is in. A server already inside your places shows "In your places" instead, since there is nothing to add. The region lock itself is unchanged: everything else outside your places is still turned away.
 
 - Only the exact address is allowed. Its neighbours in the same datacentre are still refused, so nothing you did not choose gets in. Games do move players between neighbouring addresses, so you may not be offered the same one often.
-- The servers you have added are listed under your places at the top of the Servers page, each with a Remove button.
+- The servers you have added are listed under **What is let in** on the Servers page, each with a Remove button. A favourite also has **Take out of pool** beside it on the Favourites tab.
 - An allowed server is never blocked automatically. Blocking it yourself takes it back out of the pool.
 - The game still decides. Allowing a server means it will not be refused, not that you will be sent to it.
 
 From the command line: `matchwatch allow`, `matchwatch allow add <ip>`, `matchwatch allow remove <ip>`.
+
+### The ping range
+
+On Servers, Where I play, under **Ping range**, type a lowest ping, a highest ping, or both, in ms. Only game servers whose ping is inside the range are let in; the rest are turned away with the same machinery as servers outside your places. As you type, the page says which of the measured datacentres the numbers would let in, before anything changes.
+
+- **A highest alone** ("40 or less") keeps you on near servers. **A lowest alone** ("60 or more") keeps you off them. **Both** make a band.
+- **With places as well**, a server has to pass both: inside one of your places and inside the range. Without places the range works alone.
+- **Where the ping comes from.** It has to be known before the game connects, because measuring it as the game joins would let the game join and then throw you out of the lobby. MatchWatch uses the lowest ping of your own matches on that server's address block, and otherwise the measured ping of the nearest datacentre in the regions table, within 250 km. The regions table is measured again every few hours, and what is turned away is worked out again when a datacentre crosses an edge of your range.
+- **A server whose ping is not known is let in.** MatchWatch does not guess. For a strict game the server is being held anyway, so it is pinged then and judged on that.
+- **Whole regions ahead of time.** For hosts whose address lists MatchWatch has (see below), every range whose city has a measured datacentre outside your range is refused before the game tries it.
+- **Single servers in the pool** are always let in, whatever their ping. A favourite is not, unless you add it.
+- If no measured datacentre is inside the range, MatchWatch says so when you set it: games hosted in them would not find a match.
+
+It is strongest for games on hosts MatchWatch measures (Call of Duty on Vultr today). It only refuses servers by a ping MatchWatch has measured; it does not change your connection or what the game sees of it.
+
+From the command line: `matchwatch pingrange` (what is set, and each datacentre in or out), `matchwatch pingrange 60 110`, `matchwatch pingrange 0 40` (no lowest), `matchwatch pingrange off`.
 
 ### When a server is turned away
 
@@ -606,7 +632,8 @@ Everything is also available over SSH:
 | `matchwatch fav` / `fav add <ip>` / `fav remove <ip>` | Your favourite servers |
 | `matchwatch stay <places>` / `stay off` | Keep to a pool of places, separated by commas |
 | `matchwatch stay add <places>` / `stay remove <n>` | Change the pool |
-| `matchwatch allow` / `allow add <ip>` / `allow remove <ip>` | Single servers let through the places you stay on |
+| `matchwatch pingrange` / `pingrange <lowest> <highest>` / `pingrange off` | Only let in game servers whose ping is in that range, in ms (0 for no limit on that side) |
+| `matchwatch allow` / `allow add <ip>` / `allow remove <ip>` | Single servers let through the places you stay on and the ping range |
 | `matchwatch strict` / `strict on <game>` / `strict off <game>` | Hold every new server of a game until it has been placed |
 | `matchwatch stay circle <lat> <lon> <km>` | Add a circle to the pool, as the map does |
 | `matchwatch places` | The areas you can stay on |

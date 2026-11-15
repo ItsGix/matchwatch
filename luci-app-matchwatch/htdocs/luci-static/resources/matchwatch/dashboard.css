@@ -66,6 +66,10 @@ select { padding: 7px 10px; max-width: 100%; }
 .stayform input { flex: 1; min-width: 200px; }
 .banner .stayform { flex: 1; min-width: 260px; }
 td .stayform { max-width: 420px; }
+.pingform { align-items: flex-end; max-width: 640px; }
+.pingform label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); flex: 0 1 130px; }
+.pingform label input { min-width: 0; width: 100%; flex: none; }
+.pingsay { min-height: 1.4em; margin-top: 10px; }
 td .stayform input { min-width: 140px; }
 
 /* ---- chart */

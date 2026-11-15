@@ -5,6 +5,7 @@
 #        | dc_key | dc_others | dc_recent | dc_last | lobby     (KEY = datacentre key, STAY = key being kept to)
 #        | regions_txt | regions_json                             (REG = measured regions file)
 #        | dc_loc | area_others | area_recent      (STAYF = file of places being kept to; PLACE = one of them)
+#                                                    (PINGF = the ping range, "lowest highest"; REGP = measured regions, to judge it by)
 #        | hours_txt | recap_txt | games_txt        (GAMES, GAMESL = game label files)
 # ARG = count, server ip, or datacentre number ; BLOCK = blocklist file
 #
@@ -23,6 +24,10 @@ function where(i,   s) { s = (CITY[i] != "-" ? CITY[i] : ""); if (CC[i] != "-") 
 BEGIN {
 	FS = "\t"
 	if (STAYF != "") { while ((getline l < STAYF) > 0) { if (split(l, rr, "\t") >= 4) { nsp++; for (j = 1; j <= 5; j++) SP[nsp, j] = rr[j] } } close(STAYF) }
+	# the ping range, and the measured ping of each datacentre it is judged by
+	if (PINGF != "") { if ((getline l < PINGF) > 0) { split(l, rr, " "); PLO = rr[1] + 0; PHI = rr[2] + 0 } close(PINGF) }
+	PRANGE = (PLO > 0 || PHI > 0)
+	if (PRANGE && REGP != "") { while ((getline l < REGP) > 0) { if (split(l, rr, "\t") >= 8 && rr[8] ~ /^[0-9.]+$/ && rr[5] ~ /^-?[0-9.]+$/) { npr++; PRa[npr] = rr[5]; PRo[npr] = rr[6]; PRp[npr] = rr[8] } } close(REGP) }
 	load_games(GAMESL); load_games(GAMES)
 	if (GAMESL != "") {
 		l = GAMESL; sub(/games\.local$/, "", l); MGF = l "matchgames"; STKF = l "playing"
@@ -48,6 +53,7 @@ NF >= 39 {
 	S_port[ip] = $6; S_asn[ip] = $10; if (known($40) && known($41)) { S_lat[ip] = $40; S_lon[ip] = $41 }
 	S_tick[ip] += $11; S_secs[ip] += $2
 	if ($22 != "-") { S_ping[ip] += $22; S_pingn[ip]++ }
+	if (($21 == "server" || $21 == "serverudp") && $22 ~ /^[0-9.]+$/ && $22 > 0 && (!(p24(ip) in P24own) || $22 + 0 < P24own[p24(ip)] + 0)) P24own[p24(ip)] = $22
 	if ($37 == 1) { S_rn[ip]++; S_rsum[ip] += $36 }
 	S_all[ip] += $36
 	if (!(ip in S_worst) || $36 < S_worst[ip]) S_worst[ip] = $36
@@ -70,7 +76,7 @@ NF >= 39 {
 	if (!((dk, p24(ip)) in D_haspfx)) { D_haspfx[dk, p24(ip)] = 1; D_pfx[dk, ++D_npfx[dk]] = p24(ip) }
 	if (!(dk in D_worst) || $36 < D_worst[dk]) D_worst[dk] = $36
 }
-function dstay(k) { return (D_ln[k] > 0 && inside(D_lat[k] / D_ln[k], D_lon[k] / D_ln[k], D_cc[k]) == 1) }
+function dstay(k) { return (D_ln[k] > 0 && pool_in(D_lat[k] / D_ln[k], D_lon[k] / D_ln[k], D_cc[k], "") == 1) }
 function dblocked(k,   i) { for (i = 1; i <= D_npfx[k]; i++) if (!(D_pfx[k, i] in BLKP)) return 0; return 1 }
 function p24(ip,   o) { split(ip, o, "."); return o[1] "." o[2] "." o[3] }
 function blocked(ip) { return ((ip in BLK) || (p24(ip) in BLKP)) }
@@ -94,6 +100,20 @@ function place_of(lat, lon, cc,   i, unk) {
 	return unk ? "" : 0
 }
 function inside(lat, lon, cc,   p) { p = place_of(lat, lon, cc); return (p == "") ? "" : (p > 0 ? 1 : 0) }
+# The ping range. A server's ping has to be known beforehand: the lowest of the owner's own matches on its
+# address block (own), or else the measured ping of the nearest datacentre within 250 km. The same rule as
+# ping_known and ranges_outside in the script; change them together.
+function est_ping(lat, lon,   i, d, bd, b) { b = ""; for (i = 1; i <= npr; i++) { d = km2(lat, lon, PRa[i], PRo[i]); if (d <= 62500 && (b == "" || d < bd)) { bd = d; b = PRp[i] } } return b }
+function ping_out(p) { return ((PLO > 0 && p + 0 < PLO) || (PHI > 0 && p + 0 > PHI)) }
+# Is a server let in? 1 yes, 0 no, "" when that cannot be told or nothing is being filtered.
+# The places and the ping range both have to pass; a ping that is not known passes.
+function pool_in(lat, lon, cc, own,   io, e) {
+	io = (nsp == 0) ? (PRANGE ? 1 : "") : inside(lat, lon, cc)
+	if (!PRANGE || (io "") == "0") return io
+	e = known(own) ? own : ((known(lat) && known(lon)) ? est_ping(lat, lon) : "")
+	if (e == "") return io
+	return ping_out(e) ? 0 : io
+}
 # Labels: name|ports|kind|hosts (see games.list). which_label() gives the first label whose port range
 # holds this port and, where the label names hosts, whose words appear in this server's org or AS.
 function which_label(port, host,   i, k, a, lo, r, w, n, j, ok) {
@@ -174,10 +194,10 @@ END {
 		}
 		printf "["
 		for (i = 1; i <= ngg; i++) {
-			gk = ggo[i]; pl = (nsp > 0) ? place_of(((gk in Gla) ? Gla[gk] : "-"), ((gk in Glo) ? Glo[gk] : "-"), Gcc[gk]) : ""
+			gk = ggo[i]; pl = pool_in(((gk in Gla) ? Gla[gk] : "-"), ((gk in Glo) ? Glo[gk] : "-"), Gcc[gk], "")
 			printf "%s{\"game\":%s,\"city\":%s,\"cc\":%s,\"org\":%s,\"networks\":%d,\"nets\":[%s],\"matches\":%d,\"rating\":%s,\"mine\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""),
 				q(Gg[gk]), q(Gcity[gk] == "-" ? "" : Gcity[gk]), q(Gcc[gk] == "-" ? "" : Gcc[gk]), q(Gorg[gk] == "-" ? "" : Gorg[gk]), Gnet[gk], Gnets[gk], Gn[gk],
-				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl > 0 ? "true" : "false")), ((gk in Gla) ? Gla[gk] + 0 : "null"), ((gk in Glo) ? Glo[gk] + 0 : "null")
+				(Grn[gk] ? int(Grs[gk] / Grn[gk] + 0.5) : "null"), (Gm[gk] ? "true" : "false"), (pl == "" ? "null" : (pl ? "true" : "false")), ((gk in Gla) ? Gla[gk] + 0 : "null"), ((gk in Glo) ? Glo[gk] + 0 : "null")
 		}
 		print "]"
 		exit
@@ -209,7 +229,16 @@ END {
 		}
 		exit
 	}
-	if (MODE == "area_others") { for (i = 1; i <= nout; i++) print OUT[i]; exit }
+	if (MODE == "area_others") {
+		for (i = 1; i <= nout; i++) print OUT[i]
+		# and the address blocks played on whose ping is outside the range
+		if (PRANGE) for (i = 1; i <= ns; i++) {
+			ip = order[i]
+			if ((p24(ip) in OUT_seen) || !is_game_port(S_port[ip], S_org[ip] " " S_asn[ip])) continue
+			if ((pool_in(S_lat[ip], S_lon[ip], S_cc[ip], P24own[p24(ip)]) "") == "0") { OUT_seen[p24(ip)] = 1; print p24(ip) ".0/24" }
+		}
+		exit
+	}
 	if (MODE == "area_recent") {
 		t = 0; j = 0
 		if (PLACE != "") { for (i = PN[PLACE] + 0; i >= 1 && j < 3; i--) { t += PH[PLACE, i]; j++ } }
@@ -265,7 +294,7 @@ END {
 			if (nreg == 0) { print "No regions measured yet. Run: matchwatch regions measure"; exit }
 			printf "%-16s %-3s %-14s %8s %8s %8s %7s %11s\n", "Region", "", "Area", "Ping ms", "Jitter", "Matches", "Rating", "Match ping"
 			for (i = 1; i <= nreg; i++) { r = ri[i]; c = RG[r, 1]
-				printf "%-16s %-3s %-14s %8s %8s %8s %7s %11s  %s\n", RG[r, 2], RG[r, 3], RG[r, 4], (RG[r, 8] == "-" ? "no reply" : RG[r, 8]), RG[r, 9], (RP_n[c] + 0), (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "-"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "-"), (inside(RG[r, 5], RG[r, 6], RG[r, 3]) == 1 ? "STAYING HERE" : "")
+				printf "%-16s %-3s %-14s %8s %8s %8s %7s %11s  %s\n", RG[r, 2], RG[r, 3], RG[r, 4], (RG[r, 8] == "-" ? "no reply" : RG[r, 8]), RG[r, 9], (RP_n[c] + 0), (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "-"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "-"), (pool_in(RG[r, 5], RG[r, 6], RG[r, 3], RG[r, 8]) == 1 ? "LET IN" : "")
 			}
 			print ""
 			print "Pings are to the host's test server in each datacentre, measured " strftime("%d %b %H:%M", RG[1, 11]) "."
@@ -273,7 +302,7 @@ END {
 		}
 		printf "["
 		for (i = 1; i <= nreg; i++) { r = ri[i]; c = RG[r, 1]
-			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (inside(RG[r, 5], RG[r, 6], RG[r, 3]) == 1 ? "true" : "false")
+			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (pool_in(RG[r, 5], RG[r, 6], RG[r, 3], RG[r, 8]) == 1 ? "true" : "false")
 		}
 		print "]"
 		exit
@@ -349,7 +378,7 @@ END {
 		printf "["
 		for (i = 1; i <= ns; i++) {
 			ip = idx[i]
-			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = inside(S_lat[ip], S_lon[ip], S_cc[ip])) == "" ? "null" : (w ? "true" : "false")), ((ip in S_lat) ? S_lat[ip] + 0 : "null"), ((ip in S_lon) ? S_lon[ip] + 0 : "null")
+			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = pool_in(S_lat[ip], S_lon[ip], S_cc[ip], P24own[p24(ip)])) == "" ? "null" : (w ? "true" : "false")), ((ip in S_lat) ? S_lat[ip] + 0 : "null"), ((ip in S_lon) ? S_lon[ip] + 0 : "null")
 		}
 		print "]"
 		exit
