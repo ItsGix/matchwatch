@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.34.1", reloading = false;
+var BUILT = "0.34.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1532,7 +1532,7 @@ function pageTools() {
 		view.appendChild(tool("Your games", "Everything you have added, named or taken from a share file. These are checked before the built-in list. Removing one puts the port back to how MatchWatch treats it by default.", mine));
 		drawMine();
 		var skBox = h("div");
-		view.appendChild(tool("Skipped, not recorded", "Two kinds of stream are left out of your matches: voice chat, and anything on a port nobody has named that did not look like a game (under two minutes, or no steady update rate). If a game you play is listed here, name it and MatchWatch always records that port from then on.", skBox));
+		view.appendChild(tool("Skipped, not recorded", "Two kinds of stream are left out of your matches: voice chat, and anything on a port nobody has named that did not look like a game (under two minutes, or no steady update rate). One that keeps starting and stopping is left alone for six hours after the second time. If a game you play is listed here, name it and MatchWatch always records that port from then on.", skBox));
 		get("skipped.json", function (sk) {
 			if (page !== "tools") return;
 			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
@@ -1541,7 +1541,7 @@ function pageTools() {
 			sk.forEach(function (x) {
 				var td = h("td");
 				td.appendChild(nameForm(x.port, "This is a game", function (v) { td.textContent = "Now treated as a game: " + v; }));
-				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], [x.why === "short" ? "Under two minutes" : x.why === "unsteady" ? "No steady update rate" : "Voice chat"], td]));
+				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], [x.why === "short" ? "Under two minutes" : x.why === "unsteady" ? "No steady update rate" : x.why === "repeat" ? "Keeps starting and stopping" : "Voice chat"], td]));
 			});
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});

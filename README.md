@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.34.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.34.2 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -261,6 +261,8 @@ Alerts are one short line each, with no addresses in them. The full detail is al
 
 A server turned away because you are staying somewhere else does not alert your phone, unless the lobby alert is set to "Always alert my phone". A game can try several servers in a minute.
 
+Some games measure their ping to every datacentre at once (Call of Duty does it every twenty minutes, to about twenty servers around the world, in a match or out of one). That is the game choosing where to look, not the game heading anywhere. MatchWatch waits three seconds before it announces a server, and four or more different servers in that time count as a ping sweep: one line in the log, and nothing on the Live page or your phone. If you are staying on places, each of those servers is still let in or turned away the moment it is seen.
+
 ## Choosing your servers
 
 The game decides which server you get. MatchWatch cannot request one. What it can do is refuse servers, so the game has to place you elsewhere.
@@ -438,7 +440,7 @@ MatchWatch names a game from the server's port, and ports are shared, so now and
 
 ### Games it does not recognise
 
-A game not on the list is still detected and rated, as "Game on port N", provided it looks like a game: at least two minutes of play and a steady stream of updates. Calls, launchers and other programs use unknown ports too; a stream shorter than that, or with too many updates missing, is not recorded. It is listed under **Skipped, not recorded** on the Tools page, where you can name it if it was a game after all.
+A game not on the list is still detected and rated, as "Game on port N", provided it looks like a game: at least two minutes of play and a steady stream of updates. Calls, launchers and other programs use unknown ports too; a stream shorter than that, or with too many updates missing, is not recorded. It is listed under **Skipped, not recorded** on the Tools page, where you can name it if it was a game after all. A stream on an unknown port that keeps starting and stopping (video and calls often do) is left alone for six hours after the second time, so it stops appearing on the Live page as a match; and match mode does not switch to the playing speeds for an unknown port until the stream has run two minutes at a steady rate.
 
 The first time an unknown game is recorded, a banner appears on the Live and Matches pages with a box to name it, a **Not a game** button, and a cross to hide the notice. With phone alerts set up, your phone is told too.
 

@@ -61,6 +61,7 @@ BEGIN {
 	QUALIFY = 8; ENDIDLE = 10; DROPIDLE = 30; TL = 120; MAXFLOWS = 200
 	HIST = DATA "/sessions.tsv"
 	if (GEOF == "") GEOF = DATA "/geo.cache"
+	STAYF = DATA "/stay"; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
 	while ((getline line < HIST) > 0) {
 		n = split(line, c, "\t")
 		if (n >= 6) { if (c[6] + 0 >= 1024) KPORT[c[6]] = 1; K24[pfx(c[5])] = 1 }
@@ -110,6 +111,7 @@ $2 == "IP" && $4 == ">" {
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
 		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
+		if (quiet(rip, rport)) { skip_note(rip, rport, t); if ((rip ":" rport) in SK_n) SK_why[rip ":" rport] = "repeat"; next }
 		if (NFLOW >= MAXFLOWS) next
 		F_seen[f] = 1; NFLOW++
 		F_lip[f] = lip; F_lport[f] = lport; F_rip[f] = rip; F_rport[f] = rport
@@ -121,6 +123,7 @@ $2 == "IP" && $4 == ">" {
 
 END {
 	if (REPLAY) {
+		lobby_flush(cursec + 100)
 		for (f in F_seen) if (F_active[f]) {
 			window_end(f, "D"); window_end(f, "U")
 			session_end(f, cursec)
@@ -299,16 +302,77 @@ function lobby_check(f,    ip) {
 	if (!isgame(F_rport[f], ip)) return
 	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) {
 		# left alone, but the owner is told if it turns out to be outside the places they stay on
-		if (!((ip in LOB_t) && cursec - LOB_t[ip] < 120)) {
-			LOB_t[ip] = cursec
-			if (!REPLAY) system(SELF " _unseen " ip " " (F_rport[f] + 0) " >/dev/null 2>&1 &"); else print "UNSEEN " ip ":" F_rport[f]
-		}
+		if (!((ip in LOB_t) && cursec - LOB_t[ip] < 120)) { LOB_t[ip] = cursec; lobby_queue(f, "unseen") }
 		return
 	}
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
-	print "LOBBY " ip ":" F_rport[f]
-	if (!REPLAY) system(SELF " _lobby " ip " " F_rport[f] " " F_lip[f] " >/dev/null 2>&1 &")
+	lobby_queue(f, "lobby")
+}
+
+# A game that asks every datacentre for its ping is not heading to any of them. Call of Duty does it
+# every twenty minutes, in a match or out of one: about twenty servers around the world inside two
+# seconds. Each used to be announced as "Heading to ...", measured, and the far ones sent to the phone.
+# So a server waits here for LHOLD seconds first. SWEEPN or more different servers in that time is a
+# sweep: one line in the log, nothing measured, nothing announced. Fewer, and each is announced as before.
+# Staying somewhere cannot wait, sweep or not: a ping that gets no answer is how the game learns to look
+# elsewhere, so that decision is asked for at once ("first") and only the telling waits ("tell").
+function staying(    l, r) {
+	if (STAY_c == cursec) return STAY_is
+	STAY_c = cursec; r = (getline l < STAYF); close(STAYF); STAY_is = (r > 0)
+	return STAY_is
+}
+function lobby_queue(f, kind,    ip) {
+	ip = F_rip[f]
+	if (kind == "lobby" && staying()) {
+		if (!REPLAY) system(SELF " _lobby " ip " " (F_rport[f] + 0) " " F_lip[f] " first >/dev/null 2>&1 &"); else print "FIRST " ip ":" F_rport[f]
+	}
+	if (SW_t > 0 && cursec - SW_t < 10) return          # a straggler from the sweep just counted
+	LQ_n++; LQ_ip[LQ_n] = ip; LQ_port[LQ_n] = F_rport[f] + 0; LQ_lip[LQ_n] = F_lip[f]; LQ_kind[LQ_n] = kind; LQ_t[LQ_n] = cursec
+}
+function lobby_flush(sec,    i, file) {
+	if (LQ_n == 0 || sec - LQ_t[1] < LHOLD) return
+	if (LQ_n >= SWEEPN && sec - LQ_t[LQ_n] < 2 && sec - LQ_t[1] < 10) return          # still arriving
+	if (LQ_n >= SWEEPN) {
+		SW_t = sec
+		print "SWEEP " LQ_n " servers, from " LQ_ip[1] ":" LQ_port[1]
+		if (!REPLAY) {
+			file = RUN "/sweep." int(sec)
+			for (i = 1; i <= LQ_n; i++) print LQ_ip[i] " " LQ_port[i] > file
+			close(file)
+			system(SELF " _sweep " file " >/dev/null 2>&1 &")
+		}
+	} else for (i = 1; i <= LQ_n; i++) {
+		if (LQ_kind[i] == "lobby") {
+			print "LOBBY " LQ_ip[i] ":" LQ_port[i]
+			if (!REPLAY) system(SELF " _lobby " LQ_ip[i] " " LQ_port[i] " " LQ_lip[i] " tell >/dev/null 2>&1 &")
+		} else if (!REPLAY) system(SELF " _unseen " LQ_ip[i] " " LQ_port[i] " >/dev/null 2>&1 &")
+		else print "UNSEEN " LQ_ip[i] ":" LQ_port[i]
+	}
+	LQ_n = 0
+}
+
+# A stream on a port nobody has named that keeps starting and stopping is not a match. Seen on the
+# owner's router: video from a content network in eleven-second bursts, once a minute, each burst a new
+# "match" with its own pings, route trace and line in the log. After two that were too short or not kept,
+# that server and port are left alone for six hours, and listed under Tools as skipped. Naming the port
+# ends it at once.
+function strike(ip, port,    k) {
+	k = ip ":" port
+	if ((k in NK_n) && cursec - NK_t[k] > 21600) NK_n[k] = 0
+	if (!(k in NK_n)) { if (NKN >= 300) { split("", NK_n); split("", NK_t); NKN = 0 } NKN++ }
+	NK_n[k]++; NK_t[k] = cursec
+	if (NK_n[k] == 2) {
+		print "QUIET " k " for six hours"
+		if (!REPLAY) system("logger -t matchwatch 'Leaving the stream on unnamed port " (port + 0) " alone for six hours: it keeps starting and stopping, which a match does not. If it is a game, name it under Tools, Games.'")
+	}
+	return NK_n[k]
+}
+function quiet(ip, port,    k) {
+	k = ip ":" port
+	if (!(k in NK_n) || NK_n[k] < 2) return 0
+	if (cursec - NK_t[k] > 21600) { delete NK_n[k]; delete NK_t[k]; NKN--; return 0 }
+	return kindof(port, ip) == ""
 }
 
 # ---------------------------------------------------------------- clock
@@ -354,6 +418,11 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 		if (dn + up == 0) F_idle[f]++; else F_idle[f] = 0
 
 		if (!F_active[f] && F_good[f] >= QUALIFY) session_start(f, sec)
+		# match mode waits for a stream on an unnamed port to pass the same test that gets it recorded
+		if (F_unn[f] == 1 && F_active[f] && S_win[kd] * WIN >= 120) {
+			F_unn[f] = 2
+			if (S_lost[kd] * 100 < 15 * (S_ticks[kd] + S_lost[kd])) { if (!REPLAY) system(SELF " _mmtight >/dev/null 2>&1 &"); else print "MMTIGHT " F_sid[f] }
+		}
 		F_wsec[f]++
 		if (F_wsec[f] >= WIN) { window_end(f, "D"); window_end(f, "U"); F_wsec[f] = 0 }
 
@@ -361,6 +430,7 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 		else if (!F_active[f] && F_idle[f] >= DROPIDLE) DROP_list[++nd] = f
 	}
 	process_marks(sec)
+	lobby_flush(sec)
 	for (i = 1; i <= ne; i++) { session_end(END_list[i], sec); drop_flow(END_list[i]) }
 	for (i = 1; i <= nd; i++) drop_flow(DROP_list[i])
 }
@@ -383,7 +453,7 @@ function drop_flow(f,    d, k, i, di) {
 	delete M_n[f]
 	for (i = 1; i <= FT_n[f] + 0; i++) { delete FT_d[f, i]; delete FT_u[f, i] }
 	for (i = 1; i <= FTP_n[f] + 0; i++) delete FT_p[f, i]
-	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]
+	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]; delete F_unn[f]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -533,6 +603,7 @@ function session_start(f, sec,    d, k, i, di) {
 	if (sec - QUALIFY - 2 > F_first[f]) F_first[f] = sec - QUALIFY - 2
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
+	F_unn[f] = (NGP > 0 && kindof(F_rport[f], F_rip[f]) == "") ? 1 : 0
 	print "START " F_sid[f] " " F_lip[f] " -> " F_rip[f] ":" F_rport[f]
 	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " " (kindof(F_rport[f], F_rip[f]) == "" ? "unnamed" : "named") " >/dev/null 2>&1 &")
 }
@@ -588,6 +659,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	if (dsec < 20 || S_ticks[kd] + 0 == 0) {
 		print "END " F_sid[f] " " ip " too short to judge (" int(dur) "s)"
 		if (!REPLAY) system("rm -rf " RUN "/probe." F_sid[f])
+		if (NGP > 0 && kindof(F_rport[f], ip) == "") strike(ip, F_rport[f])
 		return
 	}
 
@@ -608,8 +680,9 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		kk = (dsec < 120) ? "short" : "unsteady"
 		print "END " F_sid[f] " " ip " not kept: unnamed port " F_rport[f] ", " kk
 		skip_note(ip, F_rport[f], sec); SK_n[ip ":" F_rport[f]] += 300; SK_why[ip ":" F_rport[f]] = kk
-		if (!REPLAY) {
-			system("rm -rf " RUN "/probe." F_sid[f])
+		if (!REPLAY) system("rm -rf " RUN "/probe." F_sid[f])
+		# said once for a server and port; the second time it is left alone, which has a line of its own
+		if (strike(ip, F_rport[f]) == 1 && !REPLAY) {
 			system("logger -t matchwatch 'Not recorded: a stream on unnamed port " (F_rport[f] + 0) " (" (kk == "short" ? "under two minutes" : "no steady update rate") "). If it was a game, add it under Tools, Games.'")
 		}
 		return

@@ -44,6 +44,18 @@ elif sc=="fps":
 elif sc=="handshake":
     stream(out,False,2,3); stream(out,True,2,3)
     stream(out,False,21,200,start=32.6,jit=0.001); stream(out,True,89,200,start=32.6,jit=0.003)
+elif sc=="sweep":
+    # a game measuring its ping to twenty datacentres inside a second and a half, then, half a minute later,
+    # reaching for the one server it will play on. Run with -v GAMES=files/games.list -v GEOF=test/geo_sweep.tsv
+    for i in range(20):
+        s=f"198.51.100.{10+i}"; p=30002+i*610
+        for j in range(4):
+            out.append(line(T0+5+i*0.06+j*0.3,PC,3074,s,p,48)); out.append(line(T0+5.02+i*0.06+j*0.3,s,p,PC,3074,48))
+    stream(out,False,10,20,start=40,srv="198.51.100.200",sport=44998); stream(out,True,10,20,start=40,srv="198.51.100.200",sport=44998)
+elif sc=="bursts":
+    # video from a content network on a port nobody has named: eleven seconds every minute, five times over
+    for b in range(5):
+        stream(out,False,400,11,start=5+b*60,srv="203.0.113.77",sport=19298,lport=54268); stream(out,True,20,11,start=5+b*60,srv="203.0.113.77",sport=19298,lport=54268)
 elif sc=="short":
     stream(out,False,60,22); stream(out,True,60,22)
 out.sort()

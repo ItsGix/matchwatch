@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.34.1"
+VERSION="0.34.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -337,7 +337,9 @@ cmd_probe_start() {
 	local sid="$1" rip="$2" lip="$3" near last hops reached
 	is_ipv4 "$rip" || return 1
 	PD="$RUN/probe.$sid"; mkdir -p "$PD"
-	[ "$MATCH_MODE" = 1 ] && mm_set tight
+	# a stream on a port nobody has named may well not be a game: the engine asks for the limits itself
+	# (_mmtight) once it has run two minutes at a steady rate, the same test that gets it recorded
+	[ "$MATCH_MODE" = 1 ] && [ "$5" != unnamed ] && mm_set tight
 	echo server > "$PD/far.kind"; echo "$rip" > "$PD/far.ip"
 	echo "$rip $4" > "$PD/server"
 	start_ping far "$rip"
@@ -605,29 +607,38 @@ cmd_block_dc() { # number [days]
 
 # ---- lobby: where is the game about to put me?
 jesc() { printf '%s' "$1" | tr -d '\n\r\t' | sed 's/["\\]/ /g'; }
-cmd_lobby() { # server-ip port device-ip
-	local ip="$1" port="$2" g cc country city lat lon isp org asn key r i s="" ping="" k v
+# The engine asks in two steps since 0.34.2. "first", the moment a server is seen and only while staying
+# somewhere: decide whether it is let in, say so if it is turned away, and nothing else. "tell", three
+# seconds later and only if the game was not simply measuring its ping to every datacentre at once:
+# measure it and say where the game is heading. With neither word it does both, as it always did.
+cmd_lobby() { # server-ip port device-ip [first|tell]
+	local ip="$1" port="$2" g cc country city lat lon isp org asn key r i s="" ping="" k v mode="$4"
 	local srv_n=0 srv_rating="" dc_name="" dc_ping="" best_key="" best_name="" best_ping="" verdict=good msg loc blocked=false
 	local where short want=0 now last
 	is_ipv4 "$ip" || return 1
 	mkdir -p "$RUN/www"
 	# a game server is being reached for: have QoSmate's limits on before the match itself starts
-	[ "$MATCH_MODE" = 1 ] && mm_set tight
+	[ "$MATCH_MODE" = 1 ] && [ "$mode" != first ] && mm_set tight
 	if [ -s "$DATA/stay" ] && ! is_allowed "$ip" && in_away "$ip"; then
-		printf '{"ts":%s,"ip":"%s","port":%s,"loc":"","org":"","ping":null,"verdict":"good","blocked":true,"msg":"A server in a region outside the places you stay on. Its whole range is turned away, so the game should move on quickly."}\n' "$(date +%s)" "$ip" "${port:-0}" > "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
+		[ "$mode" = tell ] && return 0
+		printf '{"ts":%s,"ip":"%s","port":%s,"loc":"","org":"","ping":null,"verdict":"good","blocked":true,"msg":"A server in a region outside the places you stay on. Its whole range is turned away, so the game should move on quickly."}\n' "$(date +%s)" "$ip" "${port:-0}" > "$RUN/www/lobby.json.$$" && mv -f "$RUN/www/lobby.json.$$" "$RUN/www/lobby.json"
 		return 0
 	fi
+	# turned away a moment ago by the first step: that has been said
+	[ "$mode" = tell ] && nft get element inet matchwatch blocked "{ $ip }" >/dev/null 2>&1 && return 0
 	g="$(geo_lookup "$ip")"
 	IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
 $g
 EOF
 	key="$asn|$city|$cc"
-	tried_note "$ip" "${port:-0}" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
 	# Staying somewhere? Decide first. Every second spent measuring is a second the game spends joining
 	# this server, and turning it away late throws the player out of a lobby they had already reached.
-	if [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && ! is_allowed "$ip"; then
+	if [ "$mode" != tell ] && [ -s "$DATA/stay" ] && [ "$STAY_STRICT" = 1 ] && [ -n "$lat" ] && [ -n "$lon" ] && [ -n "$cc" ] && ! is_allowed "$ip"; then
 		if outside_stay "$lat" "$lon" "$cc"; then MW_QUIET=1 cmd_block "${ip%.*}.0/24" 0 stay && blocked=true; fi
 	fi
+	# let in by the first step: the second step, or the note of a ping sweep, records and tells
+	[ "$mode" = first ] && [ "$blocked" != true ] && return 0
+	tried_note "$ip" "${port:-0}" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
 	if [ "$blocked" != true ]; then
 		for i in 1 2 3; do
 			r="$(ping -c 1 -W 1 "$ip" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p')"
@@ -677,7 +688,7 @@ EOF
 		short="Turned away a server in $where."
 	fi
 	printf '{"ts":%s,"ip":"%s","port":%s,"loc":"%s","org":"%s","ping":%s,"verdict":"%s","blocked":%s,"msg":"%s"}\n' \
-		"$(date +%s)" "$ip" "${port:-0}" "$(jesc "$loc")" "$(jesc "$org")" "${ping:-null}" "$verdict" "$blocked" "$(jesc "$msg")" > "$RUN/www/lobby.json.tmp" && mv -f "$RUN/www/lobby.json.tmp" "$RUN/www/lobby.json"
+		"$(date +%s)" "$ip" "${port:-0}" "$(jesc "$loc")" "$(jesc "$org")" "${ping:-null}" "$verdict" "$blocked" "$(jesc "$msg")" > "$RUN/www/lobby.json.$$" && mv -f "$RUN/www/lobby.json.$$" "$RUN/www/lobby.json"
 	logger -t matchwatch "$msg" 2>/dev/null
 	# The phone: only a far or poor server, unless "always" is chosen. A server turned away is the router
 	# doing what it was asked, and a game may try five in a minute, so that is not worth a buzz each time.
@@ -686,6 +697,29 @@ EOF
 	now="$(date +%s)"; last="$(cat "$RUN/lobby.alert" 2>/dev/null)"
 	[ "$want" = 1 ] && [ -n "$last" ] && [ $((now - last)) -lt 60 ] && want=0     # and never more than one a minute
 	if [ "$want" = 1 ] && [ -n "$NTFY_URL" ]; then echo "$now" > "$RUN/lobby.alert"; fetch "$NTFY_URL" "$short" >/dev/null; fi
+	return 0
+}
+# A game measured its ping to many servers at once (the engine counted four or more inside three seconds).
+# That is the game choosing where to look, not the game heading anywhere: nothing is measured, nothing
+# reaches the Live page or the phone. The servers are still noted, one after another, as places this game has.
+cmd_sweep() { # file of "ip port" lines, written by the engine
+	local f="$1" ip port g cc country city lat lon isp org asn n=0 name=""
+	case "$f" in "$RUN"/sweep.*) ;; *) return 1 ;; esac
+	[ -f "$f" ] || return 0
+	while read -r ip port; do
+		is_ipv4 "$ip" || continue
+		case "$port" in ""|*[!0-9]*) continue ;; esac
+		n=$((n + 1))
+		[ "$n" -le 60 ] || continue
+		g="$(geo_lookup "$ip")"
+		IFS="$TAB" read -r cc country city lat lon isp org asn <<EOF
+$g
+EOF
+		[ -n "$name" ] || name="$(label_kind "$port" "$isp $org $asn" name)"
+		tried_note "$ip" "$port" "$cc" "$city" "$org" "$asn" "$lat" "$lon"
+	done < "$f"
+	rm -f "$f"
+	logger -t matchwatch "${name:-A game} measured its ping to $n servers at once. That is the game choosing where to look, not a match, so nothing is announced." 2>/dev/null
 	return 0
 }
 
@@ -910,14 +944,17 @@ cmd_ranges() { # (nothing) = what is known | refresh
 # ---- where each game plays. Matches already say where you played; this adds the servers a game
 # reached for without your playing on them. One line per server network and port, updated in place.
 tried_note() { # ip port cc city org asn lat lon
-	local f="$DATA/tried"
+	local f="$DATA/tried" i=0
 	[ -n "$3" ] || return 0
 	touch "$f"
+	# one writer at a time: a game trying several servers at once had these overwriting each other
+	while ! mkdir "$f.lock" 2>/dev/null; do i=$((i + 1)); [ "$i" -gt 4 ] && break; sleep 1; done
 	awk -F'\t' -v OFS='\t' -v p="${1%.*}" -v port="$2" -v cc="$3" -v city="$4" -v org="$5" -v asn="$6" -v lat="$7" -v lon="$8" -v now="$(date +%s)" '
 		$1 == p && $2 == port { $9 = $9 + 1; $10 = now; hit = 1 }
 		{ L[++n] = $0 }
 		END { if (!hit) L[++n] = p OFS port OFS city OFS cc OFS org OFS asn OFS (lat == "" ? "-" : lat) OFS (lon == "" ? "-" : lon) OFS 1 OFS now
-			for (i = (n > 2000 ? n - 1999 : 1); i <= n; i++) print L[i] }' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+			for (i = (n > 2000 ? n - 1999 : 1); i <= n; i++) print L[i] }' "$f" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
+	rm -f "$f.tmp.$$"; rmdir "$f.lock" 2>/dev/null
 }
 gameplaces() { # share | json
 	touch "$DATA/sessions.tsv"
@@ -1785,11 +1822,20 @@ mm_same() { # tight | loose | own : are the queues really at those speeds now?
 	return 0
 }
 mm_check() { # once a minute from the service: put the speeds back to what they should be if something has moved them
-	local st a
+	local st a h
 	[ "$MATCH_MODE" = 1 ] || return 0
 	st="$(cat "$RUN/mm.state" 2>/dev/null)"
 	case "$st" in tight|loose) ;; *) return 0 ;; esac
 	mm_ok || return 0
+	# The limits were asked for and no match followed: a server the game reached for and never played on,
+	# or a stream too short to be one. Nothing ends, so nothing else would ever lift them. Seen on the
+	# owner's router: limits still on an hour after the last match.
+	if [ "$st" = tight ] && mm_idle; then
+		a="$(cat "$RUN/mm.stamp" 2>/dev/null)"; a="${a%%.*}"
+		case "$a" in ""|*[!0-9]*) a=0 ;; esac
+		h="$MM_HOLD"; [ "$h" -ge 120 ] 2>/dev/null || h=120
+		if [ $(( $(date +%s) - a )) -ge "$h" ]; then mm_set loose; return 0; fi
+	fi
 	mm_same "$st" && return 0
 	# between matches with nothing being played, or during one: either way the state is right and the queues are not
 	if [ "$st" = loose ] && ! mm_idle; then st=tight; fi
@@ -2693,7 +2739,9 @@ case "$1" in
 	device) cmd_device "$2" ;;
 	regions) cmd_regions "$2" ;;
 	places) awk -F'|' '/^area/ { printf "%-18s %-18s %s\n", $2, $3, $4 }' "$LIB/places.list"; echo; echo "Also any country by name or two-letter code, and any city by name." ;;
-	_lobby) cmd_lobby "$2" "$3" "$4" ;;
+	_lobby) cmd_lobby "$2" "$3" "$4" "$5" ;;
+	_sweep) cmd_sweep "$2" ;;
+	_mmtight) [ "$MATCH_MODE" = 1 ] && mm_set tight ;;
 	_action) shift; cmd_action "$@" ;;
 	_migrate) cmd_migrate ;;
 	mark) cmd_mark ;;
@@ -2796,6 +2844,7 @@ BEGIN {
 	QUALIFY = 8; ENDIDLE = 10; DROPIDLE = 30; TL = 120; MAXFLOWS = 200
 	HIST = DATA "/sessions.tsv"
 	if (GEOF == "") GEOF = DATA "/geo.cache"
+	STAYF = DATA "/stay"; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
 	while ((getline line < HIST) > 0) {
 		n = split(line, c, "\t")
 		if (n >= 6) { if (c[6] + 0 >= 1024) KPORT[c[6]] = 1; K24[pfx(c[5])] = 1 }
@@ -2845,6 +2894,7 @@ $2 == "IP" && $4 == ">" {
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
 		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
+		if (quiet(rip, rport)) { skip_note(rip, rport, t); if ((rip ":" rport) in SK_n) SK_why[rip ":" rport] = "repeat"; next }
 		if (NFLOW >= MAXFLOWS) next
 		F_seen[f] = 1; NFLOW++
 		F_lip[f] = lip; F_lport[f] = lport; F_rip[f] = rip; F_rport[f] = rport
@@ -2856,6 +2906,7 @@ $2 == "IP" && $4 == ">" {
 
 END {
 	if (REPLAY) {
+		lobby_flush(cursec + 100)
 		for (f in F_seen) if (F_active[f]) {
 			window_end(f, "D"); window_end(f, "U")
 			session_end(f, cursec)
@@ -3034,16 +3085,77 @@ function lobby_check(f,    ip) {
 	if (!isgame(F_rport[f], ip)) return
 	if (!hostgame(F_rport[f], ip) && !((F_rport[f] in KPORT) || (pfx(ip) in K24))) {
 		# left alone, but the owner is told if it turns out to be outside the places they stay on
-		if (!((ip in LOB_t) && cursec - LOB_t[ip] < 120)) {
-			LOB_t[ip] = cursec
-			if (!REPLAY) system(SELF " _unseen " ip " " (F_rport[f] + 0) " >/dev/null 2>&1 &"); else print "UNSEEN " ip ":" F_rport[f]
-		}
+		if (!((ip in LOB_t) && cursec - LOB_t[ip] < 120)) { LOB_t[ip] = cursec; lobby_queue(f, "unseen") }
 		return
 	}
 	if ((ip in LOB_t) && cursec - LOB_t[ip] < 120) return
 	LOB_t[ip] = cursec
-	print "LOBBY " ip ":" F_rport[f]
-	if (!REPLAY) system(SELF " _lobby " ip " " F_rport[f] " " F_lip[f] " >/dev/null 2>&1 &")
+	lobby_queue(f, "lobby")
+}
+
+# A game that asks every datacentre for its ping is not heading to any of them. Call of Duty does it
+# every twenty minutes, in a match or out of one: about twenty servers around the world inside two
+# seconds. Each used to be announced as "Heading to ...", measured, and the far ones sent to the phone.
+# So a server waits here for LHOLD seconds first. SWEEPN or more different servers in that time is a
+# sweep: one line in the log, nothing measured, nothing announced. Fewer, and each is announced as before.
+# Staying somewhere cannot wait, sweep or not: a ping that gets no answer is how the game learns to look
+# elsewhere, so that decision is asked for at once ("first") and only the telling waits ("tell").
+function staying(    l, r) {
+	if (STAY_c == cursec) return STAY_is
+	STAY_c = cursec; r = (getline l < STAYF); close(STAYF); STAY_is = (r > 0)
+	return STAY_is
+}
+function lobby_queue(f, kind,    ip) {
+	ip = F_rip[f]
+	if (kind == "lobby" && staying()) {
+		if (!REPLAY) system(SELF " _lobby " ip " " (F_rport[f] + 0) " " F_lip[f] " first >/dev/null 2>&1 &"); else print "FIRST " ip ":" F_rport[f]
+	}
+	if (SW_t > 0 && cursec - SW_t < 10) return          # a straggler from the sweep just counted
+	LQ_n++; LQ_ip[LQ_n] = ip; LQ_port[LQ_n] = F_rport[f] + 0; LQ_lip[LQ_n] = F_lip[f]; LQ_kind[LQ_n] = kind; LQ_t[LQ_n] = cursec
+}
+function lobby_flush(sec,    i, file) {
+	if (LQ_n == 0 || sec - LQ_t[1] < LHOLD) return
+	if (LQ_n >= SWEEPN && sec - LQ_t[LQ_n] < 2 && sec - LQ_t[1] < 10) return          # still arriving
+	if (LQ_n >= SWEEPN) {
+		SW_t = sec
+		print "SWEEP " LQ_n " servers, from " LQ_ip[1] ":" LQ_port[1]
+		if (!REPLAY) {
+			file = RUN "/sweep." int(sec)
+			for (i = 1; i <= LQ_n; i++) print LQ_ip[i] " " LQ_port[i] > file
+			close(file)
+			system(SELF " _sweep " file " >/dev/null 2>&1 &")
+		}
+	} else for (i = 1; i <= LQ_n; i++) {
+		if (LQ_kind[i] == "lobby") {
+			print "LOBBY " LQ_ip[i] ":" LQ_port[i]
+			if (!REPLAY) system(SELF " _lobby " LQ_ip[i] " " LQ_port[i] " " LQ_lip[i] " tell >/dev/null 2>&1 &")
+		} else if (!REPLAY) system(SELF " _unseen " LQ_ip[i] " " LQ_port[i] " >/dev/null 2>&1 &")
+		else print "UNSEEN " LQ_ip[i] ":" LQ_port[i]
+	}
+	LQ_n = 0
+}
+
+# A stream on a port nobody has named that keeps starting and stopping is not a match. Seen on the
+# owner's router: video from a content network in eleven-second bursts, once a minute, each burst a new
+# "match" with its own pings, route trace and line in the log. After two that were too short or not kept,
+# that server and port are left alone for six hours, and listed under Tools as skipped. Naming the port
+# ends it at once.
+function strike(ip, port,    k) {
+	k = ip ":" port
+	if ((k in NK_n) && cursec - NK_t[k] > 21600) NK_n[k] = 0
+	if (!(k in NK_n)) { if (NKN >= 300) { split("", NK_n); split("", NK_t); NKN = 0 } NKN++ }
+	NK_n[k]++; NK_t[k] = cursec
+	if (NK_n[k] == 2) {
+		print "QUIET " k " for six hours"
+		if (!REPLAY) system("logger -t matchwatch 'Leaving the stream on unnamed port " (port + 0) " alone for six hours: it keeps starting and stopping, which a match does not. If it is a game, name it under Tools, Games.'")
+	}
+	return NK_n[k]
+}
+function quiet(ip, port,    k) {
+	k = ip ":" port
+	if (!(k in NK_n) || NK_n[k] < 2) return 0
+	if (cursec - NK_t[k] > 21600) { delete NK_n[k]; delete NK_t[k]; NKN--; return 0 }
+	return kindof(port, ip) == ""
 }
 
 # ---------------------------------------------------------------- clock
@@ -3089,6 +3201,11 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 		if (dn + up == 0) F_idle[f]++; else F_idle[f] = 0
 
 		if (!F_active[f] && F_good[f] >= QUALIFY) session_start(f, sec)
+		# match mode waits for a stream on an unnamed port to pass the same test that gets it recorded
+		if (F_unn[f] == 1 && F_active[f] && S_win[kd] * WIN >= 120) {
+			F_unn[f] = 2
+			if (S_lost[kd] * 100 < 15 * (S_ticks[kd] + S_lost[kd])) { if (!REPLAY) system(SELF " _mmtight >/dev/null 2>&1 &"); else print "MMTIGHT " F_sid[f] }
+		}
 		F_wsec[f]++
 		if (F_wsec[f] >= WIN) { window_end(f, "D"); window_end(f, "U"); F_wsec[f] = 0 }
 
@@ -3096,6 +3213,7 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 		else if (!F_active[f] && F_idle[f] >= DROPIDLE) DROP_list[++nd] = f
 	}
 	process_marks(sec)
+	lobby_flush(sec)
 	for (i = 1; i <= ne; i++) { session_end(END_list[i], sec); drop_flow(END_list[i]) }
 	for (i = 1; i <= nd; i++) drop_flow(DROP_list[i])
 }
@@ -3118,7 +3236,7 @@ function drop_flow(f,    d, k, i, di) {
 	delete M_n[f]
 	for (i = 1; i <= FT_n[f] + 0; i++) { delete FT_d[f, i]; delete FT_u[f, i] }
 	for (i = 1; i <= FTP_n[f] + 0; i++) delete FT_p[f, i]
-	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]
+	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]; delete F_unn[f]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -3268,6 +3386,7 @@ function session_start(f, sec,    d, k, i, di) {
 	if (sec - QUALIFY - 2 > F_first[f]) F_first[f] = sec - QUALIFY - 2
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
+	F_unn[f] = (NGP > 0 && kindof(F_rport[f], F_rip[f]) == "") ? 1 : 0
 	print "START " F_sid[f] " " F_lip[f] " -> " F_rip[f] ":" F_rport[f]
 	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " " (kindof(F_rport[f], F_rip[f]) == "" ? "unnamed" : "named") " >/dev/null 2>&1 &")
 }
@@ -3323,6 +3442,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	if (dsec < 20 || S_ticks[kd] + 0 == 0) {
 		print "END " F_sid[f] " " ip " too short to judge (" int(dur) "s)"
 		if (!REPLAY) system("rm -rf " RUN "/probe." F_sid[f])
+		if (NGP > 0 && kindof(F_rport[f], ip) == "") strike(ip, F_rport[f])
 		return
 	}
 
@@ -3343,8 +3463,9 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		kk = (dsec < 120) ? "short" : "unsteady"
 		print "END " F_sid[f] " " ip " not kept: unnamed port " F_rport[f] ", " kk
 		skip_note(ip, F_rport[f], sec); SK_n[ip ":" F_rport[f]] += 300; SK_why[ip ":" F_rport[f]] = kk
-		if (!REPLAY) {
-			system("rm -rf " RUN "/probe." F_sid[f])
+		if (!REPLAY) system("rm -rf " RUN "/probe." F_sid[f])
+		# said once for a server and port; the second time it is left alone, which has a line of its own
+		if (strike(ip, F_rport[f]) == 1 && !REPLAY) {
 			system("logger -t matchwatch 'Not recorded: a stream on unnamed port " (F_rport[f] + 0) " (" (kk == "short" ? "under two minutes" : "no steady update rate") "). If it was a game, add it under Tools, Games.'")
 		}
 		return
@@ -4515,7 +4636,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.34.1", reloading = false;
+var BUILT = "0.34.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6019,7 +6140,7 @@ function pageTools() {
 		view.appendChild(tool("Your games", "Everything you have added, named or taken from a share file. These are checked before the built-in list. Removing one puts the port back to how MatchWatch treats it by default.", mine));
 		drawMine();
 		var skBox = h("div");
-		view.appendChild(tool("Skipped, not recorded", "Two kinds of stream are left out of your matches: voice chat, and anything on a port nobody has named that did not look like a game (under two minutes, or no steady update rate). If a game you play is listed here, name it and MatchWatch always records that port from then on.", skBox));
+		view.appendChild(tool("Skipped, not recorded", "Two kinds of stream are left out of your matches: voice chat, and anything on a port nobody has named that did not look like a game (under two minutes, or no steady update rate). One that keeps starting and stopping is left alone for six hours after the second time. If a game you play is listed here, name it and MatchWatch always records that port from then on.", skBox));
 		get("skipped.json", function (sk) {
 			if (page !== "tools") return;
 			sk = (sk || []).slice().sort(function (a, b) { return b.last - a.last; });
@@ -6028,7 +6149,7 @@ function pageTools() {
 			sk.forEach(function (x) {
 				var td = h("td");
 				td.appendChild(nameForm(x.port, "This is a game", function (v) { td.textContent = "Now treated as a game: " + v; }));
-				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], [x.why === "short" ? "Under two minutes" : x.why === "unsteady" ? "No steady update rate" : "Voice chat"], td]));
+				t.lastChild.appendChild(row([[x.ip], [String(x.port), "num"], [when(x.last)], [x.why === "short" ? "Under two minutes" : x.why === "unsteady" ? "No steady update rate" : x.why === "repeat" ? "Keeps starting and stopping" : "Voice chat"], td]));
 			});
 			skBox.appendChild(h("div", { cls: "tablewrap" }, t));
 		});
