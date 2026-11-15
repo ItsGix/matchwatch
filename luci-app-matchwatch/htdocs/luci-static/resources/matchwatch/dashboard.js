@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.35.0", reloading = false;
+var BUILT = "0.35.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -321,9 +321,32 @@ function pingSection() {
 	if (pr.lo) lo.value = pr.lo; if (pr.hi) hi.value = pr.hi;
 	var out = h("p", { cls: "note pingsay" }), set = h("button", { type: "button", cls: "solid", text: pr.on ? "Change the range" : "Set the range" });
 	function vals() { return { a: Math.max(0, parseInt(lo.value, 10) || 0), b: Math.max(0, parseInt(hi.value, 10) || 0) }; }
+	// One track with a handle for each end. Every measured datacentre is a mark at its ping, lit when the
+	// range lets it in, so the gaps between groups of datacentres show: an edge is safest in a gap. The
+	// lowest handle fully left is "no lowest", the highest fully right is "no highest". Two ordinary sliders
+	// laid over each other, so the keyboard and touch work as they do for any slider.
+	var TOP = 200, meas = (D.regions || []).filter(function (r) { return r.ping != null; }), ticks = [];
+	var sLo = h("input", { type: "range", min: "0", max: String(TOP), step: "1", "aria-label": "Lowest ping to let in, in ms. Fully left for no lowest." });
+	var sHi = h("input", { type: "range", min: "0", max: String(TOP), step: "1", "aria-label": "Highest ping to let in, in ms. Fully right for no highest." });
+	var fill = h("div", { cls: "fill" }), marks = h("div", { cls: "marks" }, fill);
+	meas.forEach(function (r) {
+		var t = h("i", { cls: "tick", title: r.city + ", " + Math.round(r.ping) + " ms" });
+		t.style.left = Math.min(100, r.ping / TOP * 100) + "%"; marks.appendChild(t); ticks.push([t, r.ping]);
+	});
+	function paint() {
+		var v = vals(), a = Math.min(v.a, TOP), b = v.b ? Math.min(v.b, TOP) : TOP, bad = v.a && v.b && v.a >= v.b;
+		fill.style.left = a / TOP * 100 + "%"; fill.style.width = (bad ? 0 : Math.max(0, b - a) / TOP * 100) + "%";
+		ticks.forEach(function (t) { t[0].className = "tick" + (bad || pingOut(t[1], v.a, v.b) ? "" : " in"); });
+		// with the handles together, the one that still has room to move is the one on top
+		sLo.style.zIndex = a > TOP / 2 ? "3" : "2"; sHi.style.zIndex = a > TOP / 2 ? "2" : "3";
+	}
+	function toSliders() { var v = vals(); sLo.value = Math.min(v.a, TOP); sHi.value = v.b ? Math.min(v.b, TOP) : TOP; }
+	sLo.addEventListener("input", function () { var x = +sLo.value, lim = +sHi.value - 1; if (x > lim) { x = Math.max(0, lim); sLo.value = x; } lo.value = x > 0 ? x : ""; preview(); });
+	sHi.addEventListener("input", function () { var x = +sHi.value, lim = +sLo.value + 1; if (x < lim) { x = Math.min(TOP, lim); sHi.value = x; } hi.value = x >= TOP ? "" : x; preview(); });
 	// say what the numbers typed would let in, before anything is changed
 	function preview() {
-		var v = vals(), rg = (D.regions || []).filter(function (r) { return r.ping != null; });
+		var v = vals(), rg = meas;
+		paint();
 		set.disabled = (!v.a && !v.b) || (v.a && v.b && v.a >= v.b) || (v.a === pr.lo && v.b === pr.hi);
 		if (!v.a && !v.b) { out.textContent = pr.on ? "Type new numbers to change the range, or remove it." : "Type a lowest ping, a highest ping, or both."; return; }
 		if (v.a && v.b && v.a >= v.b) { out.textContent = "The lowest has to be under the highest."; return; }
@@ -333,17 +356,22 @@ function pingSection() {
 			? ": " + inn.slice(0, 8).map(function (r) { return r.city + " (" + Math.round(r.ping) + ")"; }).join(", ") + (inn.length > 8 ? " and " + (inn.length - 8) + " more" : "") + "."
 			: ". Games hosted in them would not find a match, so widen it.");
 	}
-	lo.addEventListener("input", preview); hi.addEventListener("input", preview);
+	lo.addEventListener("input", function () { toSliders(); preview(); }); hi.addEventListener("input", function () { toSliders(); preview(); });
 	set.addEventListener("click", function () {
 		var v = vals(); set.disabled = true; set.textContent = "Working...";
 		api("pingrange", v.a + "/" + v.b).then(function (j) { toast(j.out || j.error || "That did not work.", !j.ok); refresh(true); });
 	});
 	var go = function (e) { if (e.key === "Enter" && !set.disabled) set.click(); };
 	lo.addEventListener("keydown", go); hi.addEventListener("keydown", go);
+	box.appendChild(h("div", { cls: "pingtrack" }, h("div", { cls: "rail" }), marks, sLo, sHi));
+	// the numbers under the line sit where a handle would be at that ping
+	var scale = h("div", { cls: "pingscale", "aria-hidden": "true" });
+	[0, 50, 100, 150, TOP].forEach(function (n) { var sp = h("span", { cls: n === TOP ? "end" : "", text: n === TOP ? TOP + "+ ms" : String(n) }); sp.style.left = n / TOP * 100 + "%"; scale.appendChild(sp); });
+	box.appendChild(scale);
 	box.appendChild(h("div", { cls: "stayform pingform" }, h("label", null, h("span", "Lowest ms"), lo), h("label", null, h("span", "Highest ms"), hi), set, pr.on ? act("Remove the range", "pingoff", null, {}) : null));
 	box.appendChild(out);
-	box.appendChild(brief("Only game servers whose ping is inside this range are let in, and the rest are turned away like servers outside your places. Leave a box empty for no limit on that side: a highest alone keeps you on near servers, a lowest alone keeps you off them. A server is judged by a ping MatchWatch already has: the lowest of your own matches on it, or else the nearest measured datacentre within 250 km (the table under Regions and games). One whose ping is not known is let in, because measuring it as the game connects would let it connect first. If you also stay on places, a server has to pass both. Single servers you add to the pool are always let in; a favourite is not, unless you add it."));
-	preview();
+	box.appendChild(brief("Only game servers whose ping is inside this range are let in, and the rest are turned away like servers outside your places. Each mark on the line is a datacentre MatchWatch has measured, at its ping; put the ends of the range in the gaps between groups of marks, not on one. Leave a box empty, or pull a handle to its end of the line, for no limit on that side: a highest alone keeps you on near servers, a lowest alone keeps you off them. A server is judged by a ping MatchWatch already has: the lowest of your own matches on it, or else the nearest measured datacentre within 250 km (the table under Regions and games). One whose ping is not known is let in, because measuring it as the game connects would let it connect first. If you also stay on places, a server has to pass both. Single servers you add to the pool are always let in; a favourite is not, unless you add it."));
+	toSliders(); preview();
 	return box;
 }
 // One server let through the places being stayed on. Offered while staying; shown as a tag once it is in.

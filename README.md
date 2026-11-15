@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.35.0 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.35.1 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -64,7 +64,7 @@ It works from packet timing only. Game traffic is never decoded, changed, delaye
 - Makes share files you choose the contents of, item by item. Nothing is ever uploaded.
 - Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
 
-| The ping range: a lowest and a highest, and what they would let in |
+| The ping range: two handles, your datacentres marked on the line, and what the range would let in |
 | --- |
 | ![Ping range](docs/pingrange.png) |
 
@@ -346,7 +346,7 @@ From the command line: `matchwatch allow`, `matchwatch allow add <ip>`, `matchwa
 
 ### The ping range
 
-On Servers, Where I play, under **Ping range**, type a lowest ping, a highest ping, or both, in ms. Only game servers whose ping is inside the range are let in; the rest are turned away with the same machinery as servers outside your places. As you type, the page says which of the measured datacentres the numbers would let in, before anything changes.
+On Servers, Where I play, under **Ping range**, drag the two handles on the line, or type a lowest ping, a highest ping, or both, in ms. Each mark on the line is a datacentre MatchWatch has measured, at its ping, lit when the range lets it in. Datacentres come in groups, and the safest place for an end of the range is in a gap between groups rather than on a mark, where a ping that moves by a millisecond would move the datacentre in or out. A handle pulled to its end of the line means no limit on that side; the line runs to 200 ms, and anything higher is typed. Only game servers whose ping is inside the range are let in; the rest are turned away with the same machinery as servers outside your places. As you type, the page says which of the measured datacentres the numbers would let in, before anything changes.
 
 - **A highest alone** ("40 or less") keeps you on near servers. **A lowest alone** ("60 or more") keeps you off them. **Both** make a band.
 - **With places as well**, a server has to pass both: inside one of your places and inside the range. Without places the range works alone.

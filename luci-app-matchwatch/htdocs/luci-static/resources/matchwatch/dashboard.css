@@ -70,6 +70,25 @@ td .stayform { max-width: 420px; }
 .pingform label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); flex: 0 1 130px; }
 .pingform label input { min-width: 0; width: 100%; flex: none; }
 .pingsay { min-height: 1.4em; margin-top: 10px; }
+/* the ping range: two sliders laid over one line. Only their handles take the pointer; the line, the lit part and the datacentre marks are drawn underneath, inset by half a handle so a mark sits where the handle's centre would. */
+.pingtrack { position: relative; height: 36px; max-width: 640px; margin: 4px 0 0; }
+.pingtrack .rail, .pingtrack .marks { position: absolute; left: 10px; right: 10px; }
+.pingtrack .rail { top: 15px; height: 6px; border-radius: 3px; background: var(--soft); }
+.pingtrack .marks { top: 0; bottom: 0; }
+.pingtrack .fill { position: absolute; top: 15px; height: 6px; border-radius: 3px; background: var(--pen); opacity: 0.4; }
+.pingtrack .tick { position: absolute; top: 8px; width: 2px; height: 20px; margin-left: -1px; border-radius: 1px; background: var(--muted); opacity: 0.4; }
+.pingtrack .tick.in { background: var(--ok); opacity: 1; }
+.pingtrack input[type="range"] { position: absolute; left: 0; top: 0; width: 100%; height: 36px; min-width: 0; margin: 0; padding: 0; border: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+.pingtrack input[type="range"]::-webkit-slider-runnable-track { -webkit-appearance: none; height: 36px; background: none; border: 0; }
+.pingtrack input[type="range"]::-moz-range-track { height: 36px; background: none; border: 0; }
+.pingtrack input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; pointer-events: auto; width: 20px; height: 20px; margin-top: 8px; border-radius: 50%; background: var(--ink); border: 3px solid var(--paper); box-shadow: 0 0 0 1px var(--ink); cursor: grab; }
+.pingtrack input[type="range"]::-moz-range-thumb { box-sizing: border-box; pointer-events: auto; width: 20px; height: 20px; border-radius: 50%; background: var(--ink); border: 3px solid var(--paper); box-shadow: 0 0 0 1px var(--ink); cursor: grab; }
+.pingtrack input[type="range"]:focus-visible { outline: none; }
+.pingtrack input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--pen); }
+.pingtrack input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--pen); }
+.pingscale { position: relative; height: 1.3em; max-width: 620px; margin: 0 10px 14px; font-size: 0.78rem; color: var(--muted); }
+.pingscale span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.pingscale span.end { transform: translateX(-100%); margin-left: 10px; }
 td .stayform input { min-width: 140px; }
 
 /* ---- chart */
@@ -275,3 +294,14 @@ button.linkbtn:hover { color: var(--pen); background: none; }
 button.linkbtn:disabled { text-decoration: none; cursor: default; opacity: 0.7; }
 .gamepick .spanrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 0.88rem; }
 .gamepick .spanrow .choice { margin-top: 0; flex-wrap: wrap; }
+/* a finger needs a bigger handle than a mouse does */
+@media (pointer: coarse) {
+	.pingtrack { height: 40px; }
+	.pingtrack .rail, .pingtrack .marks { left: 14px; right: 14px; }
+	.pingtrack .rail, .pingtrack .fill { top: 17px; }
+	.pingtrack .tick { top: 10px; }
+	.pingtrack input[type="range"], .pingtrack input[type="range"]::-webkit-slider-runnable-track, .pingtrack input[type="range"]::-moz-range-track { height: 40px; }
+	.pingtrack input[type="range"]::-webkit-slider-thumb { width: 28px; height: 28px; margin-top: 6px; }
+	.pingtrack input[type="range"]::-moz-range-thumb { width: 28px; height: 28px; }
+	.pingscale { margin-left: 14px; margin-right: 14px; }
+}
