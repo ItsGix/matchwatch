@@ -70,6 +70,12 @@ td .stayform { max-width: 420px; }
 .pingform label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); flex: 0 1 130px; }
 .pingform label input { min-width: 0; width: 100%; flex: none; }
 .pingsay { min-height: 1.4em; margin-top: 10px; }
+/* the service row: a light and a word, so the state is not carried by colour alone */
+.svc { display: flex; align-items: center; gap: 9px; margin: 2px 0 12px; font-weight: 700; }
+.svc::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.svc.on { color: var(--ok); } .svc.on::before { background: var(--ok); }
+.svc.off { color: var(--bad); } .svc.off::before { background: var(--bad); }
+.svc.wait { color: var(--muted); } .svc.wait::before { background: var(--mid); }
 /* the ping range: two sliders laid over one line. Only their handles take the pointer; the line, the lit part and the datacentre marks are drawn underneath, inset by half a handle so a mark sits where the handle's centre would. */
 .pingtrack { position: relative; height: 36px; max-width: 640px; margin: 4px 0 0; }
 .pingtrack .rail, .pingtrack .marks { position: absolute; left: 10px; right: 10px; }

@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.35.2", reloading = false;
+var BUILT = "0.36.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1500,6 +1500,7 @@ function pageTools() {
 		view.appendChild(seg);
 	}
 	if (!RO && tab === "checks") {
+		view.appendChild(tool("MatchWatch service", "Whether MatchWatch is running, with buttons to stop, start and restart it. While it is stopped no match is watched or recorded and no new server is judged. Servers already blocked stay blocked, strict games are released, and match mode hands your line back at QoSmate's own speeds. It stays stopped until you press Start or the router restarts.", svcBox()));
 		var docOut = outBox();
 		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic, and that it is looking at the right ports: the one your gaming device is on, the internet one, and the one QoSmate shapes. Takes five seconds and changes nothing.",
 			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
@@ -1684,12 +1685,57 @@ function route(keep) { // keep === true: a redraw with fresh data, so stay where
 	if (page === "live") pageLive(); else if (page === "match") pageMatch(pageArg || "last"); else if (page === "matches") pageMatches(); else if (page === "servers") pageServers(); else pageTools();
 	if (keep !== true) window.scrollTo(0, 0);
 }
+// Is the service running? "stopped" is written by the service as it stops and "starting" as it starts, so
+// neither depends on the clocks; "off" is no sign of life: no file, or one the engine has not touched for 20 s.
+function svcState() {
+	var st = D.st;
+	if (!st) return "off";
+	if (st.stopped) return "stopped";
+	if (st.starting) return "starting";
+	return (!st.ts || Date.now() / 1000 - st.ts > 20) ? "off" : "on";
+}
 function setState() {
-	var e = shadow.getElementById("state"), st = D.st, s = session();
+	var e = shadow.getElementById("state"), st = D.st, s = session(), v = svcState();
 	if (!st) { e.className = ""; e.textContent = "Can't read data from the router"; }
-	else if (!st.ts || Date.now() / 1000 - st.ts > 20) { e.className = ""; e.textContent = "The matchwatch service is not running"; }
+	else if (v === "stopped") { e.className = ""; e.textContent = "MatchWatch is stopped"; }
+	else if (v === "starting") { e.className = ""; e.textContent = "MatchWatch is starting"; }
+	else if (v === "off") { e.className = ""; e.textContent = "MatchWatch is not running"; }
 	else if (s) { e.className = "on"; e.textContent = "In a match, " + mins(s.age); }
 	else { e.className = ""; e.textContent = "Waiting for a match"; }
+	svcPaint();
+}
+// The service row on the Tools page. The Tools page is not redrawn by fresh data, so this draws itself
+// from the status file, which is read every second, and only when what it would show has changed.
+var SVC = { box: null, key: "", wait: "", until: 0, was: 0 };
+function svcBox() { SVC.box = h("div", { cls: "svcbox" }); SVC.key = ""; svcPaint(); return SVC.box; }
+function svcPaint() {
+	var box = SVC.box;
+	if (!box || !box.isConnected && SVC.key) return;
+	var v = svcState(), st = D.st || {}, m = v === "on" && !!session();
+	if (SVC.wait) {
+		var over = SVC.wait === "Stopping" ? v !== "on" && v !== "starting" : v === "on" && (SVC.wait === "Starting" || st.since !== SVC.was);
+		if (over || Date.now() > SVC.until) SVC.wait = "";
+	}
+	var key = [v, m, SVC.wait, st.since || 0, st.stopped || 0].join("|");
+	if (key === SVC.key || box.querySelector("button.arm")) return;
+	SVC.key = key; box.textContent = "";
+	function go(word) { return function (out) { SVC.wait = word; SVC.until = Date.now() + 30000; SVC.was = (D.st || {}).since || 0; toast(out || word + "."); svcPaint(); }; }
+	var cls = "wait", say;
+	if (SVC.wait) say = SVC.wait + "...";
+	else if (v === "on") { cls = "on"; say = "Running" + (st.since ? " since " + when(st.since) : "") + (m ? ". A match is in progress." : ""); }
+	else if (v === "starting") say = "Starting...";
+	else if (v === "stopped") { cls = "off"; say = "Stopped since " + when(st.stopped); }
+	else { cls = "off"; say = "Not running"; }
+	box.appendChild(h("p", { cls: "svc " + cls, role: "status", text: say }));
+	if (SVC.wait || v === "starting") return;
+	var row = h("div", { cls: "actions" });
+	if (v === "on") {
+		row.appendChild(act("Restart", "svcrestart", null, { confirm: m ? "Lose this match's record?" : null, done: go("Restarting") }));
+		row.appendChild(act("Stop", "svcstop", null, { danger: true, confirm: m ? "Lose this match's record?" : "Stop MatchWatch?", done: go("Stopping") }));
+	} else {
+		row.appendChild(act("Start", "svcstart", null, { solid: true, done: go("Starting") }));
+	}
+	box.appendChild(row);
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
 // half-typed text in a box would be wiped by a redraw

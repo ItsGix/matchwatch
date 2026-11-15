@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.35.2"
+VERSION="0.36.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2243,6 +2243,27 @@ cmd_update() { # [check|now]
 	echo "$id"
 }
 
+# Stop, start and restart, for the dashboard's buttons and the command line. The init script does the work
+# a second later, so a button's call has answered before the service that may be serving it goes away.
+svc_running() { [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid" 2>/dev/null)" 2>/dev/null; }
+cmd_service() { # stop | start | restart | nothing: is it running
+	case "$1" in
+		""|status)
+			if svc_running; then echo "MatchWatch is running."; else echo "MatchWatch is stopped. Start it with: matchwatch service start"; fi
+			return 0 ;;
+		stop|start|restart) ;;
+		*) die "usage: matchwatch service [stop|start|restart]" ;;
+	esac
+	if [ -z "$CONF" ]; then
+		[ -x /etc/init.d/matchwatch ] || die "the service script /etc/init.d/matchwatch is missing. Install MatchWatch again."
+		( sleep 1; /etc/init.d/matchwatch "$1" ) >/dev/null 2>&1 &
+	fi
+	case "$1" in
+		stop) echo "Stopping MatchWatch. Nothing is watched or recorded until you start it again." ;;
+		start) if svc_running; then echo "MatchWatch is already running."; else echo "Starting MatchWatch."; fi ;;
+		restart) echo "Restarting MatchWatch. It is watching again in a few seconds." ;;
+	esac
+}
 cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-zero exit means it did not work
 	local action="$1" arg="$2" days="$3" region="$4" name="$5" f rc
 	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
@@ -2268,6 +2289,9 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		# the ping range, as lowest/highest in ms
 		pingrange) set -- $(echo "$arg" | tr '/' ' '); [ $# = 2 ] || die "that is not a lowest and a highest ping"; cmd_pingrange "$1" "$2" ;;
 		pingoff) cmd_pingrange off ;;
+		svcstop) cmd_service stop ;;
+		svcstart) cmd_service start ;;
+		svcrestart) cmd_service restart ;;
 		qos) cmd_qos ;;
 		qosfix) cmd_qos_fix ;;
 		qosunfix) cmd_qos_unfix ;;
@@ -2607,6 +2631,11 @@ CGI
 stop_children() {
 	local d f
 	kill $TPID $HPID $APID $UPID $MPID $WPID 2>/dev/null
+	# say so for the dashboard, once the engine has gone and cannot write over it
+	[ -n "$APID" ] && wait "$APID" 2>/dev/null
+	if [ -d "$RUN/www" ]; then
+		echo "{\"ts\":0,\"stopped\":$(date +%s),\"sessions\":[],\"candidates\":0,\"flows\":0}" > "$RUN/www/status.json.$$" && mv "$RUN/www/status.json.$$" "$RUN/www/status.json"
+	fi
 	for d in "$RUN"/probe.*; do
 		[ -d "$d" ] || continue
 		touch "$d/stop"
@@ -2639,7 +2668,7 @@ cmd_run() {
 	[ -s "$DATA/hold" ] && staying && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
 	staying && ( sleep 3; stay_ranges >/dev/null 2>&1 ) &
 	web_setup; export_json
-	echo '{"ts":0,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
+	echo '{"ts":0,"starting":1,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
 	echo "Starting up..." > "$RUN/status.txt"
 	mkfifo "$RUN/pipe" || die "cannot create $RUN/pipe"
 	tcpdump --help 2>&1 | grep -q immediate-mode && imm="--immediate-mode"
@@ -2799,6 +2828,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
                                seconds is how long after a match the between-matches speeds wait (30 unless you say)
   matchwatch doctor            check that everything needed is in place (changes nothing)
+  matchwatch service [stop|start|restart]
+                               is it running, or stop, start or restart it
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
   matchwatch forget match <start> | server <ip> | dc <n>   remove one match, one server or one datacentre
@@ -2828,6 +2859,7 @@ case "$1" in
 	device) cmd_device "$2" ;;
 	regions) cmd_regions "$2" ;;
 	pingrange) cmd_pingrange "$2" "$3" ;;
+	service) cmd_service "$2" ;;
 	places) awk -F'|' '/^area/ { printf "%-18s %-18s %s\n", $2, $3, $4 }' "$LIB/places.list"; echo; echo "Also any country by name or two-letter code, and any city by name." ;;
 	_lobby) cmd_lobby "$2" "$3" "$4" "$5" ;;
 	_sweep) cmd_sweep "$2" ;;

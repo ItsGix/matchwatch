@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.35.2"
+VERSION="0.36.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2298,6 +2298,27 @@ cmd_update() { # [check|now]
 	echo "$id"
 }
 
+# Stop, start and restart, for the dashboard's buttons and the command line. The init script does the work
+# a second later, so a button's call has answered before the service that may be serving it goes away.
+svc_running() { [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid" 2>/dev/null)" 2>/dev/null; }
+cmd_service() { # stop | start | restart | nothing: is it running
+	case "$1" in
+		""|status)
+			if svc_running; then echo "MatchWatch is running."; else echo "MatchWatch is stopped. Start it with: matchwatch service start"; fi
+			return 0 ;;
+		stop|start|restart) ;;
+		*) die "usage: matchwatch service [stop|start|restart]" ;;
+	esac
+	if [ -z "$CONF" ]; then
+		[ -x /etc/init.d/matchwatch ] || die "the service script /etc/init.d/matchwatch is missing. Install MatchWatch again."
+		( sleep 1; /etc/init.d/matchwatch "$1" ) >/dev/null 2>&1 &
+	fi
+	case "$1" in
+		stop) echo "Stopping MatchWatch. Nothing is watched or recorded until you start it again." ;;
+		start) if svc_running; then echo "MatchWatch is already running."; else echo "Starting MatchWatch."; fi ;;
+		restart) echo "Restarting MatchWatch. It is watching again in a few seconds." ;;
+	esac
+}
 cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-zero exit means it did not work
 	local action="$1" arg="$2" days="$3" region="$4" name="$5" f rc
 	case "$name" in *[!A-Za-z0-9\ .:-]*) die "names may only use letters, numbers, spaces, dots, colons and hyphens" ;; esac
@@ -2323,6 +2344,9 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		# the ping range, as lowest/highest in ms
 		pingrange) set -- $(echo "$arg" | tr '/' ' '); [ $# = 2 ] || die "that is not a lowest and a highest ping"; cmd_pingrange "$1" "$2" ;;
 		pingoff) cmd_pingrange off ;;
+		svcstop) cmd_service stop ;;
+		svcstart) cmd_service start ;;
+		svcrestart) cmd_service restart ;;
 		qos) cmd_qos ;;
 		qosfix) cmd_qos_fix ;;
 		qosunfix) cmd_qos_unfix ;;
@@ -2662,6 +2686,11 @@ CGI
 stop_children() {
 	local d f
 	kill $TPID $HPID $APID $UPID $MPID $WPID 2>/dev/null
+	# say so for the dashboard, once the engine has gone and cannot write over it
+	[ -n "$APID" ] && wait "$APID" 2>/dev/null
+	if [ -d "$RUN/www" ]; then
+		echo "{\"ts\":0,\"stopped\":$(date +%s),\"sessions\":[],\"candidates\":0,\"flows\":0}" > "$RUN/www/status.json.$$" && mv "$RUN/www/status.json.$$" "$RUN/www/status.json"
+	fi
 	for d in "$RUN"/probe.*; do
 		[ -d "$d" ] || continue
 		touch "$d/stop"
@@ -2694,7 +2723,7 @@ cmd_run() {
 	[ -s "$DATA/hold" ] && staying && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
 	staying && ( sleep 3; stay_ranges >/dev/null 2>&1 ) &
 	web_setup; export_json
-	echo '{"ts":0,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
+	echo '{"ts":0,"starting":1,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
 	echo "Starting up..." > "$RUN/status.txt"
 	mkfifo "$RUN/pipe" || die "cannot create $RUN/pipe"
 	tcpdump --help 2>&1 | grep -q immediate-mode && imm="--immediate-mode"
@@ -2854,6 +2883,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]   in kbit, 0 = the default;
                                seconds is how long after a match the between-matches speeds wait (30 unless you say)
   matchwatch doctor            check that everything needed is in place (changes nothing)
+  matchwatch service [stop|start|restart]
+                               is it running, or stop, start or restart it
   matchwatch clear-history     forget every recorded match (blocks and settings are kept)
   matchwatch update [now]      is there a newer version on GitHub? With now: download and install it
   matchwatch forget match <start> | server <ip> | dc <n>   remove one match, one server or one datacentre
@@ -2883,6 +2914,7 @@ case "$1" in
 	device) cmd_device "$2" ;;
 	regions) cmd_regions "$2" ;;
 	pingrange) cmd_pingrange "$2" "$3" ;;
+	service) cmd_service "$2" ;;
 	places) awk -F'|' '/^area/ { printf "%-18s %-18s %s\n", $2, $3, $4 }' "$LIB/places.list"; echo; echo "Also any country by name or two-letter code, and any city by name." ;;
 	_lobby) cmd_lobby "$2" "$3" "$4" "$5" ;;
 	_sweep) cmd_sweep "$2" ;;
@@ -3862,7 +3894,8 @@ function js(x) { return "\"" clean(x) "\"" }
 function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line, ga, loc, cand, ip, start, cnt, pf, pv) {
 	sf = RUN "/www/status.json.tmp"; tf = RUN "/status.txt.tmp"
 	first = 1; cand = 0; txt = ""
-	s = "{\"ts\":" now ",\"sessions\":["
+	if (!SINCE) SINCE = now
+	s = "{\"ts\":" now ",\"since\":" SINCE ",\"sessions\":["
 	for (f in F_seen) {
 		if (!F_active[f]) { if (F_good[f] > 0) cand++; continue }
 		kd = f SUBSEP "D"; ku = f SUBSEP "U"; ip = F_rip[f]
@@ -4680,13 +4713,13 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 # rpcd backend for luci-app-matchwatch: runs the dashboard's buttons.
 # Two methods so LuCI's permissions can tell looking from changing:
 #   read   checks, the line test, a route trace, the activity log, making a share file, the version check, and "I felt that"
-#   write  updating, and anything that blocks, stays, favourites, measures, alerts, renames, clears, imports, or changes QoSmate or the device
+#   write  updating, and stopping, starting or restarting the service, and anything that blocks, stays, favourites, measures, alerts, renames, clears, imports, or changes QoSmate or the device
 # The work itself is done by /usr/bin/matchwatch _action, which validates every argument.
 
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart"
 
 reply() { # ok(0|1) text
 	json_init
@@ -4819,7 +4852,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.35.2", reloading = false;
+var BUILT = "0.36.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6291,6 +6324,7 @@ function pageTools() {
 		view.appendChild(seg);
 	}
 	if (!RO && tab === "checks") {
+		view.appendChild(tool("MatchWatch service", "Whether MatchWatch is running, with buttons to stop, start and restart it. While it is stopped no match is watched or recorded and no new server is judged. Servers already blocked stay blocked, strict games are released, and match mode hands your line back at QoSmate's own speeds. It stays stopped until you press Start or the router restarts.", svcBox()));
 		var docOut = outBox();
 		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic, and that it is looking at the right ports: the one your gaming device is on, the internet one, and the one QoSmate shapes. Takes five seconds and changes nothing.",
 			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
@@ -6475,12 +6509,57 @@ function route(keep) { // keep === true: a redraw with fresh data, so stay where
 	if (page === "live") pageLive(); else if (page === "match") pageMatch(pageArg || "last"); else if (page === "matches") pageMatches(); else if (page === "servers") pageServers(); else pageTools();
 	if (keep !== true) window.scrollTo(0, 0);
 }
+// Is the service running? "stopped" is written by the service as it stops and "starting" as it starts, so
+// neither depends on the clocks; "off" is no sign of life: no file, or one the engine has not touched for 20 s.
+function svcState() {
+	var st = D.st;
+	if (!st) return "off";
+	if (st.stopped) return "stopped";
+	if (st.starting) return "starting";
+	return (!st.ts || Date.now() / 1000 - st.ts > 20) ? "off" : "on";
+}
 function setState() {
-	var e = shadow.getElementById("state"), st = D.st, s = session();
+	var e = shadow.getElementById("state"), st = D.st, s = session(), v = svcState();
 	if (!st) { e.className = ""; e.textContent = "Can't read data from the router"; }
-	else if (!st.ts || Date.now() / 1000 - st.ts > 20) { e.className = ""; e.textContent = "The matchwatch service is not running"; }
+	else if (v === "stopped") { e.className = ""; e.textContent = "MatchWatch is stopped"; }
+	else if (v === "starting") { e.className = ""; e.textContent = "MatchWatch is starting"; }
+	else if (v === "off") { e.className = ""; e.textContent = "MatchWatch is not running"; }
 	else if (s) { e.className = "on"; e.textContent = "In a match, " + mins(s.age); }
 	else { e.className = ""; e.textContent = "Waiting for a match"; }
+	svcPaint();
+}
+// The service row on the Tools page. The Tools page is not redrawn by fresh data, so this draws itself
+// from the status file, which is read every second, and only when what it would show has changed.
+var SVC = { box: null, key: "", wait: "", until: 0, was: 0 };
+function svcBox() { SVC.box = h("div", { cls: "svcbox" }); SVC.key = ""; svcPaint(); return SVC.box; }
+function svcPaint() {
+	var box = SVC.box;
+	if (!box || !box.isConnected && SVC.key) return;
+	var v = svcState(), st = D.st || {}, m = v === "on" && !!session();
+	if (SVC.wait) {
+		var over = SVC.wait === "Stopping" ? v !== "on" && v !== "starting" : v === "on" && (SVC.wait === "Starting" || st.since !== SVC.was);
+		if (over || Date.now() > SVC.until) SVC.wait = "";
+	}
+	var key = [v, m, SVC.wait, st.since || 0, st.stopped || 0].join("|");
+	if (key === SVC.key || box.querySelector("button.arm")) return;
+	SVC.key = key; box.textContent = "";
+	function go(word) { return function (out) { SVC.wait = word; SVC.until = Date.now() + 30000; SVC.was = (D.st || {}).since || 0; toast(out || word + "."); svcPaint(); }; }
+	var cls = "wait", say;
+	if (SVC.wait) say = SVC.wait + "...";
+	else if (v === "on") { cls = "on"; say = "Running" + (st.since ? " since " + when(st.since) : "") + (m ? ". A match is in progress." : ""); }
+	else if (v === "starting") say = "Starting...";
+	else if (v === "stopped") { cls = "off"; say = "Stopped since " + when(st.stopped); }
+	else { cls = "off"; say = "Not running"; }
+	box.appendChild(h("p", { cls: "svc " + cls, role: "status", text: say }));
+	if (SVC.wait || v === "starting") return;
+	var row = h("div", { cls: "actions" });
+	if (v === "on") {
+		row.appendChild(act("Restart", "svcrestart", null, { confirm: m ? "Lose this match's record?" : null, done: go("Restarting") }));
+		row.appendChild(act("Stop", "svcstop", null, { danger: true, confirm: m ? "Lose this match's record?" : "Stop MatchWatch?", done: go("Stopping") }));
+	} else {
+		row.appendChild(act("Start", "svcstart", null, { solid: true, done: go("Starting") }));
+	}
+	box.appendChild(row);
 }
 function tick() { get("status.json", function (st) { D.st = st; setState(); updateLive(); }); get("lobby.json", function (l) { D.lobby = l; }); }
 // half-typed text in a box would be wiped by a redraw
@@ -6596,6 +6675,12 @@ td .stayform { max-width: 420px; }
 .pingform label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); flex: 0 1 130px; }
 .pingform label input { min-width: 0; width: 100%; flex: none; }
 .pingsay { min-height: 1.4em; margin-top: 10px; }
+/* the service row: a light and a word, so the state is not carried by colour alone */
+.svc { display: flex; align-items: center; gap: 9px; margin: 2px 0 12px; font-weight: 700; }
+.svc::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.svc.on { color: var(--ok); } .svc.on::before { background: var(--ok); }
+.svc.off { color: var(--bad); } .svc.off::before { background: var(--bad); }
+.svc.wait { color: var(--muted); } .svc.wait::before { background: var(--mid); }
 /* the ping range: two sliders laid over one line. Only their handles take the pointer; the line, the lit part and the datacentre marks are drawn underneath, inset by half a handle so a mark sits where the handle's centre would. */
 .pingtrack { position: relative; height: 36px; max-width: 640px; margin: 4px 0 0; }
 .pingtrack .rail, .pingtrack .marks { position: absolute; left: 10px; right: 10px; }

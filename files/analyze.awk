@@ -934,7 +934,8 @@ function js(x) { return "\"" clean(x) "\"" }
 function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line, ga, loc, cand, ip, start, cnt, pf, pv) {
 	sf = RUN "/www/status.json.tmp"; tf = RUN "/status.txt.tmp"
 	first = 1; cand = 0; txt = ""
-	s = "{\"ts\":" now ",\"sessions\":["
+	if (!SINCE) SINCE = now
+	s = "{\"ts\":" now ",\"since\":" SINCE ",\"sessions\":["
 	for (f in F_seen) {
 		if (!F_active[f]) { if (F_good[f] > 0) cand++; continue }
 		kd = f SUBSEP "D"; ku = f SUBSEP "U"; ip = F_rip[f]
