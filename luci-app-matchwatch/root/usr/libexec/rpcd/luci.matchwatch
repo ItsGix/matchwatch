@@ -33,7 +33,9 @@ case "$1" in
 
 		case "$2" in
 			read) allowed="$READ" ;;
-			write) allowed="$WRITE" ;;
+			# whoever may change things may also look. The LuCI page keeps its own list of which actions only look,
+			# and a browser can hold an old copy of that page: a new looking action then arrives here as "write".
+			write) allowed="$WRITE $READ" ;;
 			*) reply 0 "unknown method"; exit 0 ;;
 		esac
 		case "$action" in ""|*[!a-z]*) reply 0 "unknown action"; exit 0 ;; esac

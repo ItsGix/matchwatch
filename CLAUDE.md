@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.37.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.37.1.
 
 ## Layout
 
@@ -109,6 +109,7 @@ Hop-by-hop blame (0.27.0): `hop_loop` (started by `_probe_start` once the trace 
 - A patch script once emptied `files/matchwatch` by opening it for writing before reading. Check file sizes after scripted edits.
 - Python run from a Git Bash heredoc turns `\\n` inside its strings into real newlines. Write patch scripts to a file and run the file.
 - Unix line endings everywhere. On Windows, Python writes CRLF by default and Git for Windows checks files out with CRLF; either breaks every script on the router. `.gitattributes` forces LF and `build.py` writes LF. To count carriage returns in Git Bash use `tr -cd '\r' < file | wc -c`: `grep -c $'\r'` there matches every line, which once made clean files look broken.
+- The NAT check and the speed advice answered "unknown action" in the owner's browser on the day they shipped (fixed in 0.37.1). Which rpcd method a button uses is decided in the LuCI view (`READS` in `view/matchwatch/dashboard.js`), a second list beside `READ` in the rpcd backend, and the two new actions were only in the backend's. Testing with `ubus call luci.matchwatch read` went straight past the view and passed. The backend's `write` method now accepts the read actions too, so a missing entry, or a browser holding an old copy of the view, no longer breaks a button; still add a new looking action to both lists, and test a new button through `write` as well as `read`.
 - A LuCI session gets its permissions at login. After installing the app, an already logged-in browser must log out and in before Services, MatchWatch appears or its buttons work.
 - The router's BusyBox `nc` has no `-l` or `-w`, and `uclient-fetch --post-data` sends chunked bodies. To exercise the backend from the router's shell use `ubus call luci.matchwatch read '{"action":"doctor"}'`.
 

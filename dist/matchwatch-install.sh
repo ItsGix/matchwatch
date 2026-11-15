@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.37.0"
+VERSION="0.37.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -4999,7 +4999,9 @@ case "$1" in
 
 		case "$2" in
 			read) allowed="$READ" ;;
-			write) allowed="$WRITE" ;;
+			# whoever may change things may also look. The LuCI page keeps its own list of which actions only look,
+			# and a browser can hold an old copy of that page: a new looking action then arrives here as "write".
+			write) allowed="$WRITE $READ" ;;
 			*) reply 0 "unknown method"; exit 0 ;;
 		esac
 		case "$action" in ""|*[!a-z]*) reply 0 "unknown action"; exit 0 ;; esac
@@ -5107,7 +5109,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.37.0", reloading = false;
+var BUILT = "0.37.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -7937,7 +7939,7 @@ var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: 
 var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name', 'data' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1, nat: 1, qosadvice: 1 };
 
 /* The dashboard's two files are asked for by MatchWatch's version, so a browser that still holds
    an older version's copies fetches the new ones after an update instead of showing the old page. */
