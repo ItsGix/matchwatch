@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.36.1"
+VERSION="0.36.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -3073,6 +3073,7 @@ $2 == "IP" && $4 == ">" {
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
 		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
+		if (voicepending(rport, rip)) next
 		if (quiet(rip, rport)) { skip_note(rip, rport, t); if ((rip ":" rport) in SK_n) SK_why[rip ":" rport] = "repeat"; next }
 		if (NFLOW >= MAXFLOWS) next
 		F_seen[f] = 1; NFLOW++
@@ -3235,6 +3236,16 @@ function hostpending(port, ip,    i) {
 	return 0
 }
 
+# A voice label that goes by who hosts the server cannot answer until the server has been looked up, which
+# takes a second or two. Starting to record in that moment recorded the call: the stream kept its place as
+# an unnamed game for as long as it ran. So a new stream on such a port waits for the lookup, half a minute
+# at most, before it is tracked. With lookups switched off there is nothing to wait for.
+function voicepending(port, ip,    i) {
+	if (GEOF == "" || (ip in HOST)) return 0
+	if ((ip in HOSTASK) && cursec - HOSTASK[ip] > 30) return 0
+	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] == "voice") return 1
+	return 0
+}
 # A stream left alone as voice chat is still counted, so the Tools page can show what was skipped
 # and the owner can say "that one is a game".
 function skip_note(ip, port, t,    k) {
@@ -4630,6 +4641,10 @@ cat > "$R/usr/lib/matchwatch/games.list.new" <<'MW_FILE_END_9'
 
 # ---- voice chat on its own ports (checked first so a game range cannot swallow them)
 Valorant voice|27016-27024,54000-54012|voice|riot,as6507
+# Discord calls, video and screen sharing carried on Cloudflare's network (unconfirmed: Discord publishes
+# no port list). Seen on one PC: the sockets to these ports belonged to Discord, about a thousand
+# packets a second for eleven seconds of every minute, on ports 19298 to 19336.
+Discord voice and video|19294-19344|voice|cloudflare,as13335
 TeamSpeak|9987|voice
 Mumble|64738|voice
 Voice and party chat|3478-3481,5060,5062,6250|voice
@@ -4865,7 +4880,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.36.1", reloading = false;
+var BUILT = "0.36.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -5436,6 +5451,8 @@ function labelForPort(port) {
 }
 // The label the match in progress goes under: the engine says (it knows who hosts the server); older engines did not, so fall back to the port
 function liveLabel(s) {
+	// the engine saying "no name" is an answer: going by the port then named a Discord call on Cloudflare "Overwatch 2"
+	if (s.game === "") return null;
 	var byName = s.game ? (D.hold || []).filter(function (g) { return g.name === s.game; })[0] : null;
 	return byName || (s.game ? { name: s.game } : labelForPort(s.port));
 }

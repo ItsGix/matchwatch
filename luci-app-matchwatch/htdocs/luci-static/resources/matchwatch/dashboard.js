@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.36.1", reloading = false;
+var BUILT = "0.36.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -599,6 +599,8 @@ function labelForPort(port) {
 }
 // The label the match in progress goes under: the engine says (it knows who hosts the server); older engines did not, so fall back to the port
 function liveLabel(s) {
+	// the engine saying "no name" is an answer: going by the port then named a Discord call on Cloudflare "Overwatch 2"
+	if (s.game === "") return null;
 	var byName = s.game ? (D.hold || []).filter(function (g) { return g.name === s.game; })[0] : null;
 	return byName || (s.game ? { name: s.game } : labelForPort(s.port));
 }

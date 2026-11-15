@@ -59,7 +59,8 @@ elif sc=="relay":
         for s in ("203.0.113.9","203.0.113.60"):
             out.append(line(T0+5+j*1.5,PC,3074,s,44998,90)); out.append(line(T0+5.02+j*1.5,s,44998,PC,3074,76))
 elif sc=="bursts":
-    # video from a content network on a port nobody has named: eleven seconds every minute, five times over
+    # video from a content network on a port nobody has named: eleven seconds every minute, five times over.
+    # With -v GEOF=test/geo_voice.tsv the same stream is a Discord call on Cloudflare, and is left alone.
     for b in range(5):
         stream(out,False,400,11,start=5+b*60,srv="203.0.113.77",sport=19298,lport=54268); stream(out,True,20,11,start=5+b*60,srv="203.0.113.77",sport=19298,lport=54268)
 elif sc=="short":

@@ -111,6 +111,7 @@ $2 == "IP" && $4 == ">" {
 	f = lip ":" lport ">" rip ":" rport
 	if (!(f in F_seen)) {
 		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
+		if (voicepending(rport, rip)) next
 		if (quiet(rip, rport)) { skip_note(rip, rport, t); if ((rip ":" rport) in SK_n) SK_why[rip ":" rport] = "repeat"; next }
 		if (NFLOW >= MAXFLOWS) next
 		F_seen[f] = 1; NFLOW++
@@ -273,6 +274,16 @@ function hostpending(port, ip,    i) {
 	return 0
 }
 
+# A voice label that goes by who hosts the server cannot answer until the server has been looked up, which
+# takes a second or two. Starting to record in that moment recorded the call: the stream kept its place as
+# an unnamed game for as long as it ran. So a new stream on such a port waits for the lookup, half a minute
+# at most, before it is tracked. With lookups switched off there is nothing to wait for.
+function voicepending(port, ip,    i) {
+	if (GEOF == "" || (ip in HOST)) return 0
+	if ((ip in HOSTASK) && cursec - HOSTASK[ip] > 30) return 0
+	for (i = 1; i <= NGP; i++) if (port + 0 >= GP_lo[i] && port + 0 <= GP_hi[i] && GP_host[i] != "" && GP_kind[i] == "voice") return 1
+	return 0
+}
 # A stream left alone as voice chat is still counted, so the Tools page can show what was skipped
 # and the owner can say "that one is a game".
 function skip_note(ip, port, t,    k) {

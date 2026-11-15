@@ -23,6 +23,10 @@
 
 # ---- voice chat on its own ports (checked first so a game range cannot swallow them)
 Valorant voice|27016-27024,54000-54012|voice|riot,as6507
+# Discord calls, video and screen sharing carried on Cloudflare's network (unconfirmed: Discord publishes
+# no port list). Seen on one PC: the sockets to these ports belonged to Discord, about a thousand
+# packets a second for eleven seconds of every minute, on ports 19298 to 19336.
+Discord voice and video|19294-19344|voice|cloudflare,as13335
 TeamSpeak|9987|voice
 Mumble|64738|voice
 Voice and party chat|3478-3481,5060,5062,6250|voice
