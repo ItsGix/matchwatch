@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.36.2", reloading = false;
+var BUILT = "0.37.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -886,6 +886,54 @@ function kv(pairs) {
 	pairs.forEach(function (p) { if (!p) return; dl.appendChild(h("dt", null, p[0], p[2] ? h("small", p[2]) : null)); dl.appendChild(h("dd", p[1])); });
 	return dl;
 }
+// Who else was using the line during the match. The router counted each device's traffic every five
+// seconds; this sets that beside the game's own timing, second by second, and says whether the game was
+// any worse while a device was busy. It is a comparison, not a guess: a busy device that changed nothing is said so.
+function netBlock(m) {
+	var n = m.net;
+	if (!n || !n.devs) return null;
+	var b = h("div", null, h("h2", "Your network during this match"));
+	if (n.why === "offload") b.appendChild(h("p", { cls: "note mid", text: "Flow offloading is switched on in the router's firewall. It carries most traffic past the point where MatchWatch counts it, so the figures here miss most of what each device used." }));
+	if (!n.devs.length) {
+		b.appendChild(h("p", { cls: "note", text: "Nothing else on your network was busy. No device used more than a little of your line during this match (under 2 Mbit down and 0.5 Mbit up)." }));
+		return b;
+	}
+	var step = n.step || 5, td = m.tl_d || [], tp = m.tl_p || [], off = (n.t0 || m.t0) - m.t0;
+	// the game's timing in sample i: how late the server's slowest update was, and the ping, averaged over those seconds
+	function span(arr, i, scale) {
+		var a = Math.round((off + (i - 1) * step) * scale), z = Math.round((off + i * step) * scale), s = 0, c = 0, j;
+		for (j = Math.max(0, a); j < z && j < arr.length; j++) if (arr[j] > 0) { s += arr[j]; c++; }
+		return c ? s / c : null;
+	}
+	var ps = td.length ? tp.length / td.length : 1;
+	function avg(list) { var s = 0, c = 0; list.forEach(function (x) { if (x != null) { s += x; c++; } }); return c ? s / c : null; }
+	var t = table([["Device"], ["Download", "num"], ["Upload", "num"], ["Busy for", "num"]]), says = [];
+	n.devs.forEach(function (d) {
+		var busy = [], quiet = [], i, pu = 0, pd = 0, su = 0, sd = 0;
+		for (i = 1; i <= n.n; i++) {
+			var u = d.up[i - 1] || 0, dn = d.dn[i - 1] || 0;
+			if (u >= 0.5 || dn >= 2) { busy.push(i); su += u; sd += dn; if (u > pu) pu = u; if (dn > pd) pd = dn; } else quiet.push(i);
+		}
+		if (!busy.length) return;
+		var who = d.self ? "Your gaming device (the game included)" : (d.name || d.ip);
+		t.lastChild.appendChild(row([[who + (d.name && !d.self && d.ip !== "v6" ? " (" + d.ip + ")" : "")], [pd >= 0.5 ? fmt(sd / busy.length, 1) + " Mbit, peak " + fmt(pd, 0) : "Hardly any", "num"], [pu >= 0.5 ? fmt(su / busy.length, 1) + " Mbit, peak " + fmt(pu, 0) : "Hardly any", "num"], [mins(busy.length * step), "num"]]));
+		var what = pu >= 0.5 && su * 4 >= sd ? "uploading at about " + fmt(su / busy.length, 1) + " Mbit" : "downloading at about " + fmt(sd / busy.length, 1) + " Mbit";
+		if (busy.length < 3) return;
+		if (quiet.length < 3) { says.push([0, who + " was busy all through this match (" + what + "), so there is no quiet stretch to compare it with."]); return; }
+		var lb = avg(busy.map(function (i) { return span(td, i, 1); })), lq = avg(quiet.map(function (i) { return span(td, i, 1); }));
+		var pb = avg(busy.map(function (i) { return span(tp, i, ps); })), pq = avg(quiet.map(function (i) { return span(tp, i, ps); }));
+		var late = lb != null && lq != null && lb >= lq + 5 && lb >= lq * 1.5, ping = pb != null && pq != null && pb >= pq + 5 && pb >= pq * 1.3;
+		if (late || ping) says.push([1, "While " + who + " was " + what + " (" + mins(busy.length * step) + " of this match), " +
+			(late ? "the game's updates arrived " + fmt(lb, 0) + " ms late on average, against " + fmt(lq, 0) + " ms the rest of the time" : "") + (late && ping ? ", and " : "") +
+			(ping ? "your ping was " + fmt(pb, 0) + " ms, against " + fmt(pq, 0) + " ms the rest of the time" : "") + "."]);
+		else says.push([0, who + " was " + what + " for " + mins(busy.length * step) + ", and the game's timing was the same with and without it."]);
+	});
+	says.sort(function (x, y) { return y[0] - x[0]; });
+	says.slice(0, 3).forEach(function (s) { b.appendChild(h("p", { cls: "note" + (s[0] ? " low" : ""), text: s[1] })); });
+	b.appendChild(h("div", { cls: "tablewrap" }, t));
+	b.appendChild(h("p", { cls: "note", text: "Counted on the router every five seconds while the match ran. A device counts as busy above 2 Mbit down or 0.5 Mbit up. This changes no score." }));
+	return b;
+}
 // what QoSmate's queues did during the match: the game's own queue, and everything else on the line
 function qmBlock(m) {
 	var q = m.qm;
@@ -1001,6 +1049,7 @@ function pageMatch(id) {
 			m.lanping != null ? ["Router to PC", fmt(m.lanping, 2) + " ms"] : ["Router to PC", "n/a", "The PC does not answer ping"]]));
 		cols.appendChild(b);
 		view.appendChild(cols);
+		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
@@ -1519,6 +1568,18 @@ function pageTools() {
 				lineOut.appendChild(h("div", { cls: "tablewrap" }, t));
 			});
 		});
+		var natOut = h("div"), natBtn = h("button", { type: "button", text: "Check my NAT" });
+		natBtn.addEventListener("click", function () {
+			natOut.textContent = "";
+			job(natBtn, "nat", null, "nat.json", function (r) {
+				natOut.appendChild(h("p", { cls: "lede " + (r.verdict === "open" ? "ok" : r.verdict === "moderate" ? "mid" : r.verdict === "strict" ? "low" : ""), text: r.head || "No result." }));
+				var ul = h("ul", { cls: "natlist" });
+				(r.lines || []).forEach(function (x) { ul.appendChild(h("li", { cls: x.l === "warn" ? "low" : x.l === "ok" ? "ok" : "", text: x.t })); });
+				natOut.appendChild(ul);
+			});
+		});
+		view.appendChild(tool("NAT type", "Says what your router's side makes likely for the NAT type games report, and why. It looks at whether your internet address is really your own, whether another router sits in front of this one, and whether anything opens ports for your gaming device. It asks one outside server which address it sees you as, changes nothing, and shows no address.",
+			h("div", { cls: "actions" }, natBtn), natOut));
 		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
 			h("div", { cls: "actions" }, lineBtn), lineOut));
 
@@ -1657,6 +1718,11 @@ function pageTools() {
 					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
 				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet. " + (mm.whytext || "QoSmate must be switched on and in one of its cake modes.") : "Off: QoSmate's limits are on all the time" + (mm.up ? ", " + (mm.down ? mbit(mm.down) + " down and " : "") + mbit(mm.up) + " up." : ".") }),
 				mm.can === false ? null : mmSpeeds(mm, again)));
+		}
+		if (hasQos && !RO) {
+			var qaOut = outBox();
+			view.appendChild(tool("Are my QoSmate speeds right?", "Looks at what your last forty matches recorded and says what they show about QoSmate's speed limits: whether matches played on a busy line were rougher than the rest, and whether the queue QoSmate keeps for your game ever backed up. QoSmate does the prioritising; this only reads your match records and changes nothing.",
+				h("div", { cls: "actions" }, act("Look at my matches", "qosadvice", null, { done: qaOut.show })), qaOut));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {

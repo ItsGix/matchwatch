@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.36.2"
+VERSION="0.37.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -95,6 +95,7 @@ STAY_KM=150
 STAY_RANGES=1
 UPDATE_CHECK=0
 MATCH_MODE=0
+NET_WATCH=1
 MM_ON_DOWN=""; MM_ON_UP=""; MM_OFF_DOWN=""; MM_OFF_UP=""; MM_HOLD=""
 DATA_DIR="/etc/matchwatch"
 WEB=0
@@ -106,6 +107,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get DEVICE_IP main device_ip "$DEVICE_IP"
 	config_get LAN_IF main lan_if "$LAN_IF"
 	config_get WAN_IF main wan_if "$WAN_IF"
+	config_get NET_WATCH main net_watch "$NET_WATCH"
 	config_get IGNORE_PORTS main ignore_ports "$IGNORE_PORTS"
 	config_get ONLY_FILTER main only_filter "$ONLY_FILTER"
 	config_get MIN_DOWN_PPS main min_down_pps "$MIN_DOWN_PPS"
@@ -333,6 +335,80 @@ hop_sum() { # -> hops.json (one line) and hop.note
 	}' "$PD/hops.ping" > "$PD/hops.json.tmp" 2>/dev/null && mv -f "$PD/hops.json.tmp" "$PD/hops.json"
 }
 
+# ---- who else was using the line during a match (0.37.0)
+# The router carries every device's traffic, so it can say which one was busy while a match went rough,
+# which nothing on the PC can. While a match runs, two nftables sets count bytes per LAN address (uploads by
+# source, downloads by destination) in a chain of their own, and net_loop turns them into a rate every five
+# seconds. Nothing is counted between matches. It reads counters only, and changes no score.
+net_on() {
+	[ "$NET_WATCH" = 1 ] && have nft || return 1
+	find_ifaces
+	nft list chain inet matchwatch netcount >/dev/null 2>&1 && return 0
+	nft list table inet matchwatch >/dev/null 2>&1 || nft_ready >/dev/null 2>&1 || return 1
+	printf 'table inet matchwatch {\n\tset netup {\n\t\ttype ipv4_addr\n\t\tsize 512\n\t\tflags dynamic\n\t\tcounter\n\t}\n\tset netdn {\n\t\ttype ipv4_addr\n\t\tsize 512\n\t\tflags dynamic\n\t\tcounter\n\t}\n\tcounter v6up { }\n\tcounter v6dn { }\n\tchain netcount {\n\t\ttype filter hook forward priority -6; policy accept;\n\t\tiifname "%s" meta nfproto ipv4 update @netup { ip saddr }\n\t\toifname "%s" meta nfproto ipv4 update @netdn { ip daddr }\n\t\tiifname "%s" meta nfproto ipv6 counter name v6up\n\t\toifname "%s" meta nfproto ipv6 counter name v6dn\n\t}\n}\n' "$LAN_IF" "$LAN_IF" "$LAN_IF" "$LAN_IF" | nft -f - 2>/dev/null
+}
+net_off() { # stop counting, unless another match is still being recorded
+	local d
+	for d in "$RUN"/probe.*; do [ "$1" != force ] && [ -f "$d/net.on" ] && [ ! -e "$d/stop" ] && return 0; done
+	nft list chain inet matchwatch netcount >/dev/null 2>&1 || return 0
+	nft flush chain inet matchwatch netcount 2>/dev/null; nft delete chain inet matchwatch netcount 2>/dev/null
+	nft delete set inet matchwatch netup 2>/dev/null; nft delete set inet matchwatch netdn 2>/dev/null
+	nft delete counter inet matchwatch v6up 2>/dev/null; nft delete counter inet matchwatch v6dn 2>/dev/null
+	return 0
+}
+net_snap() { # -> "address upload-bytes download-bytes" per device, and one line "v6" for all IPv6 together
+	{ nft list set inet matchwatch netup 2>/dev/null | sed 's/^/U /'; nft list set inet matchwatch netdn 2>/dev/null | sed 's/^/D /'
+	  nft list counter inet matchwatch v6up 2>/dev/null | sed 's/^/6U /'; nft list counter inet matchwatch v6dn 2>/dev/null | sed 's/^/6D /'; } | awk '
+		{ dir = $1; s = $0
+		  if (dir == "6U" || dir == "6D") { if (match(s, /bytes [0-9]+/)) v6[dir] = substr(s, RSTART + 6, RLENGTH - 6); next }
+		  while (match(s, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ counter packets [0-9]+ bytes [0-9]+/)) {
+			e = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH); split(e, a, " ")
+			seen[a[1]] = 1; if (dir == "U") up[a[1]] = a[6]; else dn[a[1]] = a[6] } }
+		END { for (ip in seen) print ip, ((ip in up) ? up[ip] : 0), ((ip in dn) ? dn[ip] : 0)
+		      print "v6", (("6U" in v6) ? v6["6U"] : 0), (("6D" in v6) ? v6["6D"] : 0) }'
+}
+net_loop() { # every five seconds: sample number, address, kbit up, kbit down, for whatever moved 200 kbit or more
+	local d="$PD" i=0
+	net_on || return 0
+	: > "$d/net.on"
+	[ "$(uci -q get firewall.@defaults[0].flow_offloading 2>/dev/null)" = 1 ] && echo offload > "$d/net.why"
+	net_snap > "$d/net.prev" 2>/dev/null; date +%s > "$d/net.t0"; : > "$d/net.log"
+	while [ -d "$d" ] && [ ! -e "$d/stop" ] && [ "$i" -lt 720 ]; do
+		sleep 5; i=$((i + 1))
+		[ -d "$d" ] && [ ! -e "$d/stop" ] || break
+		net_snap > "$d/net.now" 2>/dev/null
+		awk -v i="$i" 'FNR == NR { u[$1] = $2; dn[$1] = $3; next }
+			($1 in u) { a = ($2 - u[$1]) * 8 / 5000; b = ($3 - dn[$1]) * 8 / 5000; if (a >= 200 || b >= 200) printf "%d %s %d %d\n", i, $1, a, b }' "$d/net.prev" "$d/net.now" >> "$d/net.log" 2>/dev/null
+		mv -f "$d/net.now" "$d/net.prev" 2>/dev/null; echo "$i" > "$d/net.n"
+	done
+}
+net_sum() { # the match is over: the six busiest devices, each as a row of Mbit per five seconds, as one line of JSON
+	local d="$PD" n
+	[ -f "$d/net.on" ] || return 0
+	rm -f "$d/net.on"; net_off
+	n="$(cat "$d/net.n" 2>/dev/null)"
+	[ "${n:-0}" -ge 6 ] || return 0
+	awk -v n="$n" -v t0="$(cat "$d/net.t0" 2>/dev/null)" -v why="$(cat "$d/net.why" 2>/dev/null)" -v self="$(cat "$d/lip" 2>/dev/null)" -v LEASES=/tmp/dhcp.leases '
+		BEGIN { while ((getline l < LEASES) > 0) { if (split(l, a, " ") >= 4 && a[4] != "*") { gsub(/[^A-Za-z0-9 ._-]/, "", a[4]); name[a[3]] = substr(a[4], 1, 40) } } close(LEASES) }
+		{ ip = $2; up[ip, $1] = $3; dn[ip, $1] = $4; tot[ip] += $3 + $4; if ($3 > pu[ip]) pu[ip] = $3; if ($4 > pd[ip]) pd[ip] = $4 }
+		END {
+			printf "{\"step\":5,\"n\":%d,\"t0\":%d%s,\"devs\":[", n, t0, (why != "" ? ",\"why\":\"" why "\"" : "")
+			for (k = 1; k <= 6; k++) {
+				best = ""
+				for (ip in tot) if (!(ip in done) && (pu[ip] >= 500 || pd[ip] >= 2000) && (best == "" || tot[ip] > tot[best])) best = ip
+				if (best == "") break
+				done[best] = 1; ip = best
+				printf "%s{\"ip\":\"%s\",\"name\":\"%s\",\"self\":%s,\"up\":[", (k > 1 ? "," : ""), ip, (ip == "v6" ? "IPv6 traffic, all devices" : ((ip in name) ? name[ip] : "")), (ip == self ? "true" : "false")
+				for (i = 1; i <= n; i++) printf "%s%s", (i > 1 ? "," : ""), ((ip, i) in up) ? sprintf("%.1f", up[ip, i] / 1000) + 0 : 0
+				printf "],\"dn\":["
+				for (i = 1; i <= n; i++) printf "%s%s", (i > 1 ? "," : ""), ((ip, i) in dn) ? sprintf("%.1f", dn[ip, i] / 1000) + 0 : 0
+				printf "]}"
+			}
+			print "]}"
+		}' "$d/net.log" > "$d/net.json" 2>/dev/null
+	[ -s "$d/net.json" ] || rm -f "$d/net.json"
+}
+
 cmd_probe_start() {
 	local sid="$1" rip="$2" lip="$3" near last hops reached
 	is_ipv4 "$rip" || return 1
@@ -346,6 +422,8 @@ cmd_probe_start() {
 	# no match-started alert for a port nobody has named: it may well not be a game
 	[ "$NOTIFY_START" = 1 ] && [ "$5" != unnamed ] && notify_start "$rip" &
 	qm_loop &
+	[ -n "$lip" ] && echo "$lip" > "$PD/lip"
+	net_loop >/dev/null 2>&1 &
 	[ -n "$lip" ] && is_ipv4 "$lip" && start_ping lan "$lip"
 	( geo_lookup "$rip" > "$PD/geo.tmp" 2>/dev/null && mv "$PD/geo.tmp" "$PD/geo" ) &
 	[ -n "$4" ] && ( sleep 5; [ -d "$PD" ] && qos_probe "$rip" "$4" > "$PD/qos.tmp" 2>/dev/null && mv "$PD/qos.tmp" "$PD/qos" ) &
@@ -409,6 +487,7 @@ cmd_probe_stop() {
 	for f in "$PD"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
 	qm_sum 2>/dev/null
 	hop_sum 2>/dev/null
+	net_sum 2>/dev/null
 	{
 		[ -s "$PD/hop.note" ] && echo "hop_note=$(head -n 1 "$PD/hop.note")"
 		pstats "$PD/far.ping" far; pstats "$PD/near.ping" near; pstats "$PD/lan.ping" lan
@@ -2147,6 +2226,143 @@ cmd_trace() { # server-ip : trace the route to a server now
 		END { print "]}" }' > "$f.tmp" && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
 	echo "$id"
 }
+# ---- NAT check (0.37.0)
+# "Open, Moderate, Strict" is each game's own verdict and the router cannot read it. What the router can
+# see is what decides it: whether its internet address is really its own (or the ISP shares one, or a second
+# router sits in front), and whether anything opens ports for the gaming device. One request goes to an
+# outside server, only when the owner asks, to learn which address the internet sees. No address is printed:
+# the result is readable on the page without login.
+ip_class() { # address -> private | cgnat | public | none
+	case "$1" in
+		"") echo none ;;
+		10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|169.254.*) echo private ;;
+		100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) echo cgnat ;;
+		*) echo public ;;
+	esac
+}
+nat_seen() { # the address an outside server sees us as, or nothing
+	local u out
+	if [ -n "$MW_NAT_URL" ]; then set -- "$MW_NAT_URL"; else set -- https://1.1.1.1/cdn-cgi/trace http://1.1.1.1/cdn-cgi/trace; fi
+	for u in "$@"; do
+		out="$(uclient-fetch -q -T 4 -O - "$u" 2>/dev/null | sed -n 's/^ip=\([0-9.]*\)$/\1/p' | head -n 1)"
+		is_ipv4 "$out" && { echo "$out"; return 0; }
+	done
+	return 1
+}
+nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sentence
+	local wip cls seen up=none maps=0 fwd=0 lf body
+	find_ifaces
+	wip="${MW_NAT_WAN:-$(ip -4 addr show dev "$WAN_IF" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)}"
+	cls="$(ip_class "$wip")"
+	if [ "$cls" = public ]; then
+		seen="$(nat_seen)"
+		if [ -z "$seen" ]; then cls=unseen; elif [ "$seen" != "$wip" ]; then cls=shared; fi
+	fi
+	if [ -x /usr/sbin/miniupnpd ]; then
+		up=off
+		[ "$(uci -q get upnpd.config.enabled 2>/dev/null)" = 1 ] && pgrep miniupnpd >/dev/null 2>&1 && up=on
+	fi
+	[ -n "$MW_NAT_UPNP" ] && up="$MW_NAT_UPNP"
+	if is_ipv4 "$DEVICE_IP"; then
+		lf="${MW_NAT_LEASES:-$(uci -q get upnpd.config.upnp_lease_file 2>/dev/null)}"; [ -n "$lf" ] || lf=/var/run/miniupnpd.leases
+		[ "$up" = on ] && [ -f "$lf" ] && maps="$(grep -c ":$DEVICE_IP:" "$lf" 2>/dev/null)"
+		fwd="$(uci -q show firewall 2>/dev/null | grep -c "dest_ip='$DEVICE_IP'")"
+	fi
+	body="$(
+		case "$cls" in
+			public) printf 'ok\tYour router has a public internet address of its own, and an outside server sees you at that same address. Nothing between you and the internet is translating addresses.\n' ;;
+			unseen) printf 'ok\tYour router has a public internet address.\nnote\tAn outside server could not be asked which address it sees you as, so a shared address at your ISP cannot be ruled out.\n' ;;
+			private) printf 'warn\tYour router has a private internet address, so another router sits in front of this one, usually the box your ISP supplied, and translates addresses a second time: double NAT. Put that box in modem or bridge mode, or set its DMZ to this router. If its DMZ already points here, games may be fine, and this check cannot see that.\n' ;;
+			cgnat) printf 'warn\tYour ISP gives your router an address it shares between customers (carrier-grade NAT). Nothing can be opened from your side. Ask your ISP for a public IPv4 address of your own: many give one on request, some charge for it.\n' ;;
+			shared) printf 'warn\tYour router has a public-looking address, but an outside server sees you at a different one, so something beyond your router is translating addresses. That is usually your ISP sharing addresses: ask for a public IPv4 address of your own. A VPN running on the router gives the same result.\n' ;;
+			*) printf 'warn\tThe internet port has no IPv4 address, so there was nothing to check. See Tools, Checks, Check MatchWatch is working.\n' ;;
+		esac
+		if ! is_ipv4 "$DEVICE_IP"; then printf 'note\tNo gaming device is chosen, so whether ports are opened for it was not checked. Choose one on the Settings tab.\n'
+		else
+			[ "$maps" -gt 0 ] && printf 'ok\tUPnP is running and your gaming device holds %s port mapping(s) right now.\n' "$maps"
+			[ "$fwd" -gt 0 ] && printf 'ok\t%s port forward(s) in the firewall point at your gaming device.\n' "$fwd"
+			if [ "$maps" = 0 ] && [ "$fwd" = 0 ]; then
+				case "$up" in
+					on) printf 'note\tUPnP is running, but your gaming device holds no port mapping at the moment. A game asks for one when it starts: run this check again with the game open.\n' ;;
+					off) printf 'warn\tUPnP is installed but not running, and no port forward points at your gaming device, so nothing opens a port when a game asks. Switch it on under Services, UPnP, and in its access list allow only your gaming device.\n' ;;
+					*) printf 'warn\tNothing on this router opens ports for games: UPnP is not installed and no port forward points at your gaming device. Install the UPnP service (the miniupnpd package, with luci-app-upnp for its page), switch it on, and in its access list allow only your gaming device.\n' ;;
+				esac
+			fi
+		fi
+		printf 'note\tOpen, Moderate and Strict are each game'"'"'s own words, and games differ. This is what the router'"'"'s side makes likely, not what a game will show.\n'
+	)"
+	case "$cls" in
+		cgnat|shared) printf 'strict\tLikely Strict or Moderate: your ISP shares your address\n' ;;
+		private) printf 'strict\tLikely Strict or Moderate: two routers in a row\n' ;;
+		none) printf 'unknown\tCould not tell: the internet port has no address\n' ;;
+		*) if [ "$maps" -gt 0 ] || [ "$fwd" -gt 0 ]; then printf 'open\tLikely Open\n'
+		   elif [ "$up" = on ]; then printf 'open\tLikely Open while a game is running\n'
+		   elif ! is_ipv4 "$DEVICE_IP"; then printf 'unknown\tYour address is your own; port opening was not checked\n'
+		   else printf 'moderate\tLikely Moderate: nothing opens ports for your games\n'; fi ;;
+	esac
+	printf '%s\n' "$body"
+}
+cmd_nat() { # nothing: print it. job: start it in the background and print the job number (the dashboard)
+	local id f="$RUN/www/nat.json"
+	if [ "$1" != job ]; then
+		nat_check | awk -F'\t' 'NR == 1 { print "  " $2; print ""; next } { printf "  %-5s %s\n", ($1 == "warn" ? "CHECK" : $1), $2 }'
+		return 0
+	fi
+	mkdir -p "$RUN/www"
+	id="$(date +%s)$$"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( nat_check | awk -F'\t' -v id="$id" -v ts="$(date +%s)" '
+		{ gsub(/["\\]/, " ") }
+		NR == 1 { printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"verdict\":\"%s\",\"head\":\"%s\",\"lines\":[", id, ts, $1, $2; next }
+		{ printf "%s{\"l\":\"%s\",\"t\":\"%s\"}", (n++ ? "," : ""), $1, $2 }
+		END { print "]}" }' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+	echo "$id"
+}
+
+# ---- are QoSmate's speeds right? (0.37.0)
+# QoSmate does the prioritising; this only reads what the last forty matches recorded and says what they
+# show. A limit set too high does not show in cake's own counters (the queue then forms in the modem, past
+# cake), so the test is the line itself: were matches played while the line was busy any rougher than the
+# rest? The game's own queue backing up is a different fault, and that one cake does show.
+cmd_qosadvice() {
+	local why own
+	why="$(mm_why)"
+	case "$why" in
+		noqos) echo "QoSmate is not installed, so there are no speed limits to judge. It is a separate package that prioritises traffic on OpenWrt."; return 0 ;;
+		disabled) echo "QoSmate is installed but switched off, so no speed limit is in force."; return 0 ;;
+	esac
+	own="$(mm_own)"
+	ls "$DATA"/matches/*.json 2>/dev/null | sort | tail -n 40 | while read -r f; do head -c 4000 "$f" 2>/dev/null | head -n 1; echo; done | awk -v own="$own" '
+		function num(k,   v) { if (match($0, "\"" k "\":-?[0-9.]+")) { v = substr($0, RSTART, RLENGTH); sub(/.*:/, "", v); return v + 0 } return -1 }
+		function qpk(side,   s) { if (match($0, "\"" side "\":\\{\"pkts\":[0-9]+,\"drops\":[0-9]+,\"marks\":[0-9]+,\"peak\":[0-9.]+")) { s = substr($0, RSTART, RLENGTH); sub(/.*:/, "", s); return s + 0 } return -1 }
+		BEGIN { split(own, r, " "); RU = r[1] / 1000; RD = r[2] / 1000 }
+		$0 == "" { next }
+		{ nj = num("nearjit"); wp = num("wanpeak"); wu = num("wanuppeak"); qu = qpk("up"); qd = qpk("down")
+		  if (qu >= 0) { K++; q = (qd > qu) ? qd : qu; if (q > QP) QP = q; if (q >= 5) B++ }
+		  if (nj < 0 || wp < 0) next
+		  M++
+		  ld = (RD > 0 && wp >= 0.7 * RD); lu = (RU > 0 && wu >= 0.7 * RU)
+		  if (ld || lu) { L++; JL += nj; if (ld) LD++; if (lu) LU++ }
+		  else if ((RD <= 0 || wp < 0.3 * RD) && (RU <= 0 || wu < 0.3 * RU)) { Q++; JQ += nj } }
+		END {
+			if (RU <= 0 && RD <= 0) { print "QoSmate has no speed limit in force that MatchWatch can read, so there is nothing to judge."; exit }
+			printf "QoSmate holds your line to %.0f Mbit down and %.0f Mbit up. This looks at your last %d matches.\n\n", RD, RU, M + 0
+			if (M < 5) print "Not enough yet: this needs at least five matches with a measurement of your line."
+			else if (L < 3) printf "Nothing to judge the limits by yet. In only %d of those matches did your line reach 70%% of its limit. On a quiet line the limit makes no difference, so the rest cannot show whether it is set right. To find out, play a match while something large downloads, then look here again.\n", L
+			else if (Q < 3) printf "In %d matches your line reached 70%% of its limit, but too few were played on a quiet line to compare them with.\n", L
+			else {
+				jl = JL / L; jq = JQ / Q
+				if (jl >= jq + 2 && jl >= jq * 1.5) printf "CHECK  Your line was rougher in the matches where it got busy: its jitter averaged %.1f ms over the %d where it reached 70%% of its limit, against %.1f ms over the %d where it stayed under 30%%. The limit is not holding the queue. In QoSmate, lower the %s rate by 5 to 10%% and compare over the next matches.\n", jl, L, jq, Q, (LU > LD ? "upload" : "download")
+				else printf "The limits look right: in %d matches your line reached 70%% of its limit, and it was as steady in those as in the %d where it stayed quiet (%.1f ms of jitter against %.1f ms). A short burst in a long match weighs little here, so take this as a sign, not proof.\n", L, Q, jl, jq
+			}
+			print ""
+			if (K < 5) print "The queue QoSmate keeps for your game: too few matches have its record yet (cake modes only)."
+			else if (B * 3 >= K) printf "CHECK  The queue QoSmate keeps for your game backed up in %d of %d matches, by up to %.0f ms. Something bulky is riding in that queue with the game. If your rules prioritise everything from your gaming device, a download or a video call on that device shares the game'"'"'s queue.\n", B, K, QP
+			else printf "The queue QoSmate keeps for your game never backed up: %.1f ms at most over %d matches.\n", QP, K
+			print ""
+			print "What this cannot tell you: whether the limits are lower than they need to be. Matches only show a limit that is too high."
+		}'
+}
 cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
 	local id f="$RUN/www/linetest.json" busy="$RUN/linetest.busy"
 	mkdir -p "$RUN/www"
@@ -2360,6 +2576,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		testalert) cmd_testalert ;;
 		log) cmd_log ;;
 		linetest) cmd_linetest ;;
+		nat) cmd_nat job ;;
+		qosadvice) cmd_qosadvice ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
 		trace) cmd_trace "$arg" ;;
@@ -2688,6 +2906,7 @@ CGI
 stop_children() {
 	local d f
 	kill $TPID $HPID $APID $UPID $MPID $WPID 2>/dev/null
+	net_off force >/dev/null 2>&1
 	# say so for the dashboard, once the engine has gone and cannot write over it
 	[ -n "$APID" ] && wait "$APID" 2>/dev/null
 	if [ -d "$RUN/www" ]; then
@@ -2714,6 +2933,7 @@ cmd_run() {
 	: > "$RUN/marks"
 	touch "$DATA/sessions.tsv" "$DATA/blocklist"
 	rm -f "$RUN/wan.if"
+	net_off force >/dev/null 2>&1          # counters left by a service that did not stop cleanly
 	find_ifaces; build_filter
 	apply_blocklist
 	# match mode: start from QoSmate's own limits, and lift them only once a minute has passed with no match
@@ -2870,6 +3090,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch regions [measure] ping every region the game's host has a datacentre in
   matchwatch mark              flag this moment ("I felt that"); same as the dashboard button
   matchwatch qos               check the game is in QoSmate's top class (run during a match)
+  matchwatch qos advice        what your matches say about QoSmate's speed limits
+  matchwatch nat               what the router's side makes likely for your NAT type, and why
   matchwatch device [<ip>|all] show the devices on your network and choose which one to watch
   matchwatch qos fix | unfix   add (or remove) QoSmate rules that put your gaming device's UDP in the top class
   matchwatch block <ip> [days] block a server (default $BLOCK_DAYS days, 0 = until unblocked)
@@ -2924,7 +3146,7 @@ case "$1" in
 	_action) shift; cmd_action "$@" ;;
 	_migrate) cmd_migrate ;;
 	mark) cmd_mark ;;
-	qos) cmd_qos "$2" ;;
+	qos) if [ "$2" = advice ]; then cmd_qosadvice; else cmd_qos "$2"; fi ;;
 	block) shift; cmd_block "$@" ;;
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
@@ -2941,6 +3163,7 @@ case "$1" in
 	_updatetick) update_due && { update_note; export_json; } ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
+	nat) cmd_nat ;;
 	clear-history) cmd_clear_history ;;
 	forget) cmd_forget "$2" "$3" ;;
 	share) shift; cmd_share "$@" ;;
@@ -3636,6 +3859,9 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		close(RUN "/probe." F_sid[f] "/hops.json")
 		if (HOPJ !~ /^\[.*\]$/) HOPJ = ""
 		close(RUN "/probe." F_sid[f] "/qm.json")
+		NETJ = ""; if ((getline NETJ < (RUN "/probe." F_sid[f] "/net.json")) <= 0) NETJ = ""
+		close(RUN "/probe." F_sid[f] "/net.json")
+		if (NETJ !~ /^\{.*\}$/) NETJ = ""
 		TRN = 0
 		while ((getline trl < (RUN "/probe." F_sid[f] "/trace")) > 0) if (trl ~ /^ *[0-9]+ /) TR[++TRN] = clean(trl)
 		close(RUN "/probe." F_sid[f] "/trace")
@@ -3862,6 +4088,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		if (QM != "") dj = dj ",\"qm\":" QM
 		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
+		if (NETJ != "") dj = dj ",\"net\":" NETJ
 		if (PS["hop_note"] != "") dj = dj ",\"hopnote\":" js(PS["hop_note"])
 		dj = dj ",\"marks\":["
 		for (i = 1; i <= M_n[f] + 0; i++) dj = dj (i > 1 ? "," : "") "{\"t\":" M_t[f, i] ",\"k\":" js(M_kind[f, i]) ",\"x\":" js(M_txt[f, i]) "}"
@@ -4746,7 +4973,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos log linetest trace shareexport updatecheck"
+READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice"
 WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart"
 
 reply() { # ok(0|1) text
@@ -4880,7 +5107,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.36.2", reloading = false;
+var BUILT = "0.37.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -5738,6 +5965,54 @@ function kv(pairs) {
 	pairs.forEach(function (p) { if (!p) return; dl.appendChild(h("dt", null, p[0], p[2] ? h("small", p[2]) : null)); dl.appendChild(h("dd", p[1])); });
 	return dl;
 }
+// Who else was using the line during the match. The router counted each device's traffic every five
+// seconds; this sets that beside the game's own timing, second by second, and says whether the game was
+// any worse while a device was busy. It is a comparison, not a guess: a busy device that changed nothing is said so.
+function netBlock(m) {
+	var n = m.net;
+	if (!n || !n.devs) return null;
+	var b = h("div", null, h("h2", "Your network during this match"));
+	if (n.why === "offload") b.appendChild(h("p", { cls: "note mid", text: "Flow offloading is switched on in the router's firewall. It carries most traffic past the point where MatchWatch counts it, so the figures here miss most of what each device used." }));
+	if (!n.devs.length) {
+		b.appendChild(h("p", { cls: "note", text: "Nothing else on your network was busy. No device used more than a little of your line during this match (under 2 Mbit down and 0.5 Mbit up)." }));
+		return b;
+	}
+	var step = n.step || 5, td = m.tl_d || [], tp = m.tl_p || [], off = (n.t0 || m.t0) - m.t0;
+	// the game's timing in sample i: how late the server's slowest update was, and the ping, averaged over those seconds
+	function span(arr, i, scale) {
+		var a = Math.round((off + (i - 1) * step) * scale), z = Math.round((off + i * step) * scale), s = 0, c = 0, j;
+		for (j = Math.max(0, a); j < z && j < arr.length; j++) if (arr[j] > 0) { s += arr[j]; c++; }
+		return c ? s / c : null;
+	}
+	var ps = td.length ? tp.length / td.length : 1;
+	function avg(list) { var s = 0, c = 0; list.forEach(function (x) { if (x != null) { s += x; c++; } }); return c ? s / c : null; }
+	var t = table([["Device"], ["Download", "num"], ["Upload", "num"], ["Busy for", "num"]]), says = [];
+	n.devs.forEach(function (d) {
+		var busy = [], quiet = [], i, pu = 0, pd = 0, su = 0, sd = 0;
+		for (i = 1; i <= n.n; i++) {
+			var u = d.up[i - 1] || 0, dn = d.dn[i - 1] || 0;
+			if (u >= 0.5 || dn >= 2) { busy.push(i); su += u; sd += dn; if (u > pu) pu = u; if (dn > pd) pd = dn; } else quiet.push(i);
+		}
+		if (!busy.length) return;
+		var who = d.self ? "Your gaming device (the game included)" : (d.name || d.ip);
+		t.lastChild.appendChild(row([[who + (d.name && !d.self && d.ip !== "v6" ? " (" + d.ip + ")" : "")], [pd >= 0.5 ? fmt(sd / busy.length, 1) + " Mbit, peak " + fmt(pd, 0) : "Hardly any", "num"], [pu >= 0.5 ? fmt(su / busy.length, 1) + " Mbit, peak " + fmt(pu, 0) : "Hardly any", "num"], [mins(busy.length * step), "num"]]));
+		var what = pu >= 0.5 && su * 4 >= sd ? "uploading at about " + fmt(su / busy.length, 1) + " Mbit" : "downloading at about " + fmt(sd / busy.length, 1) + " Mbit";
+		if (busy.length < 3) return;
+		if (quiet.length < 3) { says.push([0, who + " was busy all through this match (" + what + "), so there is no quiet stretch to compare it with."]); return; }
+		var lb = avg(busy.map(function (i) { return span(td, i, 1); })), lq = avg(quiet.map(function (i) { return span(td, i, 1); }));
+		var pb = avg(busy.map(function (i) { return span(tp, i, ps); })), pq = avg(quiet.map(function (i) { return span(tp, i, ps); }));
+		var late = lb != null && lq != null && lb >= lq + 5 && lb >= lq * 1.5, ping = pb != null && pq != null && pb >= pq + 5 && pb >= pq * 1.3;
+		if (late || ping) says.push([1, "While " + who + " was " + what + " (" + mins(busy.length * step) + " of this match), " +
+			(late ? "the game's updates arrived " + fmt(lb, 0) + " ms late on average, against " + fmt(lq, 0) + " ms the rest of the time" : "") + (late && ping ? ", and " : "") +
+			(ping ? "your ping was " + fmt(pb, 0) + " ms, against " + fmt(pq, 0) + " ms the rest of the time" : "") + "."]);
+		else says.push([0, who + " was " + what + " for " + mins(busy.length * step) + ", and the game's timing was the same with and without it."]);
+	});
+	says.sort(function (x, y) { return y[0] - x[0]; });
+	says.slice(0, 3).forEach(function (s) { b.appendChild(h("p", { cls: "note" + (s[0] ? " low" : ""), text: s[1] })); });
+	b.appendChild(h("div", { cls: "tablewrap" }, t));
+	b.appendChild(h("p", { cls: "note", text: "Counted on the router every five seconds while the match ran. A device counts as busy above 2 Mbit down or 0.5 Mbit up. This changes no score." }));
+	return b;
+}
 // what QoSmate's queues did during the match: the game's own queue, and everything else on the line
 function qmBlock(m) {
 	var q = m.qm;
@@ -5853,6 +6128,7 @@ function pageMatch(id) {
 			m.lanping != null ? ["Router to PC", fmt(m.lanping, 2) + " ms"] : ["Router to PC", "n/a", "The PC does not answer ping"]]));
 		cols.appendChild(b);
 		view.appendChild(cols);
+		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
@@ -6371,6 +6647,18 @@ function pageTools() {
 				lineOut.appendChild(h("div", { cls: "tablewrap" }, t));
 			});
 		});
+		var natOut = h("div"), natBtn = h("button", { type: "button", text: "Check my NAT" });
+		natBtn.addEventListener("click", function () {
+			natOut.textContent = "";
+			job(natBtn, "nat", null, "nat.json", function (r) {
+				natOut.appendChild(h("p", { cls: "lede " + (r.verdict === "open" ? "ok" : r.verdict === "moderate" ? "mid" : r.verdict === "strict" ? "low" : ""), text: r.head || "No result." }));
+				var ul = h("ul", { cls: "natlist" });
+				(r.lines || []).forEach(function (x) { ul.appendChild(h("li", { cls: x.l === "warn" ? "low" : x.l === "ok" ? "ok" : "", text: x.t })); });
+				natOut.appendChild(ul);
+			});
+		});
+		view.appendChild(tool("NAT type", "Says what your router's side makes likely for the NAT type games report, and why. It looks at whether your internet address is really your own, whether another router sits in front of this one, and whether anything opens ports for your gaming device. It asks one outside server which address it sees you as, changes nothing, and shows no address.",
+			h("div", { cls: "actions" }, natBtn), natOut));
 		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
 			h("div", { cls: "actions" }, lineBtn), lineOut));
 
@@ -6509,6 +6797,11 @@ function pageTools() {
 					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
 				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet. " + (mm.whytext || "QoSmate must be switched on and in one of its cake modes.") : "Off: QoSmate's limits are on all the time" + (mm.up ? ", " + (mm.down ? mbit(mm.down) + " down and " : "") + mbit(mm.up) + " up." : ".") }),
 				mm.can === false ? null : mmSpeeds(mm, again)));
+		}
+		if (hasQos && !RO) {
+			var qaOut = outBox();
+			view.appendChild(tool("Are my QoSmate speeds right?", "Looks at what your last forty matches recorded and says what they show about QoSmate's speed limits: whether matches played on a busy line were rougher than the rest, and whether the queue QoSmate keeps for your game ever backed up. QoSmate does the prioritising; this only reads your match records and changes nothing.",
+				h("div", { cls: "actions" }, act("Look at my matches", "qosadvice", null, { done: qaOut.show })), qaOut));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
@@ -6706,6 +6999,9 @@ td .stayform { max-width: 420px; }
 .pingform label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); flex: 0 1 130px; }
 .pingform label input { min-width: 0; width: 100%; flex: none; }
 .pingsay { min-height: 1.4em; margin-top: 10px; }
+.natlist { margin: 6px 0 0; padding-left: 20px; max-width: 70ch; }
+.natlist li { margin: 0 0 8px; color: var(--muted); }
+.natlist li.ok { color: var(--ink); } .natlist li.low { color: var(--bad); }
 /* the service row: a light and a word, so the state is not carried by colour alone */
 .svc { display: flex; align-items: center; gap: 9px; margin: 2px 0 12px; font-weight: 700; }
 .svc::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }

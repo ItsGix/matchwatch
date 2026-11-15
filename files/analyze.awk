@@ -674,6 +674,9 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		close(RUN "/probe." F_sid[f] "/hops.json")
 		if (HOPJ !~ /^\[.*\]$/) HOPJ = ""
 		close(RUN "/probe." F_sid[f] "/qm.json")
+		NETJ = ""; if ((getline NETJ < (RUN "/probe." F_sid[f] "/net.json")) <= 0) NETJ = ""
+		close(RUN "/probe." F_sid[f] "/net.json")
+		if (NETJ !~ /^\{.*\}$/) NETJ = ""
 		TRN = 0
 		while ((getline trl < (RUN "/probe." F_sid[f] "/trace")) > 0) if (trl ~ /^ *[0-9]+ /) TR[++TRN] = clean(trl)
 		close(RUN "/probe." F_sid[f] "/trace")
@@ -900,6 +903,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		if (QM != "") dj = dj ",\"qm\":" QM
 		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
+		if (NETJ != "") dj = dj ",\"net\":" NETJ
 		if (PS["hop_note"] != "") dj = dj ",\"hopnote\":" js(PS["hop_note"])
 		dj = dj ",\"marks\":["
 		for (i = 1; i <= M_n[f] + 0; i++) dj = dj (i > 1 ? "," : "") "{\"t\":" M_t[f, i] ",\"k\":" js(M_kind[f, i]) ",\"x\":" js(M_txt[f, i]) "}"

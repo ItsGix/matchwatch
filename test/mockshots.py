@@ -70,6 +70,15 @@ def build(site):
                    marks=[{"t": start + 74 + 90 * k, "k": "server", "x": "server updates stalled: one arrived 249 ms late" if code == "server" else "nothing showed on the network in the six seconds before"} for k in range(marks)],
                    trace=[" 1  198.51.100.1  3.2 ms", " 2  100.64.0.64  3.1 ms", " 3  100.64.0.74  3.7 ms", " 4  192.0.2.180  5.7 ms", " 5  192.0.2.36  5.9 ms", " 6  *", " 7  *", " 8  192.0.2.201  %.1f ms" % (p - 0.4), " 9  %s  %.1f ms" % (ip, p)])
         del det["upnom_"]
+        if code == "route":
+            # an invented household: a television uploading for two minutes while the match went rough, a laptop that changed nothing
+            k = n // 5
+            tv = [round(random.uniform(17, 19), 1) if 20 <= i < 44 else 0 for i in range(k)]
+            det["net"] = {"step": 5, "n": k, "t0": start, "devs": [
+                {"ip": "192.168.1.31", "name": "living-room-tv", "self": False, "up": tv, "dn": [0.4 if x else 0 for x in tv]},
+                {"ip": "192.168.1.44", "name": "laptop", "self": False, "up": [0] * k, "dn": [round(random.uniform(20, 38), 1) if 60 <= i < 100 else 0 for i in range(k)]}]}
+            det["tl_d"] = [x + (random.choice([14, 18, 22, 30]) if 100 <= i < 220 else 0) for i, x in enumerate(det["tl_d"])]
+            det["tl_p"] = [round(x + (random.uniform(14, 22) if 100 <= i < 220 else 0), 1) for i, x in enumerate(det["tl_p"])]
         hs = [{"n": i + 1, "ip": t.split()[1], "sent": 190, "ping": float(t.split()[2]), "jit": 0.3, "loss": 0} for i, t in enumerate(det["trace"]) if "*" not in t][:-1]
         if code == "route":
             for x in hs[3:]: x["jit"], x["loss"] = round(random.uniform(5.5, 8.0), 2), random.choice([6, 7, 9])
@@ -100,7 +109,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.36.2", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.37.0", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Fortnite", "ports": "9000-9100", "kind": "", "hosts": ""}, {"name": "Call of Duty", "ports": "3074,30000-45000", "kind": "", "hosts": "vultr,as20473"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -128,6 +137,10 @@ def build(site):
                                 {"name": "Public server", "ip": "192.0.2.53", "answered": True, "loss": 0, "med": 4.2, "p95": 4.6, "jit": 0.24},
                                 {"name": "Public server", "ip": "192.0.2.99", "answered": True, "loss": 0, "med": 3.9, "p95": 4.4, "jit": 0.22}]}
     tip = sorted(servers, key=lambda x: -x["last"])[0]["ip"]
+    out["nat"] = {"id": "1", "state": "done", "ts": NOW, "verdict": "moderate", "head": "Likely Moderate: nothing opens ports for your games", "lines": [
+        {"l": "ok", "t": "Your router has a public internet address of its own, and an outside server sees you at that same address. Nothing between you and the internet is translating addresses."},
+        {"l": "warn", "t": "Nothing on this router opens ports for games: UPnP is not installed and no port forward points at your gaming device. Install the UPnP service (the miniupnpd package, with luci-app-upnp for its page), switch it on, and in its access list allow only your gaming device."},
+        {"l": "note", "t": "Open, Moderate and Strict are each game's own words, and games differ. This is what the router's side makes likely, not what a game will show."}]}
     out["trace"] = {"id": "1", "state": "done", "ts": NOW, "ip": tip, "hops": ["1 198.51.100.1 3.2 ms", "2 100.64.0.64 3.1 ms", "3 100.64.0.74 3.7 ms", "4 192.0.2.180 5.7 ms", "5 192.0.2.36 5.9 ms", "6 *", "7 192.0.2.201 5.8 ms", "8 %s 6.2 ms" % tip]}
     for name, j in out.items(): json.dump(j, open(f"{data}/{name}.json", "w"))
     open(site + "/matchwatch/index.html", "w", encoding="utf-8", newline="\n").write("""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>matchwatch</title>
@@ -186,12 +199,13 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
   line 9: a port that cannot be read`;
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
-		if (p.action === "linetest" || p.action === "trace") out = "1";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.36.2.";
+		if (p.action === "linetest" || p.action === "trace" || p.action === "nat") out = "1";
+		if (p.action === "qosadvice") out = "QoSmate holds your line to 60 Mbit down and 18 Mbit up. This looks at your last 14 matches.\\n\\nThe limits look right: in 4 matches your line reached 70%% of its limit, and it was as steady in those as in the 9 where it stayed quiet (0.4 ms of jitter against 0.3 ms). A short burst in a long match weighs little here, so take this as a sign, not proof.\\n\\nThe queue QoSmate keeps for your game never backed up: 0.6 ms at most over 14 matches.\\n\\nWhat this cannot tell you: whether the limits are lower than they need to be. Matches only show a limit that is too high.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.37.0.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the Tools screenshots: press what a visitor would, so each picture shows a result
-setTimeout(function () { Array.prototype.forEach.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { if (["Choose what to share", "Test my line", "Trace the route now", "Check for an update"].indexOf(x.textContent) >= 0 || (x.textContent === "wrong game?" && /shot=wronggame/.test(location.search))) x.click(); }); }, 3000);
+setTimeout(function () { Array.prototype.forEach.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { if (["Choose what to share", "Test my line", "Trace the route now", "Check for an update", "Check my NAT", "Look at my matches"].indexOf(x.textContent) >= 0 || (x.textContent === "wrong game?" && /shot=wronggame/.test(location.search))) x.click(); }); }, 3000);
 </script></body></html>""" % (RES, RES))
     global OUTSIDE
     OUTSIDE = [m for m in hist if m["cc"] == "ES"][0]["start"]
