@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.38.1 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.38.2 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -26,9 +26,9 @@ Half a minute into a match, usually while you are still in the lobby or the warm
 
 ### It shows who to blame, live and afterwards
 
-A see-through strip of three lights for a stream or a second screen, and a picture of any match to share, with the scores and the timing and no address.
+A see-through bar for a stream or a second screen, showing where you are playing, your ping, and the server, route, line and PC each with its own line, and a picture of any match to share, with the scores and the timing and no address.
 
-![The overlay: server and route, ping, and your PC](docs/overlay.png)
+![The overlay: where you are playing, ping, and a line for each of the four areas](docs/overlay.png)
 
 ![A picture of a match, made with one press](docs/card.png)
 
@@ -149,7 +149,16 @@ The dashboard fetches fresh data every fifteen seconds and redraws only when som
 
 **The dashboard without login.** Turn on "Dashboard without login" in Settings to also serve it at `http://<router address>/matchwatch/` to anyone on your network, for a phone or a second screen. That copy is view only: its one button is "I felt that", and nothing can be blocked or changed from it. It is off by default.
 
-**The overlay.** `http://<router address>/matchwatch/#/overlay` shows only a strip of three lights and your ping, updated every second, on a see-through background: **Server and route**, **Ping** and **Your PC**. Each light is the last five seconds, so it turns amber or red the moment something goes wrong and clears again. Server and route share one light because which of the two it was is only known once the match has ended. In OBS, add a Browser source with that address, about 760 wide and 60 high. On a phone or a second screen, just open the address. It needs the dashboard without login switched on; Tools, Data and settings shows the exact address.
+**The overlay.** `http://<router address>/matchwatch/#/overlay` shows only a compact bar on a see-through background, updated every second. You choose what is on it under Tools, Data and settings, Live overlay, and copy the address it builds: where you are playing (the city and country, never the address), the game, your ping, the four areas, a line for each, marks for trouble, this server's rating and the match time, in three sizes, and it can hide itself between matches. The choices travel in the address, so two scenes can use different bars.
+
+  - **The four areas** are Server, Route, Line and PC, in two rows of two. Each has a light and a small line of its last minute; the light and the line turn amber or red while a problem lasts.
+  - **Each area has its own tick box.** Untick any of Server, Route, Line or PC to leave its row out; with one or two left they stack in a single column. If the Line light stays grey, your ISP's first hop answers no pings, so there is nothing to measure there: untick Line, and line faults show under Route instead.
+  - **Every part is optional.** Where you are playing, the game, the ping, the lights, the lines, the marks, the rating and the match time each have a tick box, and the bar closes up around whatever is left.
+  - **The marks** under a line stay for the rest of the minute: green for a small blip, amber for one you would feel, red for a bad one. A viewer who looked away can still see what happened.
+  - **How a fault is placed.** It is given to the nearest thing that explains it: a jump in the ping to your ISP's first hop is the line; extra ping beyond that hop is the route; late updates with a steady ping are the server; a pause in what your PC sends is the PC. It is a moment's best guess. The match report, which has the whole match to judge from, is the final word, and the two can disagree. If your ISP's first hop does not answer pings, the Line light stays grey and its faults show as Route.
+  - **How far to trust it.** The PC row is the surest: the router sees every packet your PC sends. The Line row is sound when your ISP's first hop answers. Telling the server from the route is the weakest part: the ping is taken once a second, so a route hiccup shorter than that looks like the server, and some servers ration their ping replies. The lines between green, amber and red are first guesses that have not yet been checked against a real rough match.
+  - **The address, by hand.** `#/overlay?show=place,game,ping,lights,lines,marks,rate,time&areas=server,route,pc&size=s` (sizes `s`, `m`, `l`; `&idle=0` hides the bar between matches). Leave out a word to leave out that part.
+  - In OBS, add a Browser source with the address, about 560 wide and 70 high. On a phone or a second screen, just open it. It needs the dashboard without login switched on.
 
 ## How a match is judged
 

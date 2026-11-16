@@ -77,12 +77,24 @@ td .stayform { max-width: 420px; }
 .mw.overlay { background: transparent; padding: 0; min-height: 0; border: 0; box-shadow: none; }
 .mw.overlay header, .mw.overlay #toast { display: none; }
 .mw.overlay main { padding: 6px; margin: 0; max-width: none; }
-.ov { display: inline-flex; flex-wrap: wrap; gap: 6px 22px; align-items: center; padding: 12px 20px; border-radius: 999px; background: rgba(8, 22, 26, 0.82); color: #e9f3f2; font-size: 1.05rem; }
-.ovl { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; }
-.ovl i { width: 14px; height: 14px; border-radius: 50%; background: #8fa3a8; flex: none; }
-.ovl b { font-weight: 700; } .ovl em { font-style: normal; opacity: 0.8; }
-.ovl.ok i { background: #5fd0a0; } .ovl.mid i { background: #e8b64c; } .ovl.bad i { background: #f0705f; box-shadow: 0 0 0 4px rgba(240, 112, 95, 0.3); }
-.ovl.bad b { color: #f0705f; } .ovl.mid b { color: #e8b64c; }
+.ov { display: inline-flex; align-items: stretch; border-radius: 0.5em; overflow: hidden; background: rgba(12, 14, 17, 0.88); color: #f1f1ee; font-size: 12px; line-height: 1.2; white-space: nowrap; }
+.ov.sz-s { font-size: 10px; } .ov.sz-l { font-size: 15px; }
+.ovc { display: inline-flex; align-items: center; gap: 0.45em; padding: 0.42em 0.72em; }
+.ovc.head { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0.05em; background: rgba(255, 255, 255, 0.07); }
+.ovc.head b { font-weight: 700; } .ovc small { font-size: 0.86em; color: #a9adb0; }
+.ovc.ping { align-items: baseline; gap: 0.25em; } .ovc.ping b { font-size: 1.5em; font-weight: 700; }
+.ovc.mut { color: #a9adb0; }
+.ovg { display: inline-grid; grid-template-columns: auto auto; align-content: center; gap: 0.1em 0.3em; padding: 0.3em 0.5em; }
+.ovg.one { grid-template-columns: auto; }
+.ova { display: inline-flex; align-items: center; gap: 0.45em; padding: 0 0.3em; }
+.ova i { width: 0.6em; height: 0.6em; border-radius: 50%; background: #8fa3a8; flex: none; }
+.ova > span { min-width: 3.1em; }
+.ova > span { color: #f1f1ee; } .ova.ok i { background: #5fd0a0; } .ova.mid i { background: #e8b64c; } .ova.bad i { background: #f0705f; box-shadow: 0 0 0 0.2em rgba(240, 112, 95, 0.3); }
+.ova.mid > span { color: #e8b64c; } .ova.bad > span { color: #f0705f; font-weight: 700; }
+.ova canvas { width: 5.8em; height: 1.66em; display: block; }
+.ovform { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 10px; font-size: 0.92rem; }
+.ovform label { display: inline-flex; align-items: center; gap: 6px; }
+input.ovaddr { width: 100%; max-width: 640px; margin: 0 0 10px; font-size: 0.85rem; }
 .earlywarn { color: var(--bad); }
 .cardrow { margin: 14px 0 4px; }
 a.btnlink { align-self: center; }

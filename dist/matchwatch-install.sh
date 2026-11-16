@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.38.1"
+VERSION="0.38.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -3861,6 +3861,11 @@ function rough_early(f, kd,    all, lost, late, frz, bad, why) {
 	print "EARLY " F_sid[f] " " why
 	if (!REPLAY) system(SELF " _early " F_rip[f] " '" why "' >/dev/null 2>&1 &")
 }
+function tnl(f,    n, cnt, start, j, i, o) { # the line's ping over the same seconds as tl_p
+	n = F_tpn[f] + 0; cnt = (n < TL) ? n : TL; start = (n < TL) ? 0 : n % TL; o = ""
+	for (j = 0; j < cnt; j++) { i = (start + j) % TL; o = o (j ? "," : "") (TN[f, i] + 0) }
+	return o
+}
 function wan_find(    l, f) {
 	if (WANDEV != "") return
 	f = RUN "/wan.if"
@@ -3942,7 +3947,8 @@ function drop_flow(f,    d, k, i, di) {
 	for (i = 1; i <= FT_n[f] + 0; i++) { delete FT_d[f, i]; delete FT_u[f, i] }
 	for (i = 1; i <= FTP_n[f] + 0; i++) delete FT_p[f, i]
 	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]; delete F_unn[f]
-	delete F_early[f]; delete F_earlytxt[f]
+	delete F_early[f]; delete F_earlytxt[f]; delete F_near[f]; delete F_navg[f]
+	for (i = 0; i < TL; i++) delete TN[f, i]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -4432,8 +4438,14 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		if ((getline pv < pf) > 0) F_ping[f] = pv
 		close(pf)
 		if (F_ping[f] != "" && F_ping[f] != "x") F_pavg[f] = (F_pavg[f] > 0) ? F_pavg[f] * 0.97 + F_ping[f] * 0.03 : F_ping[f] + 0
+		# the first hop inside the ISP, pinged all through the match: live, it tells a line fault from a route fault
+		pf = RUN "/probe." F_sid[f] "/near.last"; pv = ""
+		if ((getline pv < pf) > 0) F_near[f] = pv
+		close(pf)
+		if (F_near[f] != "" && F_near[f] != "x") F_navg[f] = (F_navg[f] > 0) ? F_navg[f] * 0.97 + F_near[f] * 0.03 : F_near[f] + 0
 		i = (F_tpn[f] % TL); F_tpn[f]++
 		TP[f, i] = (F_ping[f] == "" || F_ping[f] == "x") ? -1 : F_ping[f] + 0
+		TN[f, i] = (F_near[f] == "" || F_near[f] == "x") ? -1 : F_near[f] + 0
 		if (FTP_n[f] < FTMAX) FT_p[f, ++FTP_n[f]] = TP[f, i]
 		loc = ""; split("", ga)
 		if (F_geo[f] != "") { split(F_geo[f], ga, "\t"); loc = clean(ga[3]) (ga[1] != "" ? ", " ga[1] : "") }
@@ -4451,7 +4463,7 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		for (j = 0; j < cnt; j++) { i = (start + j) % TL; s = s (j ? "," : "") (TL_d[f, i] + 0) }
 		s = s "],\"tl_u\":["
 		for (j = 0; j < cnt; j++) { i = (start + j) % TL; s = s (j ? "," : "") (TL_u[f, i] + 0) }
-		s = s "],\"ping\":" ((F_ping[f] == "" || F_ping[f] == "x") ? "null" : F_ping[f] + 0) ",\"tl_p\":["
+		s = s "],\"ping\":" ((F_ping[f] == "" || F_ping[f] == "x") ? "null" : F_ping[f] + 0) ",\"pavg\":" r2(F_pavg[f] + 0) ",\"near\":" ((F_near[f] == "" || F_near[f] == "x") ? "null" : F_near[f] + 0) ",\"navg\":" r2(F_navg[f] + 0) ",\"tl_n\":[" tnl(f) "],\"tl_p\":["
 		n = F_tpn[f] + 0; cnt = (n < TL) ? n : TL; start = (n < TL) ? 0 : n % TL
 		for (j = 0; j < cnt; j++) { i = (start + j) % TL; s = s (j ? "," : "") (TP[f, i] + 0) }
 		s = s "],\"marks\":["
@@ -5390,7 +5402,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.38.1", reloading = false;
+var BUILT = "0.38.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6253,7 +6265,7 @@ function kv(pairs) {
 // ---------- the overlay: three lights and the ping, for a stream or a second screen (#/overlay)
 // Each light is the last five seconds, so it turns the moment something goes wrong and clears again.
 // Server and route share one light: which of the two it was is only known once the match has ended.
-var OV = null;
+var OV = null, OVQ = {};
 function pageOverlay() {
 	view.textContent = ""; OV = h("div", { cls: "ov", role: "status" }); view.appendChild(OV);
 	try { document.documentElement.style.background = "transparent"; document.body.style.background = "transparent"; } catch (e) {}
@@ -6261,16 +6273,57 @@ function pageOverlay() {
 }
 function ovPaint() {
 	if (page !== "overlay" || !OV) return;
-	var up = svcState() === "on", s = up ? session() : null;
+	var up = svcState() === "on", s = up ? session() : null, q = OVQ;
+	var show = {}; (q.show || "place,game,ping,lights,lines,marks").split(",").forEach(function (k) { show[k] = 1; });
+	OV.className = "ov sz-" + (/^[sml]$/.test(q.size || "") ? q.size : "m");
 	OV.textContent = "";
-	function light(name, state, val) { OV.appendChild(h("span", { cls: "ovl " + state }, h("i"), h("b", name), val ? h("em", val) : null)); }
-	if (!s) { light(up ? "Waiting for a match" : "MatchWatch is not running", "idle"); return; }
-	function worst(a) { var m = 0, i; a = a || []; for (i = Math.max(0, a.length - 5); i < a.length; i++) if (a[i] > m) m = a[i]; return m; }
-	var d = worst(s.tl_d), u = worst(s.tl_u), base = median(s.tl_p || []), jump = s.ping != null && base ? s.ping - base : 0;
-	light("Server and route", d >= 100 ? "bad" : d >= 40 ? "mid" : "ok", d >= 40 ? Math.round(d) + " ms late" : "steady");
-	light("Ping", s.ping == null ? "idle" : jump >= 25 ? "bad" : jump >= 10 ? "mid" : "ok", s.ping == null ? "n/a" : fmt(s.ping, 0) + " ms");
-	light("Your PC", u >= 100 ? "bad" : u >= 50 ? "mid" : "ok", u >= 50 ? Math.round(u) + " ms pause" : "steady");
-	if (s.early) light("Rough from the start", "bad");
+	function cell(cls) { var c = h("span", { cls: "ovc " + (cls || "") }), k; for (k = 1; k < arguments.length; k++) if (arguments[k]) c.appendChild(arguments[k]); OV.appendChild(c); return c; }
+	if (!s) { if (q.idle !== "0") cell("mut", h("span", up ? "Waiting for a match" : "MatchWatch is not running")); return; }
+	// The last minute of each area, second by second, as "how far from normal": the server's late updates, the
+	// extra ping beyond the ISP, the ping to the ISP's first hop, and the PC's pauses. A second's fault is given
+	// to the nearest thing that explains it and to nothing further out: a jump at the first hop is the line and
+	// not the route; a jump on the way is the route and not the server. 0 calm, 1 a blip, 2 felt, 3 bad.
+	var N = 60, td = (s.tl_d || []).slice(-N), tu = (s.tl_u || []).slice(-N), tp = (s.tl_p || []).slice(-N), tn = (s.tl_n || []).slice(-N);
+	function pad(a) { while (a.length < N) a.unshift(0); return a; }
+	td = pad(td); tu = pad(tu); tp = pad(tp); tn = pad(tn);
+	var nb = s.navg || median(tn), hasN = tn.some(function (v) { return v > 0; });
+	var gap = tp.map(function (v, k) { return v > 0 ? (hasN && tn[k] > 0 ? v - tn[k] : v) : 0; }), gb = median(gap);
+	function sev(v, a, b, c) { return v >= c ? 3 : v >= b ? 2 : v >= a ? 1 : 0; }
+	var vL = tn.map(function (v) { return v > 0 && nb ? Math.max(0, v - nb) : 0; }), sL = vL.map(function (v) { return sev(v, 4, 8, 20); });
+	var vR = gap.map(function (v) { return v > 0 && gb ? Math.max(0, v - gb) : 0; }), sR = vR.map(function (v, k) { return sL[k] >= 2 ? 0 : sev(v, 5, 10, 25); });
+	var sS = td.map(function (v, k) { return sL[k] >= 2 || sR[k] >= 2 ? 0 : sev(v, 15, 40, 100); }), sP = tu.map(function (v) { return sev(v, 25, 50, 100); });
+	function now(a) { var m = 0, k; for (k = N - 5; k < N; k++) if (a[k] > m) m = a[k]; return m >= 3 ? "bad" : m === 2 ? "mid" : "ok"; }
+	var COL = { ok: "#5fd0a0", mid: "#e8b64c", bad: "#f0705f", idle: "#8fa3a8" }, MARK = ["", "#5fd0a0", "#e8b64c", "#f0705f"];
+	if (show.place || show.game) {
+		var gm = liveGame(s).replace(/\.\s*$/, "");
+		cell("head", show.place ? h("b", s.loc || "Locating") : null, show.game && gm ? h("small", gm) : null);
+	}
+	if (show.ping) cell("ping", h("b", s.ping == null ? "n/a" : fmt(s.ping, 0)), h("small", "ms"));
+	if (show.lights || show.lines || show.marks) {
+		// each area can be left out on its own: someone whose ISP answers no pings has no use for a Line row
+		var grid = h("span", { cls: "ovg" }), ar = (q.areas || "server,route,line,pc").split(",");
+		if (ar.length < 3) grid.className = "ovg one";
+		[["Server", td, sS, 130, s.ping == null && !td.length ? "idle" : now(sS)], ["Route", vR, sR, 32, s.ping == null ? "idle" : now(sR)],
+		 ["Line", vL, sL, 26, hasN ? now(sL) : "idle"], ["PC", tu, sP, 130, now(sP)]].forEach(function (a) {
+			if (ar.indexOf(a[0].toLowerCase()) < 0) return;
+			var st = a[4], row = h("span", { cls: "ova " + st }, h("i"), h("span", a[0]));
+			if (show.lines || show.marks) {
+				var cv = h("canvas", { role: "img", "aria-label": a[0] + " over the last minute" }), W = 140, H = 40, g, k;
+				cv.width = W; cv.height = H; row.appendChild(cv); g = cv.getContext("2d");
+				if (show.lines) {
+					g.strokeStyle = COL[st]; g.lineWidth = 3; g.lineJoin = "round"; g.beginPath();
+					for (k = 0; k < N; k++) { var x = k / (N - 1) * W, y = 20 - Math.min(1, a[1][k] / a[3]) * 17; if (k) g.lineTo(x, y); else g.moveTo(x, y); }
+					g.stroke();
+				}
+				if (show.marks) for (k = 0; k < N; k++) if (a[2][k]) { g.fillStyle = MARK[a[2][k]]; g.fillRect(k / (N - 1) * W - 2, H - (8 + a[2][k] * 3), 4, 8 + a[2][k] * 3); }
+			}
+			grid.appendChild(row);
+		});
+		OV.appendChild(grid);
+	}
+	if (show.rate) cell("mut", h("span", s.rep != null ? "Rated " + s.rep : "New server"));
+	if (show.time) { var mm = Math.floor(s.age / 60), ss = Math.floor(s.age % 60); cell("mut", h("span", mm + ":" + (ss < 10 ? "0" : "") + ss)); }
+	if (s.early) cell("ova bad", h("i"), h("span", "Rough from the start"));
 }
 // ---------- a picture of a match to share: the verdict, the four scores and the timing, and no address
 function cardColour(v) { return v == null ? "#8fa3a8" : v >= 85 ? "#5fd0a0" : v >= 60 ? "#e8b64c" : "#f0705f"; }
@@ -7185,10 +7238,25 @@ function pageTools() {
 				mm.can === false ? null : mmSpeeds(mm, again)));
 		}
 		if (!RO) {
-			var ovUrl = location.origin + "/matchwatch/#/overlay", ovBox = outBox();
-			view.appendChild(tool("Live overlay", "Three lights and your ping, updated every second, for a stream or a second screen: server and route, ping, and your PC. A light turns amber or red the moment something goes wrong and clears again. In OBS, add a Browser source with the address shown, about 760 wide and 60 high; its background is see-through. It needs \"This dashboard without login\" switched on in Settings, and works on any device on your network.",
-				h("div", { cls: "actions" }, (function () { var b = h("button", { type: "button", text: "Show the address" }); b.addEventListener("click", function () { ovBox.show(ovUrl + (i.web === false || i.web === 0 ? "\n\nThe page without login is switched off. Switch it on under Settings first." : "")); }); return b; })(),
-					h("a", { href: "#/overlay", text: "Open it here", cls: "btnlink" })), ovBox));
+			// the overlay's parts are chosen here and travel in its address, so two scenes can differ
+			var ovParts = [["place", "Where you're playing", 1], ["game", "Game", 1], ["ping", "Ping", 1], ["lights", "The four areas: server, route, line, PC", 1], ["lines", "A line for each area", 1], ["marks", "Marks for trouble in the last minute", 1], ["rate", "This server's rating", 0], ["time", "Match time", 0]];
+			var ovForm = h("div", { cls: "ovform" }), ovAddr = h("input", { type: "text", readonly: "readonly", cls: "ovaddr", "aria-label": "Overlay address" }), ovOpen = h("a", { href: "#/overlay", text: "Open it here", cls: "btnlink" });
+			var ovSize = h("select", { "aria-label": "Size" }); [["s", "Small"], ["m", "Medium"], ["l", "Large"]].forEach(function (o) { ovSize.appendChild(h("option", { value: o[0], text: o[1] })); }); ovSize.value = "m";
+			var ovIdle = h("input", { type: "checkbox" }), ovBoxes = {}, ovAreas = {}, ovAreaRow = h("div", { cls: "ovform" });
+			var ovMake = function () {
+				var on = ovParts.filter(function (p) { return ovBoxes[p[0]].checked; }).map(function (p) { return p[0]; });
+				var ars = ["server", "route", "line", "pc"].filter(function (k) { return ovAreas[k].checked; });
+				var qs = "?show=" + on.join(",") + (ars.length < 4 ? "&areas=" + ars.join(",") : "") + "&size=" + ovSize.value + (ovIdle.checked ? "&idle=0" : "");
+				ovAddr.value = location.origin + "/matchwatch/#/overlay" + qs; ovOpen.setAttribute("href", "#/overlay" + qs);
+			};
+			ovParts.forEach(function (p) { var c = h("input", { type: "checkbox" }); c.checked = !!p[2]; ovBoxes[p[0]] = c; c.addEventListener("change", ovMake); ovForm.appendChild(h("label", null, c, " " + p[1])); });
+			[["server", "Server"], ["route", "Route"], ["line", "Line"], ["pc", "PC"]].forEach(function (p) { var c = h("input", { type: "checkbox" }); c.checked = true; ovAreas[p[0]] = c; c.addEventListener("change", ovMake); ovAreaRow.appendChild(h("label", null, c, " " + p[1])); });
+			ovForm.appendChild(h("label", null, ovIdle, " Hide it between matches")); ovForm.appendChild(h("label", null, "Size ", ovSize));
+			ovSize.addEventListener("change", ovMake); ovIdle.addEventListener("change", ovMake); ovMake();
+			var ovCopy = h("button", { type: "button", text: "Copy the address" });
+			ovCopy.addEventListener("click", function () { ovAddr.select(); try { if (navigator.clipboard) navigator.clipboard.writeText(ovAddr.value); else document.execCommand("copy"); toast("Copied. Paste it into an OBS Browser source."); } catch (e) { toast("Select the address and copy it by hand.", true); } });
+			view.appendChild(tool("Live overlay", "A compact bar for a stream or a second screen, updated every second. Tick what it should show and copy the address it gives you. In OBS, add a Browser source with that address, about 560 wide and 70 high; its background is see-through. The four areas are a moment's best guess at where a problem is; the match report afterwards is the final word. It needs \"This dashboard without login\" switched on in Settings" + (i.web === false || i.web === 0 ? ", which is off at the moment." : "."),
+				ovForm, h("p", { cls: "note", text: "Which of the four areas to show. Untick Line if its light stays grey: that means your ISP's first hop answers no pings, so there is nothing to measure, and its faults show under Route." }), ovAreaRow, ovAddr, h("div", { cls: "actions" }, ovCopy, ovOpen)));
 		}
 		if (hasQos && !RO) {
 			var qaOut = outBox();
@@ -7219,6 +7287,9 @@ function pageTools() {
 function route(keep) { // keep === true: a redraw with fresh data, so stay where the reader is
 	var parts = (location.hash || "#/").replace(/^#\/?/, "").split("/");
 	page = parts[0] || "live"; pageArg = parts[1] || "";
+	// the overlay's choices ride in its address: #/overlay?show=place,ping,lights&size=s
+	OVQ = {};
+	if (page.indexOf("?") >= 0) { page.split("?")[1].split("&").forEach(function (kv) { var e = kv.split("="); OVQ[e[0]] = decodeURIComponent(e[1] || ""); }); page = page.split("?")[0]; }
 	if (["live", "match", "matches", "servers", "tools", "overlay"].indexOf(page) < 0) page = "live";
 	wrap.classList.toggle("overlay", page === "overlay");
 	if (page === "overlay") { pageOverlay(); return; }
@@ -7401,12 +7472,24 @@ td .stayform { max-width: 420px; }
 .mw.overlay { background: transparent; padding: 0; min-height: 0; border: 0; box-shadow: none; }
 .mw.overlay header, .mw.overlay #toast { display: none; }
 .mw.overlay main { padding: 6px; margin: 0; max-width: none; }
-.ov { display: inline-flex; flex-wrap: wrap; gap: 6px 22px; align-items: center; padding: 12px 20px; border-radius: 999px; background: rgba(8, 22, 26, 0.82); color: #e9f3f2; font-size: 1.05rem; }
-.ovl { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; }
-.ovl i { width: 14px; height: 14px; border-radius: 50%; background: #8fa3a8; flex: none; }
-.ovl b { font-weight: 700; } .ovl em { font-style: normal; opacity: 0.8; }
-.ovl.ok i { background: #5fd0a0; } .ovl.mid i { background: #e8b64c; } .ovl.bad i { background: #f0705f; box-shadow: 0 0 0 4px rgba(240, 112, 95, 0.3); }
-.ovl.bad b { color: #f0705f; } .ovl.mid b { color: #e8b64c; }
+.ov { display: inline-flex; align-items: stretch; border-radius: 0.5em; overflow: hidden; background: rgba(12, 14, 17, 0.88); color: #f1f1ee; font-size: 12px; line-height: 1.2; white-space: nowrap; }
+.ov.sz-s { font-size: 10px; } .ov.sz-l { font-size: 15px; }
+.ovc { display: inline-flex; align-items: center; gap: 0.45em; padding: 0.42em 0.72em; }
+.ovc.head { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0.05em; background: rgba(255, 255, 255, 0.07); }
+.ovc.head b { font-weight: 700; } .ovc small { font-size: 0.86em; color: #a9adb0; }
+.ovc.ping { align-items: baseline; gap: 0.25em; } .ovc.ping b { font-size: 1.5em; font-weight: 700; }
+.ovc.mut { color: #a9adb0; }
+.ovg { display: inline-grid; grid-template-columns: auto auto; align-content: center; gap: 0.1em 0.3em; padding: 0.3em 0.5em; }
+.ovg.one { grid-template-columns: auto; }
+.ova { display: inline-flex; align-items: center; gap: 0.45em; padding: 0 0.3em; }
+.ova i { width: 0.6em; height: 0.6em; border-radius: 50%; background: #8fa3a8; flex: none; }
+.ova > span { min-width: 3.1em; }
+.ova > span { color: #f1f1ee; } .ova.ok i { background: #5fd0a0; } .ova.mid i { background: #e8b64c; } .ova.bad i { background: #f0705f; box-shadow: 0 0 0 0.2em rgba(240, 112, 95, 0.3); }
+.ova.mid > span { color: #e8b64c; } .ova.bad > span { color: #f0705f; font-weight: 700; }
+.ova canvas { width: 5.8em; height: 1.66em; display: block; }
+.ovform { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 10px; font-size: 0.92rem; }
+.ovform label { display: inline-flex; align-items: center; gap: 6px; }
+input.ovaddr { width: 100%; max-width: 640px; margin: 0 0 10px; font-size: 0.85rem; }
 .earlywarn { color: var(--bad); }
 .cardrow { margin: 14px 0 4px; }
 a.btnlink { align-self: center; }

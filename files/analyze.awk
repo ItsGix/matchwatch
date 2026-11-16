@@ -419,6 +419,11 @@ function rough_early(f, kd,    all, lost, late, frz, bad, why) {
 	print "EARLY " F_sid[f] " " why
 	if (!REPLAY) system(SELF " _early " F_rip[f] " '" why "' >/dev/null 2>&1 &")
 }
+function tnl(f,    n, cnt, start, j, i, o) { # the line's ping over the same seconds as tl_p
+	n = F_tpn[f] + 0; cnt = (n < TL) ? n : TL; start = (n < TL) ? 0 : n % TL; o = ""
+	for (j = 0; j < cnt; j++) { i = (start + j) % TL; o = o (j ? "," : "") (TN[f, i] + 0) }
+	return o
+}
 function wan_find(    l, f) {
 	if (WANDEV != "") return
 	f = RUN "/wan.if"
@@ -500,7 +505,8 @@ function drop_flow(f,    d, k, i, di) {
 	for (i = 1; i <= FT_n[f] + 0; i++) { delete FT_d[f, i]; delete FT_u[f, i] }
 	for (i = 1; i <= FTP_n[f] + 0; i++) delete FT_p[f, i]
 	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]; delete F_unn[f]
-	delete F_early[f]; delete F_earlytxt[f]
+	delete F_early[f]; delete F_earlytxt[f]; delete F_near[f]; delete F_navg[f]
+	for (i = 0; i < TL; i++) delete TN[f, i]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -990,8 +996,14 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		if ((getline pv < pf) > 0) F_ping[f] = pv
 		close(pf)
 		if (F_ping[f] != "" && F_ping[f] != "x") F_pavg[f] = (F_pavg[f] > 0) ? F_pavg[f] * 0.97 + F_ping[f] * 0.03 : F_ping[f] + 0
+		# the first hop inside the ISP, pinged all through the match: live, it tells a line fault from a route fault
+		pf = RUN "/probe." F_sid[f] "/near.last"; pv = ""
+		if ((getline pv < pf) > 0) F_near[f] = pv
+		close(pf)
+		if (F_near[f] != "" && F_near[f] != "x") F_navg[f] = (F_navg[f] > 0) ? F_navg[f] * 0.97 + F_near[f] * 0.03 : F_near[f] + 0
 		i = (F_tpn[f] % TL); F_tpn[f]++
 		TP[f, i] = (F_ping[f] == "" || F_ping[f] == "x") ? -1 : F_ping[f] + 0
+		TN[f, i] = (F_near[f] == "" || F_near[f] == "x") ? -1 : F_near[f] + 0
 		if (FTP_n[f] < FTMAX) FT_p[f, ++FTP_n[f]] = TP[f, i]
 		loc = ""; split("", ga)
 		if (F_geo[f] != "") { split(F_geo[f], ga, "\t"); loc = clean(ga[3]) (ga[1] != "" ? ", " ga[1] : "") }
@@ -1009,7 +1021,7 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		for (j = 0; j < cnt; j++) { i = (start + j) % TL; s = s (j ? "," : "") (TL_d[f, i] + 0) }
 		s = s "],\"tl_u\":["
 		for (j = 0; j < cnt; j++) { i = (start + j) % TL; s = s (j ? "," : "") (TL_u[f, i] + 0) }
-		s = s "],\"ping\":" ((F_ping[f] == "" || F_ping[f] == "x") ? "null" : F_ping[f] + 0) ",\"tl_p\":["
+		s = s "],\"ping\":" ((F_ping[f] == "" || F_ping[f] == "x") ? "null" : F_ping[f] + 0) ",\"pavg\":" r2(F_pavg[f] + 0) ",\"near\":" ((F_near[f] == "" || F_near[f] == "x") ? "null" : F_near[f] + 0) ",\"navg\":" r2(F_navg[f] + 0) ",\"tl_n\":[" tnl(f) "],\"tl_p\":["
 		n = F_tpn[f] + 0; cnt = (n < TL) ? n : TL; start = (n < TL) ? 0 : n % TL
 		for (j = 0; j < cnt; j++) { i = (start + j) % TL; s = s (j ? "," : "") (TP[f, i] + 0) }
 		s = s "],\"marks\":["
