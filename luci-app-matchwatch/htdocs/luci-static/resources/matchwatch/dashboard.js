@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.37.1", reloading = false;
+var BUILT = "0.37.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1576,9 +1576,17 @@ function pageTools() {
 				var ul = h("ul", { cls: "natlist" });
 				(r.lines || []).forEach(function (x) { ul.appendChild(h("li", { cls: x.l === "warn" ? "low" : x.l === "ok" ? "ok" : "", text: x.t })); });
 				natOut.appendChild(ul);
+				// one press for what the check found: the service on, and only the gaming device allowed to open ports
+				var again = function (out) { toast(out || "Done."); setTimeout(function () { natBtn.click(); }, 2500); }, fixes = h("div", { cls: "actions" });
+				if (r.fix) fixes.appendChild(act("Set up UPnP for my gaming device", "natfix", null, { solid: true, confirm: "Change UPnP's settings?", done: again }));
+				if (r.undo) fixes.appendChild(act("Put UPnP back as it was", "natunfix", null, { confirm: "Put its old settings back?", done: again }));
+				if (r.fix || r.undo) {
+					natOut.appendChild(fixes);
+					natOut.appendChild(h("p", { cls: "note", text: "Setting up switches the UPnP service on and narrows its access list, so only your gaming device may open ports and every other device is refused. It keeps a copy of the settings as they were, which the second button puts back. It installs nothing." }));
+				}
 			});
 		});
-		view.appendChild(tool("NAT type", "Says what your router's side makes likely for the NAT type games report, and why. It looks at whether your internet address is really your own, whether another router sits in front of this one, and whether anything opens ports for your gaming device. It asks one outside server which address it sees you as, changes nothing, and shows no address.",
+		view.appendChild(tool("NAT type", "Says what your router's side makes likely for the NAT type games report, and why. It looks at whether your internet address is really your own, whether another router sits in front of this one, and whether anything opens ports for your gaming device. It asks one outside server which address it sees you as and shows no address. The check itself changes nothing; where UPnP is installed, it offers a button to switch it on for your gaming device only.",
 			h("div", { cls: "actions" }, natBtn), natOut));
 		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
 			h("div", { cls: "actions" }, lineBtn), lineOut));

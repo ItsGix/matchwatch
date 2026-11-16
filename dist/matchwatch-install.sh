@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.37.1"
+VERSION="0.37.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2249,8 +2249,87 @@ nat_seen() { # the address an outside server sees us as, or nothing
 	done
 	return 1
 }
+# UPnP for the gaming device only (0.37.2). The owner installed UPnP on the NAT check's advice and hit three
+# things by hand: luci-app-upnp brought the iptables build, which cannot start on an nftables firewall;
+# the service is off until switched on; and its stock access list lets every device open ports. The check
+# now names each of these, and "nat fix" does the last two: service on, the allow rule narrowed to the
+# gaming device, a deny-everything rule after it. The settings as they were are kept for "nat unfix".
+# It never installs a package.
+upnp_uci() { if [ -n "$MW_UCI_DIR" ]; then uci -c "$MW_UCI_DIR" "$@"; else uci "$@"; fi; }
+upnp_backend() { /usr/sbin/miniupnpd --version 2>&1 | grep -o 'iptables\|nftables' | head -n 1; }
+upnp_acl() { # how the access list treats the gaming device: mine | all | denied. The first rule that matches decides; no match allows
+	upnp_uci -q show upnpd 2>/dev/null | awk -v d="$DEVICE_IP" '
+		{ gsub(/\047/, "") }
+		match($0, /perm_rule\[[0-9]+\]\.action=/) { i = $0; sub(/.*perm_rule\[/, "", i); sub(/\].*/, "", i); v = $0; sub(/.*=/, "", v); act[i + 0] = v; if (i + 0 > n) n = i + 0; seen = 1 }
+		match($0, /perm_rule\[[0-9]+\]\.int_addr=/) { i = $0; sub(/.*perm_rule\[/, "", i); sub(/\].*/, "", i); v = $0; sub(/.*=/, "", v); ad[i + 0] = v }
+		END {
+			if (seen) for (i = 0; i <= n; i++) {
+				if (ad[i] == d || ad[i] == d "/32") {
+					if (act[i] != "allow") { print "denied"; exit }
+					# allowed by name: but is everyone else refused after it? Whatever matches no rule is allowed
+					for (j = i + 1; j <= n; j++) if (act[j] == "deny" && (ad[j] == "0.0.0.0/0" || ad[j] == "")) { print "mine"; exit }
+					print "all"; exit
+				}
+				if (ad[i] == "0.0.0.0/0" || ad[i] == "") { print (act[i] == "allow" ? "all" : "denied"); exit }
+			}
+			print "all"
+		}'
+}
+cmd_natfix() {
+	local cfg="${MW_UCI_DIR:-/etc/config}" i=0 a ad found=0 deny=0 old
+	is_ipv4 "$DEVICE_IP" || die "choose your gaming device first, on the Settings tab"
+	if [ -z "$MW_UCI_DIR" ]; then
+		[ -x /usr/sbin/miniupnpd ] || die "UPnP is not installed. Under System, Software, install miniupnpd-nftables first and then luci-app-upnp, and press this again."
+		[ -x /sbin/fw4 ] && [ "$(upnp_backend)" = iptables ] && die "The UPnP service on this router is the wrong build for its firewall (miniupnpd-iptables) and cannot start. Under System, Software, remove it and install miniupnpd-nftables, then press this again."
+	fi
+	[ -f "$cfg/upnpd" ] || die "UPnP has no settings file ($cfg/upnpd). Install miniupnpd-nftables again."
+	[ -f "$DATA/upnpd.before" ] || cp "$cfg/upnpd" "$DATA/upnpd.before"
+	old="$(cat "$DATA/upnp.dev" 2>/dev/null)"
+	while upnp_uci -q get "upnpd.@perm_rule[$i]" >/dev/null 2>&1; do
+		a="$(upnp_uci -q get "upnpd.@perm_rule[$i].action")"; ad="$(upnp_uci -q get "upnpd.@perm_rule[$i].int_addr")"
+		if [ "$a" = allow ]; then
+			case "$ad" in
+				"$DEVICE_IP"|"$DEVICE_IP/32") found=1 ;;
+				0.0.0.0/0|"") if [ "$found" = 0 ]; then upnp_uci set "upnpd.@perm_rule[$i].int_addr=$DEVICE_IP"; found=1; else upnp_uci set "upnpd.@perm_rule[$i].action=deny"; fi ;;
+				*) [ -n "$old" ] && [ "$ad" = "$old" ] && [ "$found" = 0 ] && { upnp_uci set "upnpd.@perm_rule[$i].int_addr=$DEVICE_IP"; found=1; } ;;
+			esac
+		else
+			# a deny that names only the gaming device beside an allow for it was a slip of the hand: it should cover everyone
+			case "$ad" in "$DEVICE_IP"|"$DEVICE_IP/32") upnp_uci set "upnpd.@perm_rule[$i].int_addr=0.0.0.0/0"; ad=0.0.0.0/0 ;; esac
+			[ "$ad" = 0.0.0.0/0 ] && deny=1
+		fi
+		i=$((i + 1))
+	done
+	if [ "$found" = 0 ]; then
+		upnp_uci add upnpd perm_rule >/dev/null
+		upnp_uci set "upnpd.@perm_rule[-1].action=allow"; upnp_uci set "upnpd.@perm_rule[-1].ext_ports=1024-65535"
+		upnp_uci set "upnpd.@perm_rule[-1].int_addr=$DEVICE_IP"; upnp_uci set "upnpd.@perm_rule[-1].int_ports=1024-65535"
+		upnp_uci set "upnpd.@perm_rule[-1].comment=MatchWatch: the gaming device"
+		upnp_uci reorder "upnpd.@perm_rule[-1]=0"
+	fi
+	if [ "$deny" = 0 ]; then
+		upnp_uci add upnpd perm_rule >/dev/null
+		upnp_uci set "upnpd.@perm_rule[-1].action=deny"; upnp_uci set "upnpd.@perm_rule[-1].ext_ports=0-65535"
+		upnp_uci set "upnpd.@perm_rule[-1].int_addr=0.0.0.0/0"; upnp_uci set "upnpd.@perm_rule[-1].int_ports=0-65535"
+		upnp_uci set "upnpd.@perm_rule[-1].comment=MatchWatch: nobody else"
+	fi
+	upnp_uci set upnpd.config.enabled=1
+	upnp_uci commit upnpd
+	echo "$DEVICE_IP" > "$DATA/upnp.dev"
+	if [ -z "$MW_UCI_DIR" ] && [ -x /etc/init.d/miniupnpd ]; then /etc/init.d/miniupnpd enable 2>/dev/null; ( sleep 1; /etc/init.d/miniupnpd restart ) >/dev/null 2>&1 & fi
+	logger -t matchwatch "UPnP switched on for the gaming device only" 2>/dev/null
+	echo "UPnP is on, and only your gaming device may open ports. Start your game, then check your NAT again."
+}
+cmd_natunfix() {
+	local cfg="${MW_UCI_DIR:-/etc/config}"
+	[ -f "$DATA/upnpd.before" ] || die "MatchWatch has not changed UPnP's settings, so there is nothing to put back."
+	cp "$DATA/upnpd.before" "$cfg/upnpd" && rm -f "$DATA/upnpd.before" "$DATA/upnp.dev"
+	if [ -z "$MW_UCI_DIR" ] && [ -x /etc/init.d/miniupnpd ]; then ( sleep 1; /etc/init.d/miniupnpd restart ) >/dev/null 2>&1 & fi
+	logger -t matchwatch "UPnP settings put back as they were" 2>/dev/null
+	echo "UPnP's settings are back as they were before MatchWatch changed them."
+}
 nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sentence
-	local wip cls seen up=none maps=0 fwd=0 lf body
+	local wip cls seen up=none maps=0 fwd=0 lf body acl="" can=0
 	find_ifaces
 	wip="${MW_NAT_WAN:-$(ip -4 addr show dev "$WAN_IF" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)}"
 	cls="$(ip_class "$wip")"
@@ -2260,9 +2339,13 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 	fi
 	if [ -x /usr/sbin/miniupnpd ]; then
 		up=off
-		[ "$(uci -q get upnpd.config.enabled 2>/dev/null)" = 1 ] && pgrep miniupnpd >/dev/null 2>&1 && up=on
+		[ "$(upnp_uci -q get upnpd.config.enabled 2>/dev/null)" = 1 ] && pgrep miniupnpd >/dev/null 2>&1 && up=on
+		[ "$up" = off ] && [ -x /sbin/fw4 ] && [ "$(upnp_backend)" = iptables ] && up=wrong
 	fi
 	[ -n "$MW_NAT_UPNP" ] && up="$MW_NAT_UPNP"
+	if is_ipv4 "$DEVICE_IP"; then
+		case "$up" in on|off) acl="$(upnp_acl)"; { [ "$up" = off ] || [ "$acl" != mine ]; } && can=1 ;; esac
+	fi
 	if is_ipv4 "$DEVICE_IP"; then
 		lf="${MW_NAT_LEASES:-$(uci -q get upnpd.config.upnp_lease_file 2>/dev/null)}"; [ -n "$lf" ] || lf=/var/run/miniupnpd.leases
 		[ "$up" = on ] && [ -f "$lf" ] && maps="$(grep -c ":$DEVICE_IP:" "$lf" 2>/dev/null)"
@@ -2281,13 +2364,17 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 		else
 			[ "$maps" -gt 0 ] && printf 'ok\tUPnP is running and your gaming device holds %s port mapping(s) right now.\n' "$maps"
 			[ "$fwd" -gt 0 ] && printf 'ok\t%s port forward(s) in the firewall point at your gaming device.\n' "$fwd"
-			if [ "$maps" = 0 ] && [ "$fwd" = 0 ]; then
+			if [ "$up" = on ] && [ "$acl" = denied ]; then
+				printf 'warn\tUPnP is running, but its access list refuses your gaming device, so a game cannot have a port opened. Set up UPnP for my gaming device, below, puts that right.\n'
+			elif [ "$maps" = 0 ] && [ "$fwd" = 0 ]; then
 				case "$up" in
 					on) printf 'note\tUPnP is running, but your gaming device holds no port mapping at the moment. A game asks for one when it starts: run this check again with the game open.\n' ;;
-					off) printf 'warn\tUPnP is installed but not running, and no port forward points at your gaming device, so nothing opens a port when a game asks. Switch it on under Services, UPnP, and in its access list allow only your gaming device.\n' ;;
-					*) printf 'warn\tNothing on this router opens ports for games: UPnP is not installed and no port forward points at your gaming device. Install the UPnP service (the miniupnpd package, with luci-app-upnp for its page), switch it on, and in its access list allow only your gaming device.\n' ;;
+					off) printf 'warn\tUPnP is installed but not running, and no port forward points at your gaming device, so nothing opens a port when a game asks. Set up UPnP for my gaming device, below, switches it on for that device only.\n' ;;
+					wrong) printf 'warn\tThe UPnP service on this router is the wrong build for its firewall (miniupnpd-iptables), so it cannot start. Under System, Software, remove miniupnpd-iptables and install miniupnpd-nftables, then run this check again.\n' ;;
+					*) printf 'warn\tNothing on this router opens ports for games: UPnP is not installed and no port forward points at your gaming device. Under System, Software, install miniupnpd-nftables first and luci-app-upnp second. In that order: installed alone, luci-app-upnp can bring miniupnpd-iptables, which cannot start on this firewall. Then run this check again, and it will offer to set UPnP up for your gaming device only.\n' ;;
 				esac
 			fi
+			[ "$up" = on ] && [ "$acl" = all ] && printf 'note\tUPnP lets every device on your network open ports, not only your gaming device. Set up UPnP for my gaming device, below, limits it to that one.\n'
 		fi
 		printf 'note\tOpen, Moderate and Strict are each game'"'"'s own words, and games differ. This is what the router'"'"'s side makes likely, not what a game will show.\n'
 	)"
@@ -2296,16 +2383,23 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 		private) printf 'strict\tLikely Strict or Moderate: two routers in a row\n' ;;
 		none) printf 'unknown\tCould not tell: the internet port has no address\n' ;;
 		*) if [ "$maps" -gt 0 ] || [ "$fwd" -gt 0 ]; then printf 'open\tLikely Open\n'
-		   elif [ "$up" = on ]; then printf 'open\tLikely Open while a game is running\n'
+		   elif [ "$up" = on ] && [ "$acl" != denied ]; then printf 'open\tLikely Open while a game is running\n'
 		   elif ! is_ipv4 "$DEVICE_IP"; then printf 'unknown\tYour address is your own; port opening was not checked\n'
 		   else printf 'moderate\tLikely Moderate: nothing opens ports for your games\n'; fi ;;
 	esac
 	printf '%s\n' "$body"
+	[ "$can" = 1 ] && printf 'fix\t1\n'
+	[ -f "$DATA/upnpd.before" ] && printf 'undo\t1\n'
+	return 0
 }
-cmd_nat() { # nothing: print it. job: start it in the background and print the job number (the dashboard)
+cmd_nat() { # nothing: print it. job: start it in the background and print the job number (the dashboard). fix | unfix: UPnP for the gaming device
 	local id f="$RUN/www/nat.json"
+	case "$1" in fix) cmd_natfix; return ;; unfix) cmd_natunfix; return ;; esac
 	if [ "$1" != job ]; then
-		nat_check | awk -F'\t' 'NR == 1 { print "  " $2; print ""; next } { printf "  %-5s %s\n", ($1 == "warn" ? "CHECK" : $1), $2 }'
+		nat_check | awk -F'\t' 'NR == 1 { print "  " $2; print ""; next }
+			$1 == "fix" { print ""; print "  To switch UPnP on for your gaming device only: matchwatch nat fix"; next }
+			$1 == "undo" { print "  To put UPnP back as it was before MatchWatch changed it: matchwatch nat unfix"; next }
+			{ printf "  %-5s %s\n", ($1 == "warn" ? "CHECK" : $1), $2 }'
 		return 0
 	fi
 	mkdir -p "$RUN/www"
@@ -2314,8 +2408,10 @@ cmd_nat() { # nothing: print it. job: start it in the background and print the j
 	( nat_check | awk -F'\t' -v id="$id" -v ts="$(date +%s)" '
 		{ gsub(/["\\]/, " ") }
 		NR == 1 { printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"verdict\":\"%s\",\"head\":\"%s\",\"lines\":[", id, ts, $1, $2; next }
+		$1 == "fix" { fix = 1; next }
+		$1 == "undo" { undo = 1; next }
 		{ printf "%s{\"l\":\"%s\",\"t\":\"%s\"}", (n++ ? "," : ""), $1, $2 }
-		END { print "]}" }' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+		END { printf "],\"fix\":%s,\"undo\":%s}\n", (fix ? "true" : "false"), (undo ? "true" : "false") }' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
 	echo "$id"
 }
 
@@ -2577,6 +2673,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		log) cmd_log ;;
 		linetest) cmd_linetest ;;
 		nat) cmd_nat job ;;
+		natfix) cmd_natfix ;;
+		natunfix) cmd_natunfix ;;
 		qosadvice) cmd_qosadvice ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
@@ -3092,6 +3190,7 @@ matchwatch $VERSION - game server and connection judge
   matchwatch qos               check the game is in QoSmate's top class (run during a match)
   matchwatch qos advice        what your matches say about QoSmate's speed limits
   matchwatch nat               what the router's side makes likely for your NAT type, and why
+  matchwatch nat fix | unfix   switch UPnP on for your gaming device only (or put its settings back)
   matchwatch device [<ip>|all] show the devices on your network and choose which one to watch
   matchwatch qos fix | unfix   add (or remove) QoSmate rules that put your gaming device's UDP in the top class
   matchwatch block <ip> [days] block a server (default $BLOCK_DAYS days, 0 = until unblocked)
@@ -3163,7 +3262,7 @@ case "$1" in
 	_updatetick) update_due && { update_note; export_json; } ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
-	nat) cmd_nat ;;
+	nat) cmd_nat "$2" ;;
 	clear-history) cmd_clear_history ;;
 	forget) cmd_forget "$2" "$3" ;;
 	share) shift; cmd_share "$@" ;;
@@ -4974,7 +5073,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart natfix natunfix"
 
 reply() { # ok(0|1) text
 	json_init
@@ -5109,7 +5208,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.37.1", reloading = false;
+var BUILT = "0.37.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6657,9 +6756,17 @@ function pageTools() {
 				var ul = h("ul", { cls: "natlist" });
 				(r.lines || []).forEach(function (x) { ul.appendChild(h("li", { cls: x.l === "warn" ? "low" : x.l === "ok" ? "ok" : "", text: x.t })); });
 				natOut.appendChild(ul);
+				// one press for what the check found: the service on, and only the gaming device allowed to open ports
+				var again = function (out) { toast(out || "Done."); setTimeout(function () { natBtn.click(); }, 2500); }, fixes = h("div", { cls: "actions" });
+				if (r.fix) fixes.appendChild(act("Set up UPnP for my gaming device", "natfix", null, { solid: true, confirm: "Change UPnP's settings?", done: again }));
+				if (r.undo) fixes.appendChild(act("Put UPnP back as it was", "natunfix", null, { confirm: "Put its old settings back?", done: again }));
+				if (r.fix || r.undo) {
+					natOut.appendChild(fixes);
+					natOut.appendChild(h("p", { cls: "note", text: "Setting up switches the UPnP service on and narrows its access list, so only your gaming device may open ports and every other device is refused. It keeps a copy of the settings as they were, which the second button puts back. It installs nothing." }));
+				}
 			});
 		});
-		view.appendChild(tool("NAT type", "Says what your router's side makes likely for the NAT type games report, and why. It looks at whether your internet address is really your own, whether another router sits in front of this one, and whether anything opens ports for your gaming device. It asks one outside server which address it sees you as, changes nothing, and shows no address.",
+		view.appendChild(tool("NAT type", "Says what your router's side makes likely for the NAT type games report, and why. It looks at whether your internet address is really your own, whether another router sits in front of this one, and whether anything opens ports for your gaming device. It asks one outside server which address it sees you as and shows no address. The check itself changes nothing; where UPnP is installed, it offers a button to switch it on for your gaming device only.",
 			h("div", { cls: "actions" }, natBtn), natOut));
 		view.appendChild(tool("Test your line", "Twenty seconds of pings from the router to your provider and two public servers, with no game needed. Use it before you queue to see whether your connection is steady tonight. It changes nothing.",
 			h("div", { cls: "actions" }, lineBtn), lineOut));

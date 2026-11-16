@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.37.1 (pre-release)**
+**Judges every online match from your OpenWrt router — v0.37.2 (pre-release)**
 
 > **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
 
@@ -554,7 +554,8 @@ The Tools page has four tabs. Each tool says what it does beside its button.
 **Checks**
 
 - **MatchWatch service.** Says whether MatchWatch is running and since when, with **Stop**, **Start** and **Restart**. The same is shown at the top right of every page. While it is stopped no match is watched or recorded and no new server is judged; servers already blocked stay blocked, strict games are released, and match mode hands your line back at QoSmate's own speeds. Stopping lasts until you press Start or the router restarts. Do either between matches: a match in progress is not recorded, and the buttons ask first when one is.
-- **NAT type.** Says what your router's side makes likely for the NAT type games report (Open, Moderate or Strict), and why. It checks three things: whether your internet address is really your own or one your ISP shares between customers, whether another router sits in front of this one, and whether anything opens ports for your gaming device (UPnP mappings or port forwards). It asks one outside server which address it sees you as, only when you press the button, and shows no address. It changes nothing: where there is something you can do, it says what. A shared address at your ISP cannot be fixed from your side.
+- **NAT type.** Says what your router's side makes likely for the NAT type games report (Open, Moderate or Strict), and why. It checks three things: whether your internet address is really your own or one your ISP shares between customers, whether another router sits in front of this one, and whether anything opens ports for your gaming device (UPnP mappings or port forwards). It asks one outside server which address it sees you as, only when you press the button, and shows no address. The check itself changes nothing: where there is something you can do, it says what. A shared address at your ISP cannot be fixed from your side.
+  - **UPnP.** If nothing opens ports for your games, install `miniupnpd-nftables` first and `luci-app-upnp` second, under System, Software. In that order: installed alone, `luci-app-upnp` can bring `miniupnpd-iptables`, which cannot start on OpenWrt's nftables firewall, and the check tells you if that is what you have. Once UPnP is installed the check offers **Set up UPnP for my gaming device**: it switches the service on and narrows its access list so only your gaming device may open ports and every other device is refused. The stock list lets every device open ports. **Put UPnP back as it was** restores the settings from before. MatchWatch never installs a package. From the command line: `matchwatch nat fix`, `matchwatch nat unfix`.
 - **Check MatchWatch is working.** Confirms the programs it needs are present, that it can see your device's traffic, and that it is looking at the right ports. Takes five seconds and changes nothing.
 
   MatchWatch relies on three ports, and a wrong one never shows as an error: a feature just quietly does nothing. The check tests each and says where to correct it, a warning appears at the top of the Tools page if one is wrong, and all three are listed under Settings in use.
@@ -665,6 +666,7 @@ Everything is also available over SSH:
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
 | `matchwatch doctor` | Checks that capture works. Changes nothing |
 | `matchwatch nat` | What your router's side makes likely for your NAT type, and why. Changes nothing |
+| `matchwatch nat fix` / `nat unfix` | Switches UPnP on for your gaming device only, or puts its settings back as they were |
 | `matchwatch qos advice` | What your last forty matches say about QoSmate's speed limits |
 | `matchwatch service` / `service stop` / `service start` / `service restart` | Says whether MatchWatch is running, or stops, starts or restarts it |
 | `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |
