@@ -73,6 +73,19 @@ td .stayform { max-width: 420px; }
 .natlist { margin: 6px 0 0; padding-left: 20px; max-width: 70ch; }
 .natlist li { margin: 0 0 8px; color: var(--muted); }
 .natlist li.ok { color: var(--ink); } .natlist li.low { color: var(--bad); }
+/* the overlay: nothing but the strip, on a see-through page */
+.mw.overlay { background: transparent; padding: 0; min-height: 0; border: 0; box-shadow: none; }
+.mw.overlay header, .mw.overlay #toast { display: none; }
+.mw.overlay main { padding: 6px; margin: 0; max-width: none; }
+.ov { display: inline-flex; flex-wrap: wrap; gap: 6px 22px; align-items: center; padding: 12px 20px; border-radius: 999px; background: rgba(8, 22, 26, 0.82); color: #e9f3f2; font-size: 1.05rem; }
+.ovl { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; }
+.ovl i { width: 14px; height: 14px; border-radius: 50%; background: #8fa3a8; flex: none; }
+.ovl b { font-weight: 700; } .ovl em { font-style: normal; opacity: 0.8; }
+.ovl.ok i { background: #5fd0a0; } .ovl.mid i { background: #e8b64c; } .ovl.bad i { background: #f0705f; box-shadow: 0 0 0 4px rgba(240, 112, 95, 0.3); }
+.ovl.bad b { color: #f0705f; } .ovl.mid b { color: #e8b64c; }
+.earlywarn { color: var(--bad); }
+.cardrow { margin: 14px 0 4px; }
+a.btnlink { align-self: center; }
 /* the service row: a light and a word, so the state is not carried by colour alone */
 .svc { display: flex; align-items: center; gap: 9px; margin: 2px 0 12px; font-weight: 700; }
 .svc::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }

@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.37.4", reloading = false;
+var BUILT = "0.38.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -848,7 +848,9 @@ function updateLive() {
 	}
 	L.last.textContent = "";
 	L.title.textContent = (s.loc || "Locating server") + (s.org ? " (" + s.org + ")" : "");
+	L.early = s.early || "";
 	L.sub.textContent = liveGame(s) + s.ip + ":" + s.port + (s.rep != null ? ". Rated " + s.rep + "/100 over " + s.repn + " earlier match" + (s.repn === 1 ? "" : "es") + "." : ". First time on this server.");
+	if (L.early) L.sub.appendChild(h("b", { cls: "earlywarn", text: " Rough already: " + L.early + ". Back out if you can." }));
 	L.figs.textContent = "";
 	[["Ping", s.ping == null ? "n/a" : fmt(s.ping, 1), "ms"], ["Server update rate", fmt(s.tick, 0), "per second"], ["Timing jitter", fmt(s.jit, 2), "ms"], ["Late updates", fmt(s.late, 1), "%"],
 	 ["Missing updates", fmt(s.s_lost, 2), "%"], ["Freezes", String(s.s_frz), "over 100 ms"], ["Your PC send rate", fmt(s.uprate, 0), "per second"], ["Your PC pauses", String(s.s_hitch), "over 100 ms"]]
@@ -885,6 +887,80 @@ function kv(pairs) {
 	var dl = h("dl", { cls: "kv" });
 	pairs.forEach(function (p) { if (!p) return; dl.appendChild(h("dt", null, p[0], p[2] ? h("small", p[2]) : null)); dl.appendChild(h("dd", p[1])); });
 	return dl;
+}
+// ---------- the overlay: three lights and the ping, for a stream or a second screen (#/overlay)
+// Each light is the last five seconds, so it turns the moment something goes wrong and clears again.
+// Server and route share one light: which of the two it was is only known once the match has ended.
+var OV = null;
+function pageOverlay() {
+	view.textContent = ""; OV = h("div", { cls: "ov", role: "status" }); view.appendChild(OV);
+	try { document.documentElement.style.background = "transparent"; document.body.style.background = "transparent"; } catch (e) {}
+	ovPaint();
+}
+function ovPaint() {
+	if (page !== "overlay" || !OV) return;
+	var up = svcState() === "on", s = up ? session() : null;
+	OV.textContent = "";
+	function light(name, state, val) { OV.appendChild(h("span", { cls: "ovl " + state }, h("i"), h("b", name), val ? h("em", val) : null)); }
+	if (!s) { light(up ? "Waiting for a match" : "MatchWatch is not running", "idle"); return; }
+	function worst(a) { var m = 0, i; a = a || []; for (i = Math.max(0, a.length - 5); i < a.length; i++) if (a[i] > m) m = a[i]; return m; }
+	var d = worst(s.tl_d), u = worst(s.tl_u), base = median(s.tl_p || []), jump = s.ping != null && base ? s.ping - base : 0;
+	light("Server and route", d >= 100 ? "bad" : d >= 40 ? "mid" : "ok", d >= 40 ? Math.round(d) + " ms late" : "steady");
+	light("Ping", s.ping == null ? "idle" : jump >= 25 ? "bad" : jump >= 10 ? "mid" : "ok", s.ping == null ? "n/a" : fmt(s.ping, 0) + " ms");
+	light("Your PC", u >= 100 ? "bad" : u >= 50 ? "mid" : "ok", u >= 50 ? Math.round(u) + " ms pause" : "steady");
+	if (s.early) light("Rough from the start", "bad");
+}
+// ---------- a picture of a match to share: the verdict, the four scores and the timing, and no address
+function cardColour(v) { return v == null ? "#8fa3a8" : v >= 85 ? "#5fd0a0" : v >= 60 ? "#e8b64c" : "#f0705f"; }
+function proofCard(m) {
+	var W = 1200, H = 630, c = document.createElement("canvas"), g, i; c.width = W; c.height = H; g = c.getContext("2d");
+	var F = '"Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif';
+	g.fillStyle = "#0d2126"; g.fillRect(0, 0, W, H);
+	g.fillStyle = "#143038"; g.fillRect(0, 0, W, 92);
+	g.fillStyle = "#e9f3f2"; g.font = "700 34px " + F; g.textBaseline = "middle"; g.fillText("matchwatch", 56, 47);
+	g.fillStyle = "#8fa3a8"; g.font = "400 24px " + F; g.textAlign = "right";
+	g.fillText([m.game || "", place(m) || "", m.t0 ? when(m.t0) : ""].filter(Boolean).join("  |  "), W - 56, 47); g.textAlign = "left";
+	// the overall score, large, and the verdict beside it
+	g.fillStyle = cardColour(m.overall); g.font = "700 150px " + F; g.textBaseline = "alphabetic"; g.fillText(String(m.overall), 56, 262);
+	var sw = g.measureText(String(m.overall)).width;
+	g.fillStyle = "#8fa3a8"; g.font = "400 34px " + F; g.fillText("/100", 66 + sw, 262);
+	g.fillStyle = "#e9f3f2"; g.font = "600 34px " + F;
+	var words = String(m.verdict || "").split(" "), line = "", y = 176, x = 190 + sw, max = W - x - 56;
+	for (i = 0; i < words.length; i++) { if (g.measureText(line + words[i] + " ").width > max && line) { g.fillText(line.trim(), x, y); y += 46; line = ""; if (y > 270) break; } line += words[i] + " "; }
+	if (y <= 270) g.fillText(line.trim(), x, y);
+	// the four parts: who it was, and who it was not
+	var parts = [["Server", m.s_server], ["Route", m.s_route], ["Your line", m.s_line], ["Your PC", m.s_pc]], bw = (W - 112 - 3 * 20) / 4;
+	parts.forEach(function (p, k) {
+		var bx = 56 + k * (bw + 20), by = 312;
+		g.fillStyle = "#143038"; g.fillRect(bx, by, bw, 128);
+		g.fillStyle = cardColour(p[1]); g.fillRect(bx, by, 8, 128);
+		g.fillStyle = "#8fa3a8"; g.font = "400 24px " + F; g.fillText(p[0], bx + 28, by + 42);
+		g.fillStyle = cardColour(p[1]); g.font = "700 56px " + F; g.fillText(p[1] == null ? "n/a" : String(Math.round(p[1])), bx + 28, by + 104);
+	});
+	// how late the server's updates were, second by second
+	var d = m.tl_d || [], n = d.length, top = 0, gx = 56, gy = 590, gw = W - 112, gh = 100;
+	for (i = 0; i < n; i++) if (d[i] > top) top = d[i];
+	top = Math.max(top, 60);
+	g.fillStyle = "#8fa3a8"; g.font = "400 20px " + F; g.fillText("How late the server's updates arrived, through the match (tallest: " + Math.round(top) + " ms)", gx, gy - gh - 14);
+	for (i = 0; i < n; i++) {
+		var bh = Math.max(2, d[i] / top * gh), px = gx + i / n * gw;
+		g.fillStyle = d[i] >= 100 ? "#f0705f" : d[i] >= 40 ? "#e8b64c" : "#3f8f86";
+		g.fillRect(px, gy - bh, Math.max(1, gw / n - 0.5), bh);
+	}
+	return c;
+}
+function cardBtn(m) {
+	var b = h("button", { type: "button", text: "Save a picture of this match" });
+	b.addEventListener("click", function () {
+		var c = proofCard(m);
+		c.toBlob(function (blob) {
+			if (!blob) { toast("The picture could not be made.", true); return; }
+			var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "matchwatch-" + (m.id || "match") + ".png";
+			document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+			toast("Saved. The picture shows the scores and the timing, and no address.");
+		}, "image/png");
+	});
+	return b;
 }
 // Who else was using the line during the match. The router counted each device's traffic every five
 // seconds; this sets that beside the game's own timing, second by second, and says whether the game was
@@ -1049,6 +1125,7 @@ function pageMatch(id) {
 			m.lanping != null ? ["Router to PC", fmt(m.lanping, 2) + " ms"] : ["Router to PC", "n/a", "The PC does not answer ping"]]));
 		cols.appendChild(b);
 		view.appendChild(cols);
+		if (m.overall != null) view.appendChild(h("div", { cls: "actions cardrow" }, cardBtn(m)));
 		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
@@ -1745,6 +1822,12 @@ function pageTools() {
 				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet. " + (mm.whytext || "QoSmate must be switched on and in one of its cake modes.") : "Off: QoSmate's limits are on all the time" + (mm.up ? ", " + (mm.down ? mbit(mm.down) + " down and " : "") + mbit(mm.up) + " up." : ".") }),
 				mm.can === false ? null : mmSpeeds(mm, again)));
 		}
+		if (!RO) {
+			var ovUrl = location.origin + "/matchwatch/#/overlay", ovBox = outBox();
+			view.appendChild(tool("Live overlay", "Three lights and your ping, updated every second, for a stream or a second screen: server and route, ping, and your PC. A light turns amber or red the moment something goes wrong and clears again. In OBS, add a Browser source with the address shown, about 760 wide and 60 high; its background is see-through. It needs \"This dashboard without login\" switched on in Settings, and works on any device on your network.",
+				h("div", { cls: "actions" }, (function () { var b = h("button", { type: "button", text: "Show the address" }); b.addEventListener("click", function () { ovBox.show(ovUrl + (i.web === false || i.web === 0 ? "\n\nThe page without login is switched off. Switch it on under Settings first." : "")); }); return b; })(),
+					h("a", { href: "#/overlay", text: "Open it here", cls: "btnlink" })), ovBox));
+		}
 		if (hasQos && !RO) {
 			var qaOut = outBox();
 			view.appendChild(tool("Are my QoSmate speeds right?", "Looks at what your last forty matches recorded and says what they show about QoSmate's speed limits: whether matches played on a busy line were rougher than the rest, and whether the queue QoSmate keeps for your game ever backed up. QoSmate does the prioritising; this only reads your match records and changes nothing.",
@@ -1774,7 +1857,10 @@ function pageTools() {
 function route(keep) { // keep === true: a redraw with fresh data, so stay where the reader is
 	var parts = (location.hash || "#/").replace(/^#\/?/, "").split("/");
 	page = parts[0] || "live"; pageArg = parts[1] || "";
-	if (["live", "match", "matches", "servers", "tools"].indexOf(page) < 0) page = "live";
+	if (["live", "match", "matches", "servers", "tools", "overlay"].indexOf(page) < 0) page = "live";
+	wrap.classList.toggle("overlay", page === "overlay");
+	if (page === "overlay") { pageOverlay(); return; }
+	OV = null;
 	Array.prototype.forEach.call(shadow.querySelectorAll("nav a"), function (a) { if (a.getAttribute("data-p") === page) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
 	pageMatch.repaint = null;
 	if (page === "live") pageLive(); else if (page === "match") pageMatch(pageArg || "last"); else if (page === "matches") pageMatches(); else if (page === "servers") pageServers(); else pageTools();
@@ -1797,7 +1883,7 @@ function setState() {
 	else if (v === "off") { e.className = ""; e.textContent = "MatchWatch is not running"; }
 	else if (s) { e.className = "on"; e.textContent = "In a match, " + mins(s.age); }
 	else { e.className = ""; e.textContent = "Waiting for a match"; }
-	svcPaint();
+	svcPaint(); ovPaint();
 }
 // The service row on the Tools page. The Tools page is not redrawn by fresh data, so this draws itself
 // from the status file, which is read every second, and only when what it would show has changed.

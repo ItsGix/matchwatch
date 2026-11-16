@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.37.4"
+VERSION="0.38.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -41,6 +41,7 @@ STAY_RANGES=1
 UPDATE_CHECK=0
 MATCH_MODE=0
 NET_WATCH=1
+EARLY_WARN=1
 MM_ON_DOWN=""; MM_ON_UP=""; MM_OFF_DOWN=""; MM_OFF_UP=""; MM_HOLD=""
 DATA_DIR="/etc/matchwatch"
 WEB=0
@@ -53,6 +54,7 @@ elif [ -f /etc/config/matchwatch ] && [ -f /lib/functions.sh ]; then
 	config_get LAN_IF main lan_if "$LAN_IF"
 	config_get WAN_IF main wan_if "$WAN_IF"
 	config_get NET_WATCH main net_watch "$NET_WATCH"
+	config_get EARLY_WARN main early_warn "$EARLY_WARN"
 	config_get IGNORE_PORTS main ignore_ports "$IGNORE_PORTS"
 	config_get ONLY_FILTER main only_filter "$ONLY_FILTER"
 	config_get MIN_DOWN_PPS main min_down_pps "$MIN_DOWN_PPS"
@@ -454,6 +456,14 @@ cmd_probe_stop() {
 	} > "$PD/sum"
 }
 
+cmd_early() { # server-ip reason : the engine found a match rough in its first half minute. One short line to the phone, no address
+	local why
+	why="$(printf '%s' "$2" | tr -cd 'A-Za-z0-9 %,.' | cut -c1-80)"
+	[ -n "$why" ] || return 0
+	logger -t matchwatch "Early warning: this server is rough in its first half minute ($why)." 2>/dev/null
+	[ "$EARLY_WARN" = 1 ] && [ -n "$NTFY_URL" ] && fetch "$NTFY_URL" "Rough server already: $why. Back out if you can." >/dev/null
+	return 0
+}
 cmd_notify() {
 	logger -t matchwatch "$1" 2>/dev/null
 	[ -n "$NTFY_URL" ] && fetch "$NTFY_URL" "$1" >/dev/null
@@ -3334,6 +3344,7 @@ case "$1" in
 	_lobby) cmd_lobby "$2" "$3" "$4" "$5" ;;
 	_sweep) cmd_sweep "$2" ;;
 	_mmtight) [ "$MATCH_MODE" = 1 ] && mm_set tight ;;
+	_early) cmd_early "$2" "$3" ;;
 	_action) shift; cmd_action "$@" ;;
 	_migrate) cmd_migrate ;;
 	mark) cmd_mark ;;

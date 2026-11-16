@@ -61,7 +61,7 @@ BEGIN {
 	QUALIFY = 8; ENDIDLE = 10; DROPIDLE = 30; TL = 120; MAXFLOWS = 200
 	HIST = DATA "/sessions.tsv"
 	if (GEOF == "") GEOF = DATA "/geo.cache"
-	STAYF = DATA "/stay"; PINGF = DATA "/pingrange"; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
+	STAYF = DATA "/stay"; PINGF = DATA "/pingrange"; EARLYS = 30; LHOLD = 3; SWEEPN = 4; LQ_n = 0; SW_t = 0; NKN = 0
 	while ((getline line < HIST) > 0) {
 		n = split(line, c, "\t")
 		if (n >= 6) { if (c[6] + 0 >= 1024) KPORT[c[6]] = 1; K24[pfx(c[5])] = 1 }
@@ -401,6 +401,24 @@ function advance(sec,    guard) {
 }
 
 # Started before the internet port was up: the service writes its name to wan.if once it is found.
+# The owner asked for a feature that changes the outcome rather than explaining it afterwards. A match report
+# arrives when the match is lost; this looks at the first half minute of steady traffic, which is usually the
+# lobby or the warm-up, and speaks only when the server is already clearly rough, so there is time to back
+# out. The lines are first guesses and deliberately high: a false alarm costs a good match.
+function rough_early(f, kd,    all, lost, late, frz, bad, why) {
+	all = S_ticks[kd] + S_lost[kd]
+	lost = 100 * S_lost[kd] / all; late = 100 * S_late[kd] / all
+	frz = S_frz[kd] + 0; bad = (S_win[kd] > 0) ? 100 * S_bad[kd] / S_win[kd] : 0
+	why = ""
+	if (lost >= 3) why = sprintf("%.0f%% of updates missing", lost)
+	if (late >= 8) why = why (why == "" ? "" : ", ") sprintf("%.0f%% of updates late", late)
+	if (frz >= 2) why = why (why == "" ? "" : ", ") frz " freezes"
+	if (why == "" && bad >= 50) why = "rough for half of its first half minute"
+	if (why == "") return
+	F_early[f] = 2; F_earlytxt[f] = why
+	print "EARLY " F_sid[f] " " why
+	if (!REPLAY) system(SELF " _early " F_rip[f] " '" why "' >/dev/null 2>&1 &")
+}
 function wan_find(    l, f) {
 	if (WANDEV != "") return
 	f = RUN "/wan.if"
@@ -446,6 +464,11 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 			F_unn[f] = 2
 			if (S_lost[kd] * 100 < 15 * (S_ticks[kd] + S_lost[kd])) { if (!REPLAY) system(SELF " _mmtight >/dev/null 2>&1 &"); else print "MMTIGHT " F_sid[f] }
 		}
+		# early warning: half a minute into a game's stream, say so if it is already clearly rough
+		if (F_active[f] && !F_early[f] && S_win[kd] * WIN >= EARLYS && S_ticks[kd] + S_lost[kd] > 0) {
+			F_early[f] = 1
+			if (kindof(F_rport[f], F_rip[f]) == "game") rough_early(f, kd)
+		}
 		F_wsec[f]++
 		if (F_wsec[f] >= WIN) { window_end(f, "D"); window_end(f, "U"); F_wsec[f] = 0 }
 
@@ -477,6 +500,7 @@ function drop_flow(f,    d, k, i, di) {
 	for (i = 1; i <= FT_n[f] + 0; i++) { delete FT_d[f, i]; delete FT_u[f, i] }
 	for (i = 1; i <= FTP_n[f] + 0; i++) delete FT_p[f, i]
 	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]; delete F_unn[f]
+	delete F_early[f]; delete F_earlytxt[f]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -973,7 +997,7 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		if (F_geo[f] != "") { split(F_geo[f], ga, "\t"); loc = clean(ga[3]) (ga[1] != "" ? ", " ga[1] : "") }
 		if (!first) s = s ","
 		first = 0
-		s = s "{\"ip\":\"" ip "\",\"port\":" F_rport[f] ",\"device\":\"" F_lip[f] "\",\"age\":" int(now - F_first[f]) ",\"start\":" int(F_first[f]) ",\"game\":\"" gamename(F_rport[f], ip) "\""
+		s = s "{\"ip\":\"" ip "\",\"port\":" F_rport[f] ",\"device\":\"" F_lip[f] "\",\"age\":" int(now - F_first[f]) ",\"start\":" int(F_first[f]) ",\"game\":\"" gamename(F_rport[f], ip) "\"" ((F_early[f] == 2) ? ",\"early\":\"" F_earlytxt[f] "\"" : "")
 		s = s ",\"loc\":\"" loc "\",\"org\":\"" clean(ga[7]) "\""
 		s = s ",\"tick\":" jnum(L_rate[kd]) ",\"jit\":" jnum(L_jit[kd]) ",\"late\":" jnum(L_late[kd]) ",\"lost\":" jnum(L_lost[kd])
 		s = s ",\"uprate\":" jnum(L_rate[ku]) ",\"upjit\":" jnum(L_jit[ku])
