@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.37.2"
+VERSION="0.37.3"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2201,7 +2201,48 @@ nat_seen() { # the address an outside server sees us as, or nothing
 # gaming device, a deny-everything rule after it. The settings as they were are kept for "nat unfix".
 # It never installs a package.
 upnp_uci() { if [ -n "$MW_UCI_DIR" ]; then uci -c "$MW_UCI_DIR" "$@"; else uci "$@"; fi; }
-upnp_backend() { /usr/sbin/miniupnpd --version 2>&1 | grep -o 'iptables\|nftables' | head -n 1; }
+UPNP_BIN="${MW_UPNP_BIN:-/usr/sbin/miniupnpd}"
+upnp_backend() { [ -x "$UPNP_BIN" ] && "$UPNP_BIN" --version 2>&1 | grep -o 'iptables\|nftables' | head -n 1; }
+fw_kind() { if [ -n "$MW_FW" ]; then echo "$MW_FW"; elif [ -x /sbin/fw4 ]; then echo nftables; else echo iptables; fi; }
+upnp_wrong() { local be; be="$(upnp_backend)"; [ -n "$be" ] && [ "$be" != "$(fw_kind)" ]; }
+# Installing it too (0.37.3). The owner asked why the one press could not also install what is missing.
+# Nothing stops it: the build that suits the firewall is known (nftables beside fw4, iptables otherwise),
+# the wrong one is taken out first, and what was newly installed is written down so "nat unfix" can remove
+# it again. The packages come from the router's own package manager and OpenWrt's servers, on the owner's press.
+pm_kind() { if have apk; then echo apk; elif have opkg; then echo opkg; fi; }
+pm_has() {
+	case "$(pm_kind)" in
+		apk) apk info -e "$1" >/dev/null 2>&1 ;;
+		opkg) opkg status "$1" 2>/dev/null | grep -q '^Status:.* installed' ;;
+		*) return 1 ;;
+	esac
+}
+upnp_install() { # non-zero when it could not, with the reason in upnp.install.err
+	local pm want other new="" p log="$RUN/upnp.install.log" err="$RUN/upnp.install.err"
+	pm="$(pm_kind)"; want="$(fw_kind)"; other=nftables; [ "$want" = nftables ] && other=iptables
+	mkdir -p "$RUN"; rm -f "$err"
+	[ -n "$pm" ] || { echo "This router has no package manager MatchWatch knows (apk or opkg). Install miniupnpd-$want and then luci-app-upnp by hand, and press this again." > "$err"; return 1; }
+	for p in "miniupnpd-$want" luci-app-upnp; do pm_has "$p" || new="$new $p"; done
+	echo "Installing miniupnpd-$want and luci-app-upnp. This can take a minute."
+	{
+		# the wrong build goes first: it holds the name the right one needs
+		if pm_has "miniupnpd-$other"; then
+			case "$pm" in apk) apk del luci-app-upnp "miniupnpd-$other" ;; opkg) opkg remove luci-app-upnp "miniupnpd-$other" ;; esac
+		fi
+		case "$pm" in
+			apk) apk update; apk add "miniupnpd-$want" luci-app-upnp ;;
+			opkg) opkg update; opkg install "miniupnpd-$want" luci-app-upnp ;;
+		esac
+	} > "$log" 2>&1
+	if [ ! -x "$UPNP_BIN" ] || upnp_wrong || [ -z "$(upnp_backend)" ]; then
+		echo "Installing UPnP did not work. The package manager said: $(grep -v '^$' "$log" 2>/dev/null | tail -n 2 | tr '\n' ' ' | cut -c1-220). Install miniupnpd-$want and then luci-app-upnp under System, Software, and press this again." > "$err"
+		return 1
+	fi
+	[ -n "$new" ] && echo "$new" > "$DATA/upnp.pkgs"
+	[ -z "$MW_UCI_DIR" ] && rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache 2>/dev/null
+	logger -t matchwatch "installed for UPnP:${new:- nothing new}" 2>/dev/null
+	return 0
+}
 upnp_acl() { # how the access list treats the gaming device: mine | all | denied. The first rule that matches decides; no match allows
 	upnp_uci -q show upnpd 2>/dev/null | awk -v d="$DEVICE_IP" '
 		{ gsub(/\047/, "") }
@@ -2221,11 +2262,11 @@ upnp_acl() { # how the access list treats the gaming device: mine | all | denied
 		}'
 }
 cmd_natfix() {
-	local cfg="${MW_UCI_DIR:-/etc/config}" i=0 a ad found=0 deny=0 old
+	local cfg="${MW_UCI_DIR:-/etc/config}" i=0 a ad found=0 deny=0 old did=""
 	is_ipv4 "$DEVICE_IP" || die "choose your gaming device first, on the Settings tab"
-	if [ -z "$MW_UCI_DIR" ]; then
-		[ -x /usr/sbin/miniupnpd ] || die "UPnP is not installed. Under System, Software, install miniupnpd-nftables first and then luci-app-upnp, and press this again."
-		[ -x /sbin/fw4 ] && [ "$(upnp_backend)" = iptables ] && die "The UPnP service on this router is the wrong build for its firewall (miniupnpd-iptables) and cannot start. Under System, Software, remove it and install miniupnpd-nftables, then press this again."
+	if [ ! -x "$UPNP_BIN" ] || upnp_wrong; then
+		upnp_install || die "$(cat "$RUN/upnp.install.err" 2>/dev/null)"
+		did="Installed UPnP (miniupnpd-$(fw_kind) and luci-app-upnp). "
 	fi
 	[ -f "$cfg/upnpd" ] || die "UPnP has no settings file ($cfg/upnpd). Install miniupnpd-nftables again."
 	[ -f "$DATA/upnpd.before" ] || cp "$cfg/upnpd" "$DATA/upnpd.before"
@@ -2263,18 +2304,30 @@ cmd_natfix() {
 	echo "$DEVICE_IP" > "$DATA/upnp.dev"
 	if [ -z "$MW_UCI_DIR" ] && [ -x /etc/init.d/miniupnpd ]; then /etc/init.d/miniupnpd enable 2>/dev/null; ( sleep 1; /etc/init.d/miniupnpd restart ) >/dev/null 2>&1 & fi
 	logger -t matchwatch "UPnP switched on for the gaming device only" 2>/dev/null
-	echo "UPnP is on, and only your gaming device may open ports. Start your game, then check your NAT again."
+	echo "${did}UPnP is on, and only your gaming device may open ports. Start your game, then check your NAT again.${did:+ Its page is under Services, UPnP, after you log out of LuCI and in again.}"
 }
 cmd_natunfix() {
 	local cfg="${MW_UCI_DIR:-/etc/config}"
 	[ -f "$DATA/upnpd.before" ] || die "MatchWatch has not changed UPnP's settings, so there is nothing to put back."
+	local pk
 	cp "$DATA/upnpd.before" "$cfg/upnpd" && rm -f "$DATA/upnpd.before" "$DATA/upnp.dev"
+	pk="$(cat "$DATA/upnp.pkgs" 2>/dev/null)"
+	if [ -n "$pk" ]; then
+		# what MatchWatch installed goes again; what was already there stays
+		[ -z "$MW_UCI_DIR" ] && [ -x /etc/init.d/miniupnpd ] && /etc/init.d/miniupnpd stop >/dev/null 2>&1
+		# shellcheck disable=SC2086
+		case "$(pm_kind)" in apk) apk del $pk ;; opkg) opkg remove $pk ;; esac > "$RUN/upnp.install.log" 2>&1
+		rm -f "$DATA/upnp.pkgs"
+		logger -t matchwatch "UPnP removed again:$pk" 2>/dev/null
+		echo "UPnP is removed again:$pk."
+		return 0
+	fi
 	if [ -z "$MW_UCI_DIR" ] && [ -x /etc/init.d/miniupnpd ]; then ( sleep 1; /etc/init.d/miniupnpd restart ) >/dev/null 2>&1 & fi
 	logger -t matchwatch "UPnP settings put back as they were" 2>/dev/null
 	echo "UPnP's settings are back as they were before MatchWatch changed them."
 }
 nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sentence
-	local wip cls seen up=none maps=0 fwd=0 lf body acl="" can=0
+	local wip cls seen up=none maps=0 fwd=0 lf body acl="" can=0 inst=0
 	find_ifaces
 	wip="${MW_NAT_WAN:-$(ip -4 addr show dev "$WAN_IF" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)}"
 	cls="$(ip_class "$wip")"
@@ -2282,14 +2335,17 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 		seen="$(nat_seen)"
 		if [ -z "$seen" ]; then cls=unseen; elif [ "$seen" != "$wip" ]; then cls=shared; fi
 	fi
-	if [ -x /usr/sbin/miniupnpd ]; then
+	if [ -x "$UPNP_BIN" ]; then
 		up=off
 		[ "$(upnp_uci -q get upnpd.config.enabled 2>/dev/null)" = 1 ] && pgrep miniupnpd >/dev/null 2>&1 && up=on
-		[ "$up" = off ] && [ -x /sbin/fw4 ] && [ "$(upnp_backend)" = iptables ] && up=wrong
+		[ "$up" = off ] && upnp_wrong && up=wrong
 	fi
 	[ -n "$MW_NAT_UPNP" ] && up="$MW_NAT_UPNP"
 	if is_ipv4 "$DEVICE_IP"; then
-		case "$up" in on|off) acl="$(upnp_acl)"; { [ "$up" = off ] || [ "$acl" != mine ]; } && can=1 ;; esac
+		case "$up" in
+			on|off) acl="$(upnp_acl)"; { [ "$up" = off ] || [ "$acl" != mine ]; } && can=1 ;;
+			*) [ -n "$(pm_kind)" ] && { can=1; inst=1; } ;;
+		esac
 	fi
 	if is_ipv4 "$DEVICE_IP"; then
 		lf="${MW_NAT_LEASES:-$(uci -q get upnpd.config.upnp_lease_file 2>/dev/null)}"; [ -n "$lf" ] || lf=/var/run/miniupnpd.leases
@@ -2315,8 +2371,8 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 				case "$up" in
 					on) printf 'note\tUPnP is running, but your gaming device holds no port mapping at the moment. A game asks for one when it starts: run this check again with the game open.\n' ;;
 					off) printf 'warn\tUPnP is installed but not running, and no port forward points at your gaming device, so nothing opens a port when a game asks. Set up UPnP for my gaming device, below, switches it on for that device only.\n' ;;
-					wrong) printf 'warn\tThe UPnP service on this router is the wrong build for its firewall (miniupnpd-iptables), so it cannot start. Under System, Software, remove miniupnpd-iptables and install miniupnpd-nftables, then run this check again.\n' ;;
-					*) printf 'warn\tNothing on this router opens ports for games: UPnP is not installed and no port forward points at your gaming device. Under System, Software, install miniupnpd-nftables first and luci-app-upnp second. In that order: installed alone, luci-app-upnp can bring miniupnpd-iptables, which cannot start on this firewall. Then run this check again, and it will offer to set UPnP up for your gaming device only.\n' ;;
+					wrong) printf 'warn\tThe UPnP service on this router is the wrong build for its firewall, so it cannot start. Install and set up UPnP, below, replaces it with miniupnpd-%s and sets it up for your gaming device only. By hand: under System, Software, remove the miniupnpd package that is there and install miniupnpd-%s.\n' "$(fw_kind)" "$(fw_kind)" ;;
+					*) printf 'warn\tNothing on this router opens ports for games: UPnP is not installed and no port forward points at your gaming device. Install and set up UPnP, below, installs it and sets it up for your gaming device only. By hand: under System, Software, install miniupnpd-%s first and luci-app-upnp second (installed alone, luci-app-upnp can bring the wrong build).\n' "$(fw_kind)" ;;
 				esac
 			fi
 			[ "$up" = on ] && [ "$acl" = all ] && printf 'note\tUPnP lets every device on your network open ports, not only your gaming device. Set up UPnP for my gaming device, below, limits it to that one.\n'
@@ -2333,16 +2389,27 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 		   else printf 'moderate\tLikely Moderate: nothing opens ports for your games\n'; fi ;;
 	esac
 	printf '%s\n' "$body"
+	[ "$inst" = 1 ] && printf 'install\t1\n'
 	[ "$can" = 1 ] && printf 'fix\t1\n'
 	[ -f "$DATA/upnpd.before" ] && printf 'undo\t1\n'
 	return 0
+}
+cmd_natjob() { # fix | unfix as a slow tool: installing packages takes longer than a button's call may
+	local id f="$RUN/www/natfix.json" out rc
+	mkdir -p "$RUN/www"
+	id="$(date +%s)$$"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( if out="$(cmd_nat "$1" 2>&1)"; then rc=true; else rc=false; fi
+	  printf '{"id":"%s","state":"done","ok":%s,"msg":"%s"}\n' "$id" "$rc" "$(jesc "$(echo "$out" | tail -n 1 | sed 's/^matchwatch: //')")" > "$f.tmp" && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+	echo "$id"
 }
 cmd_nat() { # nothing: print it. job: start it in the background and print the job number (the dashboard). fix | unfix: UPnP for the gaming device
 	local id f="$RUN/www/nat.json"
 	case "$1" in fix) cmd_natfix; return ;; unfix) cmd_natunfix; return ;; esac
 	if [ "$1" != job ]; then
 		nat_check | awk -F'\t' 'NR == 1 { print "  " $2; print ""; next }
-			$1 == "fix" { print ""; print "  To switch UPnP on for your gaming device only: matchwatch nat fix"; next }
+			$1 == "install" { inst = 1; next }
+			$1 == "fix" { print ""; print (inst ? "  To install UPnP and set it up for your gaming device only: matchwatch nat fix" : "  To switch UPnP on for your gaming device only: matchwatch nat fix"); next }
 			$1 == "undo" { print "  To put UPnP back as it was before MatchWatch changed it: matchwatch nat unfix"; next }
 			{ printf "  %-5s %s\n", ($1 == "warn" ? "CHECK" : $1), $2 }'
 		return 0
@@ -2353,10 +2420,11 @@ cmd_nat() { # nothing: print it. job: start it in the background and print the j
 	( nat_check | awk -F'\t' -v id="$id" -v ts="$(date +%s)" '
 		{ gsub(/["\\]/, " ") }
 		NR == 1 { printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"verdict\":\"%s\",\"head\":\"%s\",\"lines\":[", id, ts, $1, $2; next }
+		$1 == "install" { inst = 1; next }
 		$1 == "fix" { fix = 1; next }
 		$1 == "undo" { undo = 1; next }
 		{ printf "%s{\"l\":\"%s\",\"t\":\"%s\"}", (n++ ? "," : ""), $1, $2 }
-		END { printf "],\"fix\":%s,\"undo\":%s}\n", (fix ? "true" : "false"), (undo ? "true" : "false") }' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+		END { printf "],\"fix\":%s,\"undo\":%s,\"install\":%s}\n", (fix ? "true" : "false"), (undo ? "true" : "false"), (inst ? "true" : "false") }' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
 	echo "$id"
 }
 
@@ -2618,8 +2686,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		log) cmd_log ;;
 		linetest) cmd_linetest ;;
 		nat) cmd_nat job ;;
-		natfix) cmd_natfix ;;
-		natunfix) cmd_natunfix ;;
+		natfix) cmd_natjob fix ;;
+		natunfix) cmd_natjob unfix ;;
 		qosadvice) cmd_qosadvice ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
