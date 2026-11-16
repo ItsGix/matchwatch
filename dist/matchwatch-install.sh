@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.37.3"
+VERSION="0.37.4"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2381,8 +2381,67 @@ cmd_natunfix() {
 	logger -t matchwatch "UPnP settings put back as they were" 2>/dev/null
 	echo "UPnP's settings are back as they were before MatchWatch changed them."
 }
+# A fixed port forward for the game's own port (0.37.4). With UPnP running and the gaming device allowed,
+# the owner's Call of Duty still said Moderate: it never asked UPnP for a port. A forward of UDP 3074 made
+# by hand gave Open. The port is not taken from any list: each match detail now carries the port the gaming
+# device sent from (lport) and the game's label, and a port is offered only when one game used the same one
+# in at least three of its recent matches and six in ten of them. One UDP port, to the gaming device only,
+# as a named section in the firewall's settings so it is easy to find and to take out again.
+fwd_port() { # -> port <tab> game <tab> matches, or nothing when no game keeps to one port
+	ls "$DATA"/matches/*.json 2>/dev/null | sort | tail -n 40 | while read -r f; do head -c 2000 "$f" 2>/dev/null | head -n 1; echo; done | awk '
+		{ p = ""; g = ""
+		  if (match($0, /"lport":[0-9]+/)) { p = substr($0, RSTART + 8, RLENGTH - 8) }
+		  if (match($0, /"label":"[^"]*"/)) { g = substr($0, RSTART + 9, RLENGTH - 10) }
+		  if (p == "" || g == "" || p + 0 < 1024) next
+		  n[g]++; c[g SUBSEP p]++; if (c[g SUBSEP p] > best) { best = c[g SUBSEP p]; bg = g; bp = p } }
+		END { if (best >= 3 && best * 10 >= n[bg] * 6) printf "%s\t%s\t%d\n", bp, bg, best }'
+}
+fwd_has() { # port: is that UDP port already forwarded to the gaming device?
+	upnp_uci -q show firewall 2>/dev/null | awk -v d="$DEVICE_IP" -v p="$1" '
+		{ gsub(/\047/, "") }
+		/=redirect$/ { s = $0; sub(/=redirect$/, "", s); next }
+		{ k = $0; sub(/=.*/, "", k); v = $0; sub(/[^=]*=/, "", v); o = k; sub(/.*\./, "", o); sec = k; sub(/\.[^.]*$/, "", sec); val[sec, o] = v; secs[sec] = 1 }
+		END { for (s in secs) if (val[s, "dest_ip"] == d && val[s, "src_dport"] == p && (val[s, "proto"] == "" || val[s, "proto"] ~ /udp/) && val[s, "enabled"] != "0") { print 1; exit } }' | grep -q 1
+}
+fwd_stale() { # a forward MatchWatch made that points at an address which is no longer the gaming device
+	upnp_uci -q show firewall 2>/dev/null | grep "^firewall\.matchwatch_fwd_[0-9]*\.dest_ip=" | grep -qv "='$DEVICE_IP'"
+}
+fwd_reload() { [ -n "$MW_UCI_DIR" ] && return 0; ( sleep 1; if [ -x /sbin/fw4 ]; then fw4 -q reload; else /etc/init.d/firewall reload; fi ) >/dev/null 2>&1 & }
+cmd_natfwd() { # [port]
+	local port="$1" game="" l s
+	is_ipv4 "$DEVICE_IP" || die "choose your gaming device first, on the Settings tab"
+	l="$(fwd_port)"
+	[ -n "$port" ] || port="$(echo "$l" | cut -f1)"
+	[ "$port" = "$(echo "$l" | cut -f1)" ] && game="$(echo "$l" | cut -f2 | tr -cd 'A-Za-z0-9 ._-' | cut -c1-30)"
+	case "$port" in ""|*[!0-9]*) die "MatchWatch has not yet seen your game keep to one port. Give the port: matchwatch nat forward <port>" ;; esac
+	[ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || die "a port to forward is between 1024 and 65535"
+	upnp_uci -q show firewall 2>/dev/null | grep -q "\.name='wan'" || die "this router's firewall has no zone called wan, so MatchWatch cannot tell where the internet side is. Add the forward by hand under Network, Firewall, Port Forwards."
+	# forwards made earlier follow the gaming device
+	for s in $(upnp_uci -q show firewall 2>/dev/null | sed -n 's/^firewall\.\(matchwatch_fwd_[0-9]*\)=redirect$/\1/p'); do upnp_uci set "firewall.$s.dest_ip=$DEVICE_IP"; done
+	if ! fwd_has "$port"; then
+		s="matchwatch_fwd_$port"
+		upnp_uci set "firewall.$s=redirect"
+		upnp_uci set "firewall.$s.name=MatchWatch: ${game:-game} port $port"
+		upnp_uci set "firewall.$s.target=DNAT"; upnp_uci set "firewall.$s.proto=udp"
+		upnp_uci set "firewall.$s.src=wan"; upnp_uci set "firewall.$s.src_dport=$port"
+		upnp_uci set "firewall.$s.dest=lan"; upnp_uci set "firewall.$s.dest_ip=$DEVICE_IP"; upnp_uci set "firewall.$s.dest_port=$port"
+	fi
+	upnp_uci commit firewall
+	fwd_reload
+	logger -t matchwatch "port $port forwarded to the gaming device" 2>/dev/null
+	echo "UDP port $port is forwarded to your gaming device. Restart your game, then check your NAT again. It is listed under Network, Firewall, Port Forwards."
+}
+cmd_natunfwd() {
+	local s n=0
+	for s in $(upnp_uci -q show firewall 2>/dev/null | sed -n 's/^firewall\.\(matchwatch_fwd_[0-9]*\)=redirect$/\1/p'); do upnp_uci delete "firewall.$s"; n=$((n + 1)); done
+	[ "$n" -gt 0 ] || die "MatchWatch has added no port forward, so there is nothing to remove."
+	upnp_uci commit firewall
+	fwd_reload
+	logger -t matchwatch "port forward removed ($n)" 2>/dev/null
+	echo "Removed the $n port forward(s) MatchWatch added. Forwards you made yourself are untouched."
+}
 nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sentence
-	local wip cls seen up=none maps=0 fwd=0 lf body acl="" can=0 inst=0
+	local wip cls seen up=none maps=0 fwd=0 lf body acl="" can=0 inst=0 pf="" pfp="" pfg="" pfn=""
 	find_ifaces
 	wip="${MW_NAT_WAN:-$(ip -4 addr show dev "$WAN_IF" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)}"
 	cls="$(ip_class "$wip")"
@@ -2405,7 +2464,7 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 	if is_ipv4 "$DEVICE_IP"; then
 		lf="${MW_NAT_LEASES:-$(uci -q get upnpd.config.upnp_lease_file 2>/dev/null)}"; [ -n "$lf" ] || lf=/var/run/miniupnpd.leases
 		[ "$up" = on ] && [ -f "$lf" ] && maps="$(grep -c ":$DEVICE_IP:" "$lf" 2>/dev/null)"
-		fwd="$(uci -q show firewall 2>/dev/null | grep -c "dest_ip='$DEVICE_IP'")"
+		fwd="$(upnp_uci -q show firewall 2>/dev/null | grep -c "dest_ip='$DEVICE_IP'")"
 	fi
 	body="$(
 		case "$cls" in
@@ -2432,6 +2491,13 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 			fi
 			[ "$up" = on ] && [ "$acl" = all ] && printf 'note\tUPnP lets every device on your network open ports, not only your gaming device. Set up UPnP for my gaming device, below, limits it to that one.\n'
 		fi
+		if is_ipv4 "$DEVICE_IP"; then
+			pf="$(fwd_port)"; pfp="$(echo "$pf" | cut -f1)"; pfg="$(echo "$pf" | cut -f2)"; pfn="$(echo "$pf" | cut -f3)"
+			if fwd_stale; then printf 'warn\tA port forward MatchWatch added points at an address that is no longer your gaming device. Forward the port to my gaming device, below, moves it.\n'
+			elif [ -n "$pfp" ] && ! fwd_has "$pfp"; then printf 'note\t%s sent from port %s on your gaming device in %s of its recent matches. Some games never ask UPnP for a port. Forwarding that one UDP port, below, gives them an open port without it. It stays open to your gaming device all the time, not only while the game runs.\n' "$pfg" "$pfp" "$pfn"
+			elif [ -z "$pfp" ] && [ "$maps" = 0 ] && [ "$fwd" = 0 ] && [ "$up" = on ]; then printf 'note\tIf your game still says Moderate with UPnP running, it is not asking UPnP for a port. After three matches MatchWatch knows which port the game sends from, and this check then offers to forward it.\n'
+			fi
+		fi
 		printf 'note\tOpen, Moderate and Strict are each game'"'"'s own words, and games differ. This is what the router'"'"'s side makes likely, not what a game will show.\n'
 	)"
 	case "$cls" in
@@ -2445,6 +2511,11 @@ nat_check() { # first line: verdict <tab> headline. Then: ok|note|warn <tab> sen
 	esac
 	printf '%s\n' "$body"
 	[ "$inst" = 1 ] && printf 'install\t1\n'
+	if is_ipv4 "$DEVICE_IP"; then
+		pf="$(fwd_port)"; pfp="$(echo "$pf" | cut -f1)"
+		if [ -n "$pfp" ] && { fwd_stale || ! fwd_has "$pfp"; }; then printf 'fwd\t%s\n' "$pfp"; fi
+		upnp_uci -q show firewall 2>/dev/null | grep -q '^firewall\.matchwatch_fwd_[0-9]*=redirect' && printf 'fwdundo\t1\n'
+	fi
 	[ "$can" = 1 ] && printf 'fix\t1\n'
 	[ -f "$DATA/upnpd.before" ] && printf 'undo\t1\n'
 	return 0
@@ -2460,10 +2531,12 @@ cmd_natjob() { # fix | unfix as a slow tool: installing packages takes longer th
 }
 cmd_nat() { # nothing: print it. job: start it in the background and print the job number (the dashboard). fix | unfix: UPnP for the gaming device
 	local id f="$RUN/www/nat.json"
-	case "$1" in fix) cmd_natfix; return ;; unfix) cmd_natunfix; return ;; esac
+	case "$1" in fix) cmd_natfix; return ;; unfix) cmd_natunfix; return ;; forward) cmd_natfwd "$2"; return ;; unforward) cmd_natunfwd; return ;; esac
 	if [ "$1" != job ]; then
 		nat_check | awk -F'\t' 'NR == 1 { print "  " $2; print ""; next }
 			$1 == "install" { inst = 1; next }
+			$1 == "fwd" { print ""; print "  To forward UDP port " $2 " to your gaming device: matchwatch nat forward"; next }
+			$1 == "fwdundo" { print "  To remove the port forward MatchWatch added: matchwatch nat unforward"; next }
 			$1 == "fix" { print ""; print (inst ? "  To install UPnP and set it up for your gaming device only: matchwatch nat fix" : "  To switch UPnP on for your gaming device only: matchwatch nat fix"); next }
 			$1 == "undo" { print "  To put UPnP back as it was before MatchWatch changed it: matchwatch nat unfix"; next }
 			{ printf "  %-5s %s\n", ($1 == "warn" ? "CHECK" : $1), $2 }'
@@ -2476,10 +2549,12 @@ cmd_nat() { # nothing: print it. job: start it in the background and print the j
 		{ gsub(/["\\]/, " ") }
 		NR == 1 { printf "{\"id\":\"%s\",\"state\":\"done\",\"ts\":%d,\"verdict\":\"%s\",\"head\":\"%s\",\"lines\":[", id, ts, $1, $2; next }
 		$1 == "install" { inst = 1; next }
+		$1 == "fwd" { fwd = $2 + 0; next }
+		$1 == "fwdundo" { fu = 1; next }
 		$1 == "fix" { fix = 1; next }
 		$1 == "undo" { undo = 1; next }
 		{ printf "%s{\"l\":\"%s\",\"t\":\"%s\"}", (n++ ? "," : ""), $1, $2 }
-		END { printf "],\"fix\":%s,\"undo\":%s,\"install\":%s}\n", (fix ? "true" : "false"), (undo ? "true" : "false"), (inst ? "true" : "false") }' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+		END { printf "],\"fix\":%s,\"undo\":%s,\"install\":%s,\"fwd\":%d,\"fwdundo\":%s}\n", (fix ? "true" : "false"), (undo ? "true" : "false"), (inst ? "true" : "false"), fwd, (fu ? "true" : "false") }' > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
 	echo "$id"
 }
 
@@ -2743,6 +2818,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		nat) cmd_nat job ;;
 		natfix) cmd_natjob fix ;;
 		natunfix) cmd_natjob unfix ;;
+		natfwd) cmd_natfwd "$arg" ;;
+		natunfwd) cmd_natunfwd ;;
 		qosadvice) cmd_qosadvice ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
@@ -3259,6 +3336,8 @@ matchwatch $VERSION - game server and connection judge
   matchwatch qos advice        what your matches say about QoSmate's speed limits
   matchwatch nat               what the router's side makes likely for your NAT type, and why
   matchwatch nat fix | unfix   switch UPnP on for your gaming device only (or put its settings back)
+  matchwatch nat forward [port] | unforward
+                               forward the game's own UDP port to your gaming device (or remove that forward)
   matchwatch device [<ip>|all] show the devices on your network and choose which one to watch
   matchwatch qos fix | unfix   add (or remove) QoSmate rules that put your gaming device's UDP in the top class
   matchwatch block <ip> [days] block a server (default $BLOCK_DAYS days, 0 = until unblocked)
@@ -3330,7 +3409,7 @@ case "$1" in
 	_updatetick) update_due && { update_note; export_json; } ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
-	nat) cmd_nat "$2" ;;
+	nat) cmd_nat "$2" "$3" ;;
 	clear-history) cmd_clear_history ;;
 	forget) cmd_forget "$2" "$3" ;;
 	share) shift; cmd_share "$@" ;;
@@ -4240,7 +4319,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	# --- full detail for the dashboard's match page
 	if (!REPLAY || DETAILDIR != "") {
 		dj = "{\"id\":" int(F_first[f]) ",\"start\":" int(F_first[f]) ",\"dur\":" int(dur) ",\"analysed\":" dsec
-		dj = dj ",\"device\":" js(F_lip[f]) ",\"ip\":" js(ip) ",\"port\":" (F_rport[f] + 0)
+		dj = dj ",\"device\":" js(F_lip[f]) ",\"ip\":" js(ip) ",\"port\":" (F_rport[f] + 0) ",\"lport\":" (F_lport[f] + 0) ",\"label\":" js(gamename(F_rport[f], ip))
 		dj = dj ",\"cc\":" js(PS["cc"]) ",\"city\":" js(PS["city"]) ",\"country\":" js(PS["country"]) ",\"org\":" js(PS["org"]) ",\"asn\":" js(PS["asn"])
 		dj = dj ",\"tick\":" jn2(tick) ",\"nom\":" jn2(dnom) ",\"jit\":" jn2(djit) ",\"jitpct\":" jn2(djrel) ",\"late\":" jn2(dlate) ",\"clump\":" jn2(dclump) ",\"lost\":" jn2(dlost)
 		dj = dj ",\"stut\":" dstut ",\"freeze\":" dfrz ",\"worst\":" int(S_worst[kd] + 0) ",\"rough\":" jn2(dbad)
@@ -5141,7 +5220,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart natfix natunfix"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart natfix natunfix natfwd natunfwd"
 
 reply() { # ok(0|1) text
 	json_init
@@ -5276,7 +5355,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.37.3", reloading = false;
+var BUILT = "0.37.4", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6838,6 +6917,14 @@ function pageTools() {
 				};
 				if (r.fix) fixes.appendChild(slow(r.install ? "Install and set up UPnP for my gaming device" : "Set up UPnP for my gaming device", "natfix", r.install ? "Install UPnP on this router?" : "Change UPnP's settings?", true));
 				if (r.undo) fixes.appendChild(slow("Put UPnP back as it was", "natunfix", "Put it back as it was?", false));
+				// some games never ask UPnP: one fixed forward of the port the game was seen sending from
+				if (r.fwd || r.fwdundo) {
+					var recheck = function (out) { toast(out || "Done."); setTimeout(function () { natBtn.click(); }, 2500); }, fw = h("div", { cls: "actions" });
+					if (r.fwd) fw.appendChild(act("Forward port " + r.fwd + " to my gaming device", "natfwd", r.fwd, { solid: !r.fix, confirm: "Open UDP port " + r.fwd + "?", done: recheck }));
+					if (r.fwdundo) fw.appendChild(act("Remove the forward MatchWatch added", "natunfwd", null, { confirm: "Remove it?", done: recheck }));
+					natOut.appendChild(fw);
+					natOut.appendChild(h("p", { cls: "note", text: "A forward opens one UDP port to your gaming device and nothing else, all the time, not only while a game runs. It is the port MatchWatch saw your game send from, and it appears under Network, Firewall, Port Forwards. Removing takes out only what MatchWatch added." }));
+				}
 				if (r.fix || r.undo) {
 					natOut.appendChild(fixes);
 					natOut.appendChild(h("p", { cls: "note", text: (r.install ? "This installs the UPnP service that suits this router's firewall, and its settings page, from OpenWrt's package servers, which can take a minute. Then it " : "Setting up ") + "switches the service on and narrows its access list, so only your gaming device may open ports and every other device is refused. The second button, once there is something to undo, puts the settings back as they were and removes anything MatchWatch installed." }));

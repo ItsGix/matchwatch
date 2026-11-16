@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.37.3", reloading = false;
+var BUILT = "0.37.4", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1590,6 +1590,14 @@ function pageTools() {
 				};
 				if (r.fix) fixes.appendChild(slow(r.install ? "Install and set up UPnP for my gaming device" : "Set up UPnP for my gaming device", "natfix", r.install ? "Install UPnP on this router?" : "Change UPnP's settings?", true));
 				if (r.undo) fixes.appendChild(slow("Put UPnP back as it was", "natunfix", "Put it back as it was?", false));
+				// some games never ask UPnP: one fixed forward of the port the game was seen sending from
+				if (r.fwd || r.fwdundo) {
+					var recheck = function (out) { toast(out || "Done."); setTimeout(function () { natBtn.click(); }, 2500); }, fw = h("div", { cls: "actions" });
+					if (r.fwd) fw.appendChild(act("Forward port " + r.fwd + " to my gaming device", "natfwd", r.fwd, { solid: !r.fix, confirm: "Open UDP port " + r.fwd + "?", done: recheck }));
+					if (r.fwdundo) fw.appendChild(act("Remove the forward MatchWatch added", "natunfwd", null, { confirm: "Remove it?", done: recheck }));
+					natOut.appendChild(fw);
+					natOut.appendChild(h("p", { cls: "note", text: "A forward opens one UDP port to your gaming device and nothing else, all the time, not only while a game runs. It is the port MatchWatch saw your game send from, and it appears under Network, Firewall, Port Forwards. Removing takes out only what MatchWatch added." }));
+				}
 				if (r.fix || r.undo) {
 					natOut.appendChild(fixes);
 					natOut.appendChild(h("p", { cls: "note", text: (r.install ? "This installs the UPnP service that suits this router's firewall, and its settings page, from OpenWrt's package servers, which can take a minute. Then it " : "Setting up ") + "switches the service on and narrows its access list, so only your gaming device may open ports and every other device is refused. The second button, once there is something to undo, puts the settings back as they were and removes anything MatchWatch installed." }));
