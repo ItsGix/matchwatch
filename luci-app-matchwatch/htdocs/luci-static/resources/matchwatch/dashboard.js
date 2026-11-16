@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.38.2", reloading = false;
+var BUILT = "0.38.3", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -912,12 +912,19 @@ function ovPaint() {
 	var N = 60, td = (s.tl_d || []).slice(-N), tu = (s.tl_u || []).slice(-N), tp = (s.tl_p || []).slice(-N), tn = (s.tl_n || []).slice(-N);
 	function pad(a) { while (a.length < N) a.unshift(0); return a; }
 	td = pad(td); tu = pad(tu); tp = pad(tp); tn = pad(tn);
+	// tl_d and tl_u are the longest gap in each second, not lateness: a server sending 21 updates a second
+	// has a gap of 48 ms when all is well. The first overlay read that as 48 ms late and lit Server amber
+	// through a clean match, while the Live page beside it showed nothing wrong. So, as the Live chart does,
+	// take the stream's own normal beat away first, and call a second felt on the chart's own line.
+	var dn = median(td), un = median(tu);
+	var late = td.map(function (v, k) { return v >= 1000 && tu[k] >= 1000 ? 0 : Math.max(0, v - dn); }), paus = tu.map(function (v, k) { return v >= 1000 && td[k] >= 1000 ? 0 : Math.max(0, v - un); });
+	var feltD = Math.max(30, dn);
 	var nb = s.navg || median(tn), hasN = tn.some(function (v) { return v > 0; });
 	var gap = tp.map(function (v, k) { return v > 0 ? (hasN && tn[k] > 0 ? v - tn[k] : v) : 0; }), gb = median(gap);
 	function sev(v, a, b, c) { return v >= c ? 3 : v >= b ? 2 : v >= a ? 1 : 0; }
-	var vL = tn.map(function (v) { return v > 0 && nb ? Math.max(0, v - nb) : 0; }), sL = vL.map(function (v) { return sev(v, 4, 8, 20); });
+	var vL = tn.map(function (v) { return v > 0 && nb ? Math.max(0, v - nb) : 0; }), sL = vL.map(function (v) { return sev(v, 8, 15, 30); });
 	var vR = gap.map(function (v) { return v > 0 && gb ? Math.max(0, v - gb) : 0; }), sR = vR.map(function (v, k) { return sL[k] >= 2 ? 0 : sev(v, 5, 10, 25); });
-	var sS = td.map(function (v, k) { return sL[k] >= 2 || sR[k] >= 2 ? 0 : sev(v, 15, 40, 100); }), sP = tu.map(function (v) { return sev(v, 25, 50, 100); });
+	var sS = late.map(function (v, k) { return sL[k] >= 2 || sR[k] >= 2 ? 0 : v > Math.max(100, feltD) ? 3 : v > feltD ? 2 : v >= feltD / 2 ? 1 : 0; }), sP = paus.map(function (v) { return sev(v, 50, 100.01, 200); });
 	function now(a) { var m = 0, k; for (k = N - 5; k < N; k++) if (a[k] > m) m = a[k]; return m >= 3 ? "bad" : m === 2 ? "mid" : "ok"; }
 	var COL = { ok: "#5fd0a0", mid: "#e8b64c", bad: "#f0705f", idle: "#8fa3a8" }, MARK = ["", "#5fd0a0", "#e8b64c", "#f0705f"];
 	if (show.place || show.game) {
@@ -929,8 +936,8 @@ function ovPaint() {
 		// each area can be left out on its own: someone whose ISP answers no pings has no use for a Line row
 		var grid = h("span", { cls: "ovg" }), ar = (q.areas || "server,route,line,pc").split(",");
 		if (ar.length < 3) grid.className = "ovg one";
-		[["Server", td, sS, 130, s.ping == null && !td.length ? "idle" : now(sS)], ["Route", vR, sR, 32, s.ping == null ? "idle" : now(sR)],
-		 ["Line", vL, sL, 26, hasN ? now(sL) : "idle"], ["PC", tu, sP, 130, now(sP)]].forEach(function (a) {
+		[["Server", late, sS, 130, now(sS)], ["Route", vR, sR, 32, s.ping == null ? "idle" : now(sR)],
+		 ["Line", vL, sL, 26, hasN ? now(sL) : "idle"], ["PC", paus, sP, 200, now(sP)]].forEach(function (a) {
 			if (ar.indexOf(a[0].toLowerCase()) < 0) return;
 			var st = a[4], row = h("span", { cls: "ova " + st }, h("i"), h("span", a[0]));
 			if (show.lines || show.marks) {
@@ -979,13 +986,14 @@ function proofCard(m) {
 		g.fillStyle = cardColour(p[1]); g.font = "700 56px " + F; g.fillText(p[1] == null ? "n/a" : String(Math.round(p[1])), bx + 28, by + 104);
 	});
 	// how late the server's updates were, second by second
-	var d = m.tl_d || [], n = d.length, top = 0, gx = 56, gy = 590, gw = W - 112, gh = 100;
+	var raw = m.tl_d || [], dnom = m.nom ? 1000 / m.nom : median(raw), d = raw.map(function (v) { return v >= 1000 ? 0 : Math.max(0, v - dnom); }), feltC = Math.max(30, dnom);
+	var n = d.length, top = 0, gx = 56, gy = 590, gw = W - 112, gh = 100;
 	for (i = 0; i < n; i++) if (d[i] > top) top = d[i];
 	top = Math.max(top, 60);
 	g.fillStyle = "#8fa3a8"; g.font = "400 20px " + F; g.fillText("How late the server's updates arrived, through the match (tallest: " + Math.round(top) + " ms)", gx, gy - gh - 14);
 	for (i = 0; i < n; i++) {
 		var bh = Math.max(2, d[i] / top * gh), px = gx + i / n * gw;
-		g.fillStyle = d[i] >= 100 ? "#f0705f" : d[i] >= 40 ? "#e8b64c" : "#3f8f86";
+		g.fillStyle = d[i] > Math.max(100, feltC) ? "#f0705f" : d[i] > feltC ? "#e8b64c" : "#3f8f86";
 		g.fillRect(px, gy - bh, Math.max(1, gw / n - 0.5), bh);
 	}
 	return c;
@@ -1039,6 +1047,7 @@ function netBlock(m) {
 		if (quiet.length < 3) { says.push([0, who + " was busy all through this match (" + what + "), so there is no quiet stretch to compare it with."]); return; }
 		var lb = avg(busy.map(function (i) { return span(td, i, 1); })), lq = avg(quiet.map(function (i) { return span(td, i, 1); }));
 		var pb = avg(busy.map(function (i) { return span(tp, i, ps); })), pq = avg(quiet.map(function (i) { return span(tp, i, ps); }));
+		var nd = median(td); if (lb != null) lb = Math.max(0, lb - nd); if (lq != null) lq = Math.max(0, lq - nd);
 		var late = lb != null && lq != null && lb >= lq + 5 && lb >= lq * 1.5, ping = pb != null && pq != null && pb >= pq + 5 && pb >= pq * 1.3;
 		if (late || ping) says.push([1, "While " + who + " was " + what + " (" + mins(busy.length * step) + " of this match), " +
 			(late ? "the game's updates arrived " + fmt(lb, 0) + " ms late on average, against " + fmt(lq, 0) + " ms the rest of the time" : "") + (late && ping ? ", and " : "") +
