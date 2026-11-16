@@ -109,7 +109,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.38.0", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.38.1", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Fortnite", "ports": "9000-9100", "kind": "", "hosts": ""}, {"name": "Call of Duty", "ports": "3074,30000-45000", "kind": "", "hosts": "vultr,as20473"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -202,13 +202,24 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace" || p.action === "nat" || p.action === "natfix" || p.action === "natunfix") out = "1";
 		if (p.action === "qosadvice") out = "QoSmate holds your line to 60 Mbit down and 18 Mbit up. This looks at your last 14 matches.\\n\\nThe limits look right: in 4 matches your line reached 70%% of its limit, and it was as steady in those as in the 9 where it stayed quiet (0.4 ms of jitter against 0.3 ms). A short burst in a long match weighs little here, so take this as a sign, not proof.\\n\\nThe queue QoSmate keeps for your game never backed up: 0.6 ms at most over 14 matches.\\n\\nWhat this cannot tell you: whether the limits are lower than they need to be. Matches only show a limit that is too high.";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.38.0.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.38.1.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
+// for the README: the shareable picture on its own, and the network section on its own
+if (/shot=card/.test(location.search)) setTimeout(function () {
+	var root = document.getElementById("mw").shadowRoot, real = HTMLAnchorElement.prototype.click;
+	HTMLAnchorElement.prototype.click = function () { if (!this.download) return real.call(this); var im = new Image(); im.src = this.href; im.style.cssText = "display:block;width:100vw"; document.body.textContent = ""; document.body.style.cssText = "margin:0;background:#0d2126"; document.body.appendChild(im); };
+	Array.prototype.forEach.call(root.querySelectorAll("button"), function (x) { if (x.textContent === "Save a picture of this match") x.click(); });
+}, 3200);
+if (/shot=net/.test(location.search)) setTimeout(function () {
+	var root = document.getElementById("mw").shadowRoot, view = root.getElementById("view");
+	Array.prototype.forEach.call(root.querySelectorAll("h2"), function (x) { if (x.textContent === "Your network during this match") { var keep = x.parentNode; Array.prototype.slice.call(view.children).forEach(function (c) { if (c !== keep) c.remove(); }); } });
+}, 3200);
 // for the Tools screenshots: press what a visitor would, so each picture shows a result
 setTimeout(function () { Array.prototype.forEach.call(document.getElementById("mw").shadowRoot.querySelectorAll("button"), function (x) { if (["Choose what to share", "Test my line", "Trace the route now", "Check for an update", "Check my NAT", "Look at my matches"].indexOf(x.textContent) >= 0 || (x.textContent === "wrong game?" && /shot=wronggame/.test(location.search))) x.click(); }); }, 3000);
 </script></body></html>""" % (RES, RES))
-    global OUTSIDE
+    global OUTSIDE, ROUTEM
+    ROUTEM = [m for m in hist if m["code"] == "route"][0]["start"]
     OUTSIDE = [m for m in hist if m["cc"] == "ES"][0]["start"]
     return [m for m in hist if m["code"] == "server"][0]["start"]
 
@@ -240,20 +251,18 @@ if __name__ == "__main__":
         print(f"http://127.0.0.1:{PORT}/matchwatch/"); srv.serve_forever()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     os.makedirs(ROOT + "/docs", exist_ok=True)
-    for route, name, h in (("#/", "live", 1400), (f"#/match/{bad}", "match-report", 2600), ("#/matches", "matches", 2600), ("#/servers", "servers-pool", 5200), ("#/servers/servers", "servers", 3200), ("#/servers/favourites", "favourites", 1600), ("#/tools", "tools", 2600), ("#/tools/share", "share", 4200), ("#/tools/data", "update", 2200)):
-        shoot(browser, route, f"{ROOT}/docs/{name}.png", h)
-    # a match that was played outside the pool: just the top of its report, where that is said
-    shoot(browser, f"#/match/{OUTSIDE}", f"{ROOT}/docs/outside.png", 2600)
-    Image.open(f"{ROOT}/docs/outside.png").crop((0, 0, 1180, 420)).save(f"{ROOT}/docs/outside.png", optimize=True)
-    # the "Wrong game?" box, opened on a match report
-    shoot(browser, f"?shot=wronggame#/match/{bad}", f"{ROOT}/docs/wronggame.png", 2600)
-    Image.open(f"{ROOT}/docs/wronggame.png").crop((0, 0, 1180, 640)).save(f"{ROOT}/docs/wronggame.png", optimize=True)
-    # match mode's two sets of speeds, on their own
-    Image.open(f"{ROOT}/docs/update.png").crop((0, 780, 1180, 1560)).save(f"{ROOT}/docs/matchmode.png", optimize=True)
-    # the ping range, on its own
-    Image.open(f"{ROOT}/docs/servers-pool.png").crop((0, 1345, 1180, 1650)).save(f"{ROOT}/docs/pingrange.png", optimize=True)
-    # the map with what is let in, on its own
-    Image.open(f"{ROOT}/docs/servers-pool.png").crop((0, 390, 1180, 1150)).save(f"{ROOT}/docs/map.png", optimize=True)
-    assert os.path.getsize(f"{ROOT}/docs/match-report.png") > 60000, "the match report picture is nearly empty: the match was not found"
+    D = ROOT + "/docs"
+    def crop(name, box, src=None): Image.open(f"{D}/{src or name}.png").crop(box).save(f"{D}/{name}.png", optimize=True)
+    # six pictures for the README, each of one thing
+    shoot(browser, f"#/match/{bad}", f"{D}/match-report.png", 2600); crop("match-report", (0, 0, 1180, 1000))
+    shoot(browser, "#/", f"{D}/live.png", 1400)
+    shoot(browser, "#/overlay", f"{D}/overlay.png", 300); crop("overlay", (0, 0, 620, 62))
+    shoot(browser, f"?shot=card#/match/{bad}", f"{D}/card.png", 760)
+    shoot(browser, f"?shot=net#/match/{ROUTEM}", f"{D}/network.png", 900)
+    shoot(browser, "#/servers", f"{D}/pool.tmp.png", 5200)
+    crop("pingrange", (0, 1345, 1180, 1650), "pool.tmp"); crop("map", (0, 390, 1180, 1150), "pool.tmp"); os.remove(f"{D}/pool.tmp.png")
+    shoot(browser, "#/tools", f"{D}/tools.png", 2600); crop("tools", (0, 0, 1180, 1262))
+    assert os.path.getsize(f"{D}/match-report.png") > 60000, "the match report picture is nearly empty: the match was not found"
+    assert os.path.getsize(f"{D}/card.png") > 20000, "the shareable picture was not made"
     srv.shutdown()
     shutil.rmtree(site, ignore_errors=True)

@@ -1,117 +1,83 @@
 # MatchWatch
 
-**Judges every online match from your OpenWrt router — v0.38.0 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.38.1 (pre-release)**
 
-> **OpenWrt only.** MatchWatch runs on a router with [OpenWrt](https://openwrt.org/) firmware and appears inside LuCI, OpenWrt's web interface. It does not run on Windows, macOS, a games console, or a router with its maker's stock firmware. Nothing is installed on your PC or console.
+![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
-![Live dashboard](docs/live.png)
+MatchWatch watches your game's traffic as it passes through the router and says where a bad match came from: the game server, the route to it, your own line, or your PC. Then it helps you do something about it. It lives in LuCI under **Services → MatchWatch**.
 
-MatchWatch watches your game's traffic as it passes through the router and tells you where a bad match came from: the game server, the route to it, your own line, or your PC. It lives in LuCI under **Services → MatchWatch**.
+> **OpenWrt only.** It runs on a router with [OpenWrt](https://openwrt.org/) firmware. Nothing is installed on your PC or console, and it does not run on a router with its maker's stock firmware.
 
-It works from packet timing only. Game traffic is never decoded, changed, delayed or injected, so it has no effect on your ping and nothing for anti-cheat to object to. Blocking servers and changing QoSmate rules do change what the router does, and only happen when you ask for them.
+It works from packet timing only. Game traffic is never decoded, changed, delayed or injected, so it has no effect on your ping and gives anti-cheat nothing to object to. Blocking servers and changing other settings on the router only happen when you ask.
 
 > **Status:** an early release, used daily on one router running OpenWrt 25.12, mostly with one game. Scores are a diagnostic estimate, not proof of a server's health. See [Limits](#limits).
 
+## What you get
+
+### It judges every match
+
+Every match is spotted on its own and scored out of 100 in four parts: server, route, your line, your PC. Each part says in one line what cost it points. The report keeps a chart of the whole match, every stop on the route, and what else on your network was busy.
+
+![Live: the match in progress](docs/live.png)
+
+### It warns you while you can still leave
+
+Half a minute into a match, usually while you are still in the lobby or the warm-up, MatchWatch says so if the server is already clearly rough: on the Live page and, if you use phone alerts, on your phone. If the server looks fine it says nothing.
+
+### It shows who to blame, live and afterwards
+
+A see-through strip of three lights for a stream or a second screen, and a picture of any match to share, with the scores and the timing and no address.
+
+![The overlay: server and route, ping, and your PC](docs/overlay.png)
+
+![A picture of a match, made with one press](docs/card.png)
+
+### It names what else on your network was busy
+
+The router carries every device's traffic, so it can say which one was busy during a match, and whether the game was actually any worse while it was.
+
+![Your network during a match](docs/network.png)
+
+### It lets you choose your servers
+
+Block a bad server or datacentre. Stay on places you draw on a map. Or let in only servers inside a ping range you set, with every measured datacentre marked on the slider.
+
+![The map: your places and your servers by rating](docs/map.png)
+
+![The ping range](docs/pingrange.png)
+
+### It checks the things that quietly ruin matches
+
+A NAT check that says why your NAT is not Open and can put it right in one press. A line test and a route trace with grades. A check that QoSmate is prioritising your game, and whether its speed limits look right.
+
+![Tools: checks with their results](docs/tools.png)
+
+### And the rest
+
+- Remembers every match, with ratings per server, datacentre and hour of the day, and your favourite servers by game.
+- Recognises around thirty popular games and lets you name any other. Voice chat is left alone: calls are never recorded and never blocked.
+- Phone alerts through ntfy: a match started, a poor server ahead, a bad match.
+- Match mode: with QoSmate, one pair of speeds while you play and another the rest of the time.
+- Share files you choose the contents of, item by item. Nothing is ever uploaded.
+- No account and no cloud service. It is a shell script, two awk programs and a LuCI app, and it updates itself from GitHub when you press the button.
+
+The pictures are made from invented data (`test/mockshots.py`). The game titles are real ones MatchWatch recognises; the addresses, hosts, devices and matches are invented.
+
 ## Contents
 
-- [What it does](#what-it-does)
 - [Install, update, remove](#install-update-remove)
-- [The dashboard](#the-dashboard)
-- [How a match is judged](#how-a-match-is-judged)
+- [The dashboard](#the-dashboard), including the overlay
+- [How a match is judged](#how-a-match-is-judged), including the early warning
 - [Alerts](#alerts)
 - [Choosing your servers](#choosing-your-servers)
 - [Games and voice chat](#games-and-voice-chat)
 - [Sharing with other players](#sharing-with-other-players)
-- [Tools](#tools)
+- [Tools](#tools), including the NAT check
 - [QoSmate](#qosmate), including match mode
 - [Commands](#commands)
 - [Privacy and security](#privacy-and-security)
 - [Limits](#limits)
 - [For developers](#for-developers)
-
-## What it does
-
-**Judges the match**
-
-- Spots a match on its own: a steady two-way UDP stream from your gaming device.
-- Measures how evenly the server's updates arrive: tick rate, jitter, late, clumped and missing updates, stutters and freezes.
-- Pings the server, the first hop inside your ISP and your PC throughout the match, to split the blame.
-- Scores the server, the route, your line and your PC out of 100, says in one line what cost each its points, and names the weakest.
-- Pings every stop on the route through the match and names the one where trouble starts.
-- Has an "I felt that" button: press it when something feels off and it shows what the network was doing.
-
-**Remembers**
-
-- Keeps a full report and chart for every match, and ratings per server, datacentre and hour of the day.
-- Keeps your favourite servers, grouped by game.
-- Learns where each game has servers, from your matches and from files other players share.
-- Lets you remove any match, server or datacentre, with favourites protected.
-
-**Acts, when you ask**
-
-- Blocks a bad server or datacentre, or keeps you to a pool of places you choose, turning whole regions away before the game tries them. Single servers from anywhere can be let through, and a game can be made strict so that no unplaced server ever connects.
-- A ping range: only servers whose ping is between a lowest and a highest you choose are let in, with or without places.
-- Says what on your own network was busy during a match, device by device, and whether the game was any worse while it was.
-- A NAT check: what your router's side makes likely for the NAT type games report, and why.
-- Reads your match records to say whether QoSmate's speed limits look right.
-- Alerts your phone through ntfy: when a match starts, when a poor server is ahead, after a bad match.
-- Tests your line before you queue, traces the route to a server, and grades both from A+ to F.
-- Checks that QoSmate is prioritising your game, and reports what its queues did in each match.
-- Match mode: QoSmate holds your line to one pair of speeds while you play and another the rest of the time, both of your choosing.
-- Updates itself from GitHub at the press of a button.
-
-**Stays out of the way**
-
-- Recognises around thirty popular games, and lets you name or add any other by its server port.
-- Leaves voice chat alone: Discord and other calls are not recorded and can never be blocked.
-- Makes share files you choose the contents of, item by item. Nothing is ever uploaded.
-- Needs no account and no cloud service. It is a shell script, two awk programs and a LuCI app.
-
-| The ping range: two handles, your datacentres marked on the line, and what the range would let in |
-| --- |
-| ![Ping range](docs/pingrange.png) |
-
-| Favourites: the star and the pool are separate |
-| --- |
-| ![Favourites](docs/favourites.png) |
-
-| The map: your places as circles and your servers by rating |
-| --- |
-| ![Map](docs/map.png) |
-
-| A match that got through, and why |
-| --- |
-| ![Played outside your places](docs/outside.png) |
-
-| Live | Match report |
-| --- | --- |
-| ![Live](docs/live.png) | ![Match report](docs/match-report.png) |
-
-| Matches | Servers: where I play |
-| --- | --- |
-| ![Matches](docs/matches.png) | ![Where I play](docs/servers-pool.png) |
-
-| Servers, datacentres and blocks |
-| --- |
-| ![Servers](docs/servers.png) |
-
-| Tools: checks, with grades | Tools: sharing |
-| --- | --- |
-| ![Tools](docs/tools.png) | ![Sharing](docs/share.png) |
-
-| "Wrong game?": correcting the name MatchWatch gave a match |
-| --- |
-| ![Wrong game](docs/wronggame.png) |
-
-| Match mode: the speeds while you play and between matches |
-| --- |
-| ![Match mode](docs/matchmode.png) |
-
-| Tools: update, data and settings |
-| --- |
-| ![Update](docs/update.png) |
-
-The screenshots are made from invented data (`test/mockshots.py`). The game titles are real ones MatchWatch recognises; the addresses, hosts and matches are invented.
 
 ## Install, update, remove
 
@@ -183,6 +149,8 @@ The dashboard fetches fresh data every fifteen seconds and redraws only when som
 
 **The dashboard without login.** Turn on "Dashboard without login" in Settings to also serve it at `http://<router address>/matchwatch/` to anyone on your network, for a phone or a second screen. That copy is view only: its one button is "I felt that", and nothing can be blocked or changed from it. It is off by default.
 
+**The overlay.** `http://<router address>/matchwatch/#/overlay` shows only a strip of three lights and your ping, updated every second, on a see-through background: **Server and route**, **Ping** and **Your PC**. Each light is the last five seconds, so it turns amber or red the moment something goes wrong and clears again. Server and route share one light because which of the two it was is only known once the match has ended. In OBS, add a Browser source with that address, about 760 wide and 60 high. On a phone or a second screen, just open the address. It needs the dashboard without login switched on; Tools, Data and settings shows the exact address.
+
 ## How a match is judged
 
 ### What it measures
@@ -253,6 +221,19 @@ So a steady route to a server a long way off scores in the low 80s for distance 
 ### "I felt that"
 
 Press the button on the Live page (or the M key with the page focused) when something feels off: a shot that should have hit, a rubber-band, a death behind cover. MatchWatch looks at the six seconds before the press and says whether the server stalled, your ping jumped, your PC stopped sending, or nothing showed on the network at all. Marks appear on the chart, in the match report and in the history.
+
+### The early warning
+
+A match report arrives when the match is already lost. The early warning looks at the first half minute of a game's steady traffic, which is usually the lobby or the warm-up, and speaks once, only if the server is already clearly rough: 3% or more of its updates missing, 8% or more late, two freezes, or rough for half of that half minute. The Live page shows the reason in red, the overlay gains a fourth light, and your phone gets one short line if you use phone alerts. A server that looks fine gets no message.
+
+- The lines are set high on purpose, because a false alarm costs you a good match. They are first guesses and will be tuned.
+- It only tells you. Whether leaving a lobby costs you anything is the game's rule.
+- It applies to recognised games, not to streams on a port nobody has named.
+- To keep it off your phone: `uci set matchwatch.main.early_warn=0`, `uci commit matchwatch`.
+
+### A picture to share
+
+Every match report has **Save a picture of this match**. It makes a 1200 by 630 picture in your browser with the overall score, the verdict, the four parts and how late the server's updates arrived through the match, with the game, the place and the time. It carries no address, and nothing is uploaded: the file is saved to your own device for you to post where you like.
 
 ## Alerts
 
