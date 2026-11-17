@@ -14,8 +14,8 @@ from bpfasm import *
 
 G, LAST_ARR, LAST_REL, T, E_PREV, WIN_N, WIN_MIN, SPARE, C_LATE = 0, 8, 16, 24, 32, 40, 48, 56, 64
 N_PKTS, N_HELD, N_LATE, SUM_HOLD, MAX_E, N_RESYNC, N_SAME = 72, 80, 88, 96, 104, 112, 120
-SLOT, W_TMIN, W_SMIN, P_TMIN, P_SMIN = 128, 136, 144, 152, 160
-BSS_SIZE = 176
+SLOT, W_TMIN, W_SMIN, P_TMIN, P_SMIN, TM, T0_SEEN, ALIGN = 128, 136, 144, 152, 160, 168, 176, 184
+BSS_SIZE = 192
 TSTAMP = 152          # offsetof(struct __sk_buff, tstamp)
 WIN = 32              # updates per correction window
 MAXB = 200_000_000    # the program never holds longer than this, whatever it is told
@@ -36,12 +36,11 @@ def build():
     a.label("okb")
     a.ld64(R4, R9, T)                       # r4 = T
     a.ld64(R3, R8, 0); a.jeqi(R3, 0, "out")
-    # no beat yet, or the engine has measured a different one (lobby to match): start again from its figure
-    a.jeqi(R4, 0, "sett0")
-    a.mov(R1, R3); a.rshi(R1, 4); a.mov(R2, R3); a.add(R2, R1); a.jgt(R4, R2, "sett0")
-    a.mov(R2, R3); a.sub(R2, R1); a.jge(R4, R2, "havet")
-    a.label("sett0")
-    a.mov(R4, R3); a.st64(R9, T, R4); a.st64i(R9, G, 0)
+    # The beat it is given is only where to start. From then on the program follows the beat it sees itself,
+    # because the engine listens after the buffer: what it measures there is this program's own output, and
+    # on the first real match that locked the two onto a wrong beat (43 ms against the server's 48).
+    a.ld64(R1, R9, T0_SEEN); a.jeq(R1, R3, "havet")
+    a.st64(R9, T0_SEEN, R3); a.mov(R4, R3); a.st64(R9, T, R4); a.st64(R9, TM, R4); a.st64i(R9, G, 0)
     a.label("havet")
     a.ld64(R1, R9, LAST_ARR); a.mov(R3, R7); a.sub(R3, R1); a.st64(R9, LAST_ARR, R7)   # r3 = gap
     a.ld64(R2, R9, G)                       # r2 = g
@@ -56,11 +55,36 @@ def build():
 
     a.label("init")                          # first packet, or the stream paused: start the grid here
     a.st64(R9, G, R7); a.st64i(R9, E_PREV, 0); a.st64i(R9, WIN_N, 0); a.st64i(R9, C_LATE, 0); a.st64i(R9, P_TMIN, 0)
+    a.ld64(R1, R9, SLOT); a.st64(R9, ALIGN, R1)
     a.movi(R1, 1); a.lshi(R1, 60); a.st64(R9, WIN_MIN, R1)
     a.mov(R1, R7); a.add(R1, R5)
     a.ja("emit")
 
     a.label("tick")
+    # a running average of the ordinary gaps between updates (those within a quarter of the beat). If it
+    # moves more than a sixteenth away from the beat in use, the server has changed its beat: take the
+    # average and start the grid again.
+    a.mov(R1, R4); a.rshi(R1, 2); a.mov(R0, R4); a.sub(R0, R1); a.jlt(R3, R0, "nocoarse")
+    a.add(R1, R4); a.jgt(R3, R1, "nocoarse")
+    a.ld64(R0, R9, TM)
+    a.jge(R3, R0, "cu")
+    a.mov(R1, R0); a.sub(R1, R3); a.rshi(R1, 5); a.sub(R0, R1)
+    a.ja("cs")
+    a.label("cu")
+    a.mov(R1, R3); a.sub(R1, R0); a.rshi(R1, 5); a.add(R0, R1)
+    a.label("cs")
+    a.st64(R9, TM, R0)
+    a.jge(R0, R4, "d1")
+    a.mov(R1, R4); a.sub(R1, R0)
+    a.ja("d2")
+    a.label("d1")
+    a.mov(R1, R0); a.sub(R1, R4)
+    a.label("d2")
+    a.lshi(R1, 4); a.jle(R1, R4, "nocoarse")
+    a.mov(R4, R0); a.st64(R9, T, R4)
+    inc(N_RESYNC)
+    a.ja("init")
+    a.label("nocoarse")
     a.add(R2, R4)                           # the next update is due one beat on
     inc(SLOT)
     a.mov(R0, R7); a.sub(R0, R2)            # r0 = e, how late this one is (signed)
@@ -74,6 +98,7 @@ def build():
     a.st64i(R9, P_TMIN, 0); a.st64i(R9, WIN_N, 0)
     a.movi(R1, 1); a.lshi(R1, 60); a.st64(R9, WIN_MIN, R1)
     a.label("zeroe")
+    a.ld64(R1, R9, SLOT); a.st64(R9, ALIGN, R1)
     a.mov(R2, R7); a.movi(R0, 0)
     a.ja("havee")
 
@@ -88,6 +113,16 @@ def build():
     a.ld64(R1, R9, C_LATE); a.addi(R1, 1); a.st64(R9, C_LATE, R1)
     a.jslti(R1, 3, "havee")
     a.st64i(R9, C_LATE, 0)
+    # Nearly a whole beat late: an update was lost. Less than that: the lateness crept up, which means the
+    # beat in use is too short. It crept up by r0 over the updates since the grid was last put on an
+    # arrival, so lengthen the beat by that much for each of them.
+    a.mov(R1, R4); a.rshi(R1, 3); a.mov(R3, R4); a.sub(R3, R1)
+    a.jge(R0, R3, "lost")
+    a.ld64(R3, R9, SLOT); a.ld64(R1, R9, ALIGN); a.jle(R3, R1, "lost"); a.sub(R3, R1)
+    a.mov(R1, R0); a.div(R1, R3)
+    a.mov(R3, R4); a.rshi(R3, 3); a.jle(R1, R3, "dk"); a.mov(R1, R3)
+    a.label("dk")
+    a.add(R4, R1); a.st64(R9, T, R4)
     a.ja("lost")
     a.label("c0")
     a.st64i(R9, C_LATE, 0)
@@ -103,12 +138,13 @@ def build():
     # every update in the window was at least r1 late: the grid is early by that, so move it
     a.add(R2, R1); a.sub(R0, R1)
     a.st64(R9, G, R2); a.st64(R9, E_PREV, R0)
+    a.ld64(R3, R9, SLOT); a.st64(R9, ALIGN, R3)
     # the beat, measured between the least late update of the last window and of this one
     a.ld64(R1, R9, P_TMIN); a.jeqi(R1, 0, "nobeat")
     a.ld64(R3, R9, W_TMIN); a.sub(R3, R1)
     a.ld64(R1, R9, W_SMIN); a.ld64(R0, R9, P_SMIN); a.jle(R1, R0, "nobeat"); a.sub(R1, R0)
     a.div(R3, R1)                            # r3 = the measured beat
-    a.ld64(R0, R8, 0); a.mov(R2, R0); a.rshi(R2, 5)       # only believed within 3% of what the engine measured
+    a.mov(R0, R4); a.mov(R2, R0); a.rshi(R2, 4)           # only believed within a sixteenth of the beat in use
     a.mov(R1, R0); a.add(R1, R2); a.jgt(R3, R1, "nobeat")
     a.sub(R0, R2); a.jlt(R3, R0, "nobeat")
     a.jge(R3, R4, "up")

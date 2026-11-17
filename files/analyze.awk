@@ -586,7 +586,9 @@ function judge_mark(f, tm, sec,    kd, ku, dn, s, off, idx, dv, uv, pv, late, ml
 function pb_read(    x) { PBW = ""; if ((getline x < (DATA "/pingbuffer")) > 0) PBW = x; close(DATA "/pingbuffer") }
 function pb_ask(f, nom) {
 	if (PBW == "" || PBW == "0") { F_pbn[f] = 0; F_pbv[f] = ""; return }
-	if (F_pbv[f] == PBW && F_pbn[f] > 0 && abs(nom - F_pbn[f]) / F_pbn[f] <= 0.06) return
+	# Once it is holding, the beat measured here is the buffer's own output, so it is only passed on again
+	# when it has moved by more than the program can follow by itself (a lobby turning into a match).
+	if (F_pbv[f] == PBW && F_pbn[f] > 0 && abs(nom - F_pbn[f]) / F_pbn[f] <= 0.3) return
 	if (!isgame(F_rport[f], F_rip[f])) return
 	F_pbn[f] = nom; F_pbv[f] = PBW
 	if (REPLAY) print "PB " F_rip[f] ":" F_rport[f] " beat " nom

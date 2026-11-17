@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.42.0"
+VERSION="0.42.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2775,7 +2775,7 @@ pb_status() {
 	[ -n "$why" ] && [ "$w" != 0 ] && echo "It cannot work yet. $(pb_whytext "$why")"
 	if [ -s "$RUN/pb.set" ]; then
 		set -- $(pb_stats)
-		[ $# = 7 ] && echo "Holding now, by $(cut -d' ' -f1 "$RUN/pb.set") ms: $1 updates so far, $3 of them later than the buffer, the latest $5 ms behind the beat. The server sends every $7 ms."
+		[ $# = 7 ] && echo "Holding now, by $(cut -d' ' -f1 "$RUN/pb.set") ms: $1 updates so far, $3 of them later than the buffer, the latest $5 ms behind the beat. The average hold is $4 ms and the server sends every $7 ms."
 	fi
 	return 0
 }

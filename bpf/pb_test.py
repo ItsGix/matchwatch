@@ -64,6 +64,16 @@ def stream(hz, secs, jit=0.0003, loss=0.0, clump=None, per_tick=1, spike=None, s
     out.sort()
     return out
 
+def segs(parts, jit=0.0007, per_tick=2, seed=5):
+    """a stream whose beat changes: parts is [(seconds, updates a second)]"""
+    random.seed(seed); out = []; C = 0.004; ts = 10.0
+    for secs, hz in parts:
+        for i in range(int(secs * hz)):
+            arr = ts + C + abs(random.gauss(0, jit))
+            for p in range(per_tick): out.append((int((arr + p * 0.00005) * 1e9), int((ts + C) * 1e9)))
+            ts += 1.0 / hz
+    out.sort(); return out
+
 def run(name, pk, t0_ms, b_ms, quiet=False):
     vm = VM(pb_prog.build(), int(t0_ms * 1e6), int(b_ms * 1e6)); B = int(b_ms * 1e6)
     last = 0; res = []
@@ -73,7 +83,7 @@ def run(name, pk, t0_ms, b_ms, quiet=False):
         assert rel - arr <= B, "held longer than the buffer"
         assert rel >= last, "out of order"
         last = rel; res.append((arr, due, rel))
-    skip = [x for x in res if x[1] > res[0][1] + 3_000_000_000]      # let it settle for three seconds
+    skip = [x for x in res if x[1] > res[-1][1] - 15_000_000_000]     # judged on the last fifteen seconds
     inlate = [a - d for a, d, r in skip]; outdev = [r - (d + B) for a, d, r in skip]
     could = sum(1 for x in inlate if x <= B)
     good = sum(1 for (a, d, r), x, o in zip(skip, inlate, outdev) if x <= B and abs(o) <= 1_500_000)
@@ -103,4 +113,15 @@ if __name__ == "__main__":
         run("two packets an update, 3% lost", stream(60, 60, per_tick=2, loss=0.03), 16.7, b)
         run("path 12 ms longer after 30 s", stream(60, 60, step=(40.0, 0.012)), 16.7, b)
         run("128/s", stream(128, 60, jit=0.0002), 7.8, b)
+        run("21/s in pairs, told 43.45 ms", segs([(60, 20.83)]), 43.45, b)
+        run("21/s in pairs, told 53 ms", segs([(60, 20.83)]), 53.0, b)
+        run("pairs: 21/s, 23/s for 20 s, 21/s", segs([(20, 20.83), (20, 23.0), (30, 20.83)]), 48.0, b)
+        run("60/s told 20 ms (a fifth out)", stream(60, 60), 20.0, b)
+        run("16/s told 56 ms (the router test)", stream(16, 60, jit=0.00005), 56.0, b)
+        run("16/s told 59.5 ms", stream(16, 60, jit=0.00005), 59.5, b)
+        run("16/s told 66 ms", stream(16, 60, jit=0.00005), 66.0, b)
+        run("16/s, jitter 6 ms", stream(16, 60, jit=0.006), 62.5, b)
+        run("16/s, jitter 6 ms, told 56 ms", stream(16, 60, jit=0.006), 56.0, b)
+        run("21/s in pairs, told 46.5 ms", segs([(60, 20.83)]), 46.5, b)
+        run("21/s in pairs, told 49.5 ms", segs([(60, 20.83)]), 49.5, b)
         print()
