@@ -109,7 +109,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.39.0", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.40.0", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Fortnite", "ports": "9000-9100", "kind": "", "hosts": ""}, {"name": "Call of Duty", "ports": "3074,30000-45000", "kind": "", "hosts": "vultr,as20473"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -153,7 +153,11 @@ def build(site):
     open(site + "/matchwatch/index.html", "w", encoding="utf-8", newline="\n").write("""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>matchwatch</title>
 <style>html, body { margin: 0; background: #0f2a2b; }</style></head><body><div id="mw"></div><script src="/%s/dashboard.js"></script><script>
 MatchwatchDashboard(document.getElementById("mw"), { css: "/%s/dashboard.css", full: true, dark: function () { return !/[?&]light/.test(location.search); }, settings: "#",
-	get: function (f) { return fetch("data/" + f).then(function (r) { if (!r.ok) throw 0; return r.json(); }); },
+	get: function (f) { return fetch("data/" + f).then(function (r) { if (!r.ok) throw 0; return r.json(); }).then(function (j) {
+		// ?nomatch: nobody is playing. ?late: the newest match is missing from the first two reads of the history, so the overlay sees it arrive
+		if (f === "status.json" && /nomatch/.test(location.search)) j.sessions = [];
+		if (f === "history.json" && /late/.test(location.search)) { window.MWH = (window.MWH || 0) + 1; if (window.MWH <= 2) { j = j.slice().sort(function (a, b) { return b.start - a.start; }).slice(1); } }
+		return j; }); },
 	act: function (p) {
 		var out = "";
 		if (p.action === "shareexport") out = `# MatchWatch share file. Import it on the Tools page, or with: matchwatch share import <file>
@@ -208,7 +212,7 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace" || p.action === "nat" || p.action === "natfix" || p.action === "natunfix") out = "1";
 		if (p.action === "qosadvice") out = "QoSmate holds your line to 60 Mbit down and 18 Mbit up. This looks at your last 14 matches.\\n\\nThe limits look right: in 4 matches your line reached 70%% of its limit, and it was as steady in those as in the 9 where it stayed quiet (0.4 ms of jitter against 0.3 ms). A short burst in a long match weighs little here, so take this as a sign, not proof.\\n\\nThe queue QoSmate keeps for your game never backed up: 0.6 ms at most over 14 matches.\\n\\nWhat this cannot tell you: whether the limits are lower than they need to be. Matches only show a limit that is too high.";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.39.0.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.40.0.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the README: the shareable picture on its own, and the network section on its own

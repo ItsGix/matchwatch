@@ -84,6 +84,9 @@ td .stayform { max-width: 420px; }
 .ovc.head b { font-weight: 700; } .ovc small { font-size: 0.86em; color: #a9adb0; }
 .ovc.ping { align-items: baseline; gap: 0.25em; } .ovc.ping b { font-size: 1.5em; font-weight: 700; }
 .ovc.mut { color: #a9adb0; }
+.ovc.ping.two, .ovc.verdict { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; }
+.ovc.verdict b { font-weight: 700; } .ovc.verdict b.ovscore { font-size: 1.7em; }
+.ovc small.mid { color: #e8b64c; } .ovc small.bad { color: #f0705f; }
 .ovg { display: inline-grid; grid-template-columns: auto auto; align-content: center; gap: 0.1em 0.3em; padding: 0.3em 0.5em; }
 .ovg.one { grid-template-columns: auto; }
 .ova { display: inline-flex; align-items: center; gap: 0.45em; padding: 0 0.3em; }

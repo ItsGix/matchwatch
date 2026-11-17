@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.39.0 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.40.0 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -159,10 +159,11 @@ Under Tools, Data and settings, Live overlay, tick what you want and copy the ad
 
 - **Every part is optional**: where you are playing (the city and country, never the address), the game, your ping, the lights, the lines, the marks, this server's rating and the match time. The bar closes up around whatever is left. There are three sizes, and it can hide itself between matches.
 - **The four areas** are Server, Route, Line and PC, in two rows of two. Each has a light and a small line of its last minute, which turn amber or red while a problem lasts. Each has its own tick box; with one or two left they stack in a single column.
+- **Three extras, off until you tick them.** *Matches played* adds a line under the place and game counting the matches of this sitting, and it stays on screen between matches; a sitting ends after two hours without a match, and matches too short to be rated are not counted. *Updates missing* puts the share of the server's updates that never arrived under the ping, amber from 1% and red from 3%. *The verdict when a match ends* swaps the ping and the lights for the match's score and one line about it for half a minute, a few seconds after the match ends.
 - **The marks** under a line stay for the rest of the minute: green for a small blip, amber for one you would feel, red for a bad one.
 - **If the Line light stays grey**, your ISP's first hop answers no pings. Untick Line; line faults show under Route instead.
-- **In OBS**, add a Browser source with the address, about 560 wide and 70 high. On a phone or a second screen, just open it.
-- **The address, by hand.** `#/overlay?show=place,game,ping,lights,lines,marks,rate,time&areas=server,route,pc&size=s` (sizes `s`, `m`, `l`; `&idle=0` hides the bar between matches). Leave out a word to leave out that part.
+- **In OBS**, add a Browser source with the address, about 560 wide and 70 high (480 by 60 for the small size, 700 by 90 for the large one; add a tenth to the height with Matches played ticked). Spare room shows nothing, because the page is see-through. On a phone or a second screen, just open it.
+- **The address, by hand.** `#/overlay?show=place,game,ping,lights,lines,marks,rate,time,miss,played,verdict&areas=server,route,pc&size=s` (sizes `s`, `m`, `l`; `&idle=0` hides the bar between matches). Leave out a word to leave out that part.
 
 **How a fault is placed.** It goes to the nearest thing that explains it:
 

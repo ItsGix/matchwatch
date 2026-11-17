@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.39.0", reloading = false;
+var BUILT = "0.40.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -897,14 +897,48 @@ function pageOverlay() {
 	try { document.documentElement.style.background = "transparent"; document.body.style.background = "transparent"; } catch (e) {}
 	ovPaint();
 }
+// Three more parts the owner chose (0.40.0), each a tick box and off unless asked for: the matches played
+// in this sitting, the share of updates missing, and the verdict for half a minute after a match ends.
+// A sitting is counted back from the newest match until a gap of two hours; matches too short to be rated
+// are not counted. The router's own clock (the status file's) says how long ago the newest one ended.
+var OVH = { init: false, last: 0, m: null, until: 0 };
+function ovNewest() { var hs = D.hist || [], t = null, k; for (k = 0; k < hs.length; k++) if (!t || hs[k].start > t.start) t = hs[k]; return t; }
+function ovPlayed() {
+	var hs = (D.hist || []).slice().sort(function (a, b) { return b.start - a.start; }), n = 0, k;
+	var edge = (D.st && D.st.ts) || Date.now() / 1000;
+	for (k = 0; k < hs.length; k++) {
+		if (edge - (hs[k].start + (hs[k].dur || 0)) > 7200) break;
+		if (hs[k].counted) n++;
+		edge = hs[k].start;
+	}
+	return n;
+}
 function ovPaint() {
 	if (page !== "overlay" || !OV) return;
 	var up = svcState() === "on", s = up ? session() : null, q = OVQ;
+	// a match that has just reached the history is the one that has just ended
+	var top = ovNewest();
+	if (!OVH.init) { if (D.info && D.info.version) { OVH.init = true; OVH.last = top ? top.start : 0; } }
+	else if (top && top.start > OVH.last) { OVH.last = top.start; OVH.m = top; OVH.until = Date.now() + 30000; }
 	var show = {}; (q.show || "place,game,ping,lights,lines,marks").split(",").forEach(function (k) { show[k] = 1; });
 	OV.className = "ov sz-" + (/^[sml]$/.test(q.size || "") ? q.size : "m");
 	OV.textContent = "";
 	function cell(cls) { var c = h("span", { cls: "ovc " + (cls || "") }), k; for (k = 1; k < arguments.length; k++) if (arguments[k]) c.appendChild(arguments[k]); OV.appendChild(c); return c; }
-	if (!s) { if (q.idle !== "0") cell("mut", h("span", up ? "Waiting for a match" : "MatchWatch is not running")); return; }
+	var played = show.played ? h("small", "Matches played " + ovPlayed()) : null;
+	if (!s) {
+		var vm = show.verdict && up && OVH.m && Date.now() < OVH.until ? OVH.m : null;
+		if (vm) {
+			var vs = h("b", { cls: "ovscore", text: vm.overall == null ? "n/a" : String(vm.overall) }); vs.style.color = cardColour(vm.overall);
+			var vt = String(vm.verdict || "").split(". ")[0].replace(/\.$/, ""); if (vt.length > 60) vt = vt.slice(0, 57) + "...";
+			var vb = [vt]; if (vm.lost >= 0.05) vb.push(fmt(vm.lost, vm.lost < 10 ? 1 : 0) + "% missing"); if (vm.ping != null) vb.push(fmt(vm.ping, 0) + " ms");
+			cell("head", h("b", (vm.city || "Somewhere") + (vm.cc ? ", " + vm.cc : "")), vm.game ? h("small", vm.game) : null, played);
+			cell("verdict", h("span", null, vs, " ", h("b", grade(vm.overall))), h("small", vb.filter(function (x) { return x; }).join(", ")));
+		} else if (q.idle !== "0") {
+			if (played && up) cell("head", h("b", "Waiting for a match"), played);
+			else cell("mut", h("span", up ? "Waiting for a match" : "MatchWatch is not running"));
+		}
+		return;
+	}
 	// The last minute of each area, second by second, as "how far from normal": the server's late updates, the
 	// extra ping beyond the ISP, the ping to the ISP's first hop, and the PC's pauses. A second's fault is given
 	// to the nearest thing that explains it and to nothing further out: a jump at the first hop is the line and
@@ -927,11 +961,15 @@ function ovPaint() {
 	var sS = late.map(function (v, k) { return sL[k] >= 2 || sR[k] >= 2 ? 0 : v > Math.max(100, feltD) ? 3 : v > feltD ? 2 : v >= feltD / 2 ? 1 : 0; }), sP = paus.map(function (v) { return sev(v, 50, 100.01, 200); });
 	function now(a) { var m = 0, k; for (k = N - 5; k < N; k++) if (a[k] > m) m = a[k]; return m >= 3 ? "bad" : m === 2 ? "mid" : "ok"; }
 	var COL = { ok: "#5fd0a0", mid: "#e8b64c", bad: "#f0705f", idle: "#8fa3a8" }, MARK = ["", "#5fd0a0", "#e8b64c", "#f0705f"];
-	if (show.place || show.game) {
+	if (show.place || show.game || played) {
 		var gm = liveGame(s).replace(/\.\s*$/, "");
-		cell("head", show.place ? h("b", s.loc || "Locating") : null, show.game && gm ? h("small", gm) : null);
+		cell("head", show.place ? h("b", s.loc || "Locating") : null, show.game && gm ? h("small", gm) : null, played);
 	}
-	if (show.ping) cell("ping", h("b", s.ping == null ? "n/a" : fmt(s.ping, 0)), h("small", "ms"));
+	// updates missing over the match so far: amber from 1%, red from 3%, the line the early warning uses
+	var ml = show.miss && s.s_lost != null ? h("small", { cls: s.s_lost >= 3 ? "bad" : s.s_lost >= 1 ? "mid" : "", text: (s.s_lost < 0.05 ? "0" : fmt(s.s_lost, s.s_lost < 10 ? 1 : 0)) + "% missing" }) : null;
+	if (show.ping && ml) cell("ping two", h("span", null, h("b", s.ping == null ? "n/a" : fmt(s.ping, 0)), " ", h("small", "ms")), ml);
+	else if (show.ping) cell("ping", h("b", s.ping == null ? "n/a" : fmt(s.ping, 0)), h("small", "ms"));
+	else if (ml) cell("", ml);
 	if (show.lights || show.lines || show.marks) {
 		// each area can be left out on its own: someone whose ISP answers no pings has no use for a Line row
 		var grid = h("span", { cls: "ovg" }), ar = (q.areas || "server,route,line,pc").split(",");
@@ -1883,7 +1921,7 @@ function pageTools() {
 		}
 		if (!RO) {
 			// the overlay's parts are chosen here and travel in its address, so two scenes can differ
-			var ovParts = [["place", "Where you're playing", 1], ["game", "Game", 1], ["ping", "Ping", 1], ["lights", "The four areas: server, route, line, PC", 1], ["lines", "A line for each area", 1], ["marks", "Marks for trouble in the last minute", 1], ["rate", "This server's rating", 0], ["time", "Match time", 0]];
+			var ovParts = [["place", "Where you're playing", 1], ["game", "Game", 1], ["ping", "Ping", 1], ["lights", "The four areas: server, route, line, PC", 1], ["lines", "A line for each area", 1], ["marks", "Marks for trouble in the last minute", 1], ["rate", "This server's rating", 0], ["time", "Match time", 0], ["miss", "Updates missing, as a figure", 0], ["played", "Matches played", 0], ["verdict", "The verdict when a match ends", 0]];
 			var ovForm = h("div", { cls: "ovform" }), ovAddr = h("input", { type: "text", readonly: "readonly", cls: "ovaddr", "aria-label": "Overlay address" }), ovOpen = h("a", { href: "#/overlay", text: "Open it here", cls: "btnlink" });
 			var ovSize = h("select", { "aria-label": "Size" }); [["s", "Small"], ["m", "Medium"], ["l", "Large"]].forEach(function (o) { ovSize.appendChild(h("option", { value: o[0], text: o[1] })); }); ovSize.value = "m";
 			var ovIdle = h("input", { type: "checkbox" }), ovBoxes = {}, ovAreas = {}, ovAreaRow = h("div", { cls: "ovform" });
