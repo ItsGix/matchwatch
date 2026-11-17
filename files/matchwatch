@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.38.5"
+VERSION="0.38.6"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1954,8 +1954,8 @@ mm_json() {
 	[ -d "$RUN/www" ] || return 0
 	why="$(mm_why)"; [ -z "$why" ] && can=true
 	own="$(mm_rates own)"; on="$(mm_rates tight)"; off="$(mm_rates loose)"
-	if [ "$MATCH_MODE" != 1 ]; then st=off; elif [ "$can" != true ]; then st=unsupported; else st="$(cat "$RUN/mm.state" 2>/dev/null)"; fi
-	printf '{"on":%s,"can":%s,"why":"%s","whytext":"%s","state":"%s","up":%s,"down":%s,"on_up":%s,"on_down":%s,"off_up":%s,"off_down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && echo true || echo false )" "$can" "$why" "$(mm_whytext "$why")" "${st:-tight}" \
+	if [ "$MATCH_MODE" != 1 ] || [ "$why" = noqos ]; then st=off; elif [ "$can" != true ]; then st=unsupported; else st="$(cat "$RUN/mm.state" 2>/dev/null)"; fi
+	printf '{"on":%s,"can":%s,"why":"%s","whytext":"%s","state":"%s","up":%s,"down":%s,"on_up":%s,"on_down":%s,"off_up":%s,"off_down":%s,"hold":%s}\n' "$( [ "$MATCH_MODE" = 1 ] && [ "$why" != noqos ] && echo true || echo false )" "$can" "$why" "$(mm_whytext "$why")" "${st:-tight}" \
 		"${own% *}" "${own#* }" "${on% *}" "${on#* }" "${off% *}" "${off#* }" "$MM_HOLD" > "$RUN/www/matchmode.json.tmp" && mv -f "$RUN/www/matchmode.json.tmp" "$RUN/www/matchmode.json"
 }
 mm_tc() { # device kbit : that rate, or no limit for 0
@@ -2060,6 +2060,7 @@ cmd_matchmode() { # on | off | speeds <down> <up> <down> <up> | (nothing = statu
 			rm -f "$RUN/mm.state"; mm_json
 			echo "Match mode is off. QoSmate's own limits are back on all the time, as QoSmate has them set." ;;
 		speeds) # kbit each: while playing down, up; between matches down, up. 0 = the default (QoSmate's own rate; no limit)
+			[ "$(mm_why)" = noqos ] && die "match mode needs QoSmate, which is not installed on this router. QoSmate does the prioritising; match mode only switches QoSmate's speed limit on for matches and lifts it between them."
 			[ $# = 5 ] || [ $# = 6 ] || die "usage: matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds after a match], speeds in kbit; 0 for QoSmate's own rate while playing, or no limit between matches"
 			if [ $# = 6 ]; then
 				case "$6" in ""|*[!0-9]*) die "the wait after a match is a number of seconds" ;; esac
@@ -2077,7 +2078,8 @@ cmd_matchmode() { # on | off | speeds <down> <up> <down> <up> | (nothing = statu
 			if [ "$MATCH_MODE" = 1 ] && mm_ok; then if [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then mm_set loose force; else mm_set tight force; mm_idle && mm_later; fi; else mm_json; fi
 			r="$(mm_rates tight)"; v="$(mm_rates loose)"
 			echo "Saved. While playing: ${r#* } kbit down, ${r% *} kbit up$( [ -z "$MM_ON_DOWN$MM_ON_UP" ] && echo " (QoSmate's own)"). Between matches: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up.$( [ "$MATCH_MODE" = 1 ] || echo " Match mode is off, so these wait until you turn it on.") They apply $( [ "$MM_HOLD" -gt 0 ] && echo "$MM_HOLD seconds after" || echo "as soon as" ) a match ends." ;;
-		""|status) r="$(mm_rates tight)"; v="$(mm_rates loose)"
+		""|status) if [ "$(mm_why)" = noqos ]; then echo "Match mode needs QoSmate, which is not installed on this router. QoSmate does the prioritising; match mode only switches QoSmate's speed limit on for matches and lifts it between them."; return 0; fi
+			r="$(mm_rates tight)"; v="$(mm_rates loose)"
 			if [ "$MATCH_MODE" != 1 ]; then echo "Match mode is off."
 			elif ! mm_ok; then echo "Match mode is on but cannot work: $(mm_whytext "$(mm_why)")"
 			elif [ "$(cat "$RUN/mm.state" 2>/dev/null)" = loose ]; then echo "Match mode is on. Nothing is being played: $(mm_say "${v#* }") down, $(mm_say "${v% *}") up."
