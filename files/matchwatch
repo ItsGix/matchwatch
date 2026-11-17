@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.44.1"
+VERSION="0.45.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2790,7 +2790,8 @@ pb_check() { # once a minute: never leave a stream held that should not be
 		: > "$RUN/pb.quit"
 		pb_log "this server's updates keep no steady beat, so the buffer has stepped aside for this match and holds nothing"
 	fi
-	if [ "$1" = 0 ]; then pb_drop; pb_log "it saw none of the match's packets (flow offloading sends them past it), so nothing is held in this match"; pb_json; fi
+	if [ "$1" = 0 ]; then pb_drop; pb_log "it saw none of the match's packets (flow offloading sends them past it), so nothing is held in this match"; fi
+	pb_json
 	return 0
 }
 pb_json() { # for the dashboard
@@ -2801,7 +2802,13 @@ pb_json() { # for the dashboard
 	[ -n "$w" ] && ms="$(mm_num "$(pb_ms)")"
 	if [ -s "$RUN/pb.set" ]; then on=true; hold="$(mm_num "$(cut -d' ' -f1 "$RUN/pb.set")")"; fi
 	local rest=$(( $(pb_rest) - $(date +%s) )); [ "$rest" -gt 0 ] || rest=0
-	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","need":"%s","pkgs":%s,"on":%s,"hold":%s,"rest":%s}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$why" "$( [ -s "$DATA/pb.pkgs" ] && echo true || echo false )" "$on" "$hold" "$rest" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
+	# what it has done so far in this match, measured before the hold: the Live page shows the stream after it
+	local live=""
+	if [ "$on" = true ]; then
+		set -- $(pb_stats)
+		[ $# = 10 ] && live=",\"pkts\":$1,\"late\":$3,\"avg\":$4,\"worst\":$5,\"beat\":$7,\"moved\":$9,\"quit\":${10},\"at\":$(date +%s)"
+	fi
+	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","need":"%s","pkgs":%s,"on":%s,"hold":%s,"rest":%s'"$live"'}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$why" "$( [ -s "$DATA/pb.pkgs" ] && echo true || echo false )" "$on" "$hold" "$rest" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
 }
 pb_status() {
 	local w why ms

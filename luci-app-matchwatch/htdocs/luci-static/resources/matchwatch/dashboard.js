@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.44.1", reloading = false;
+var BUILT = "0.45.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -680,6 +680,19 @@ function gameFix(start, label, current, until, onOpen, holder) {
 function waitWords(s) { return !s ? "as soon as a match ends" : (s < 90 ? s + " seconds" : Math.round(s / 60) + " minutes") + " after a match ends"; }
 // Match mode in a sentence: what QoSmate's speed limit is doing right now
 function mbit(k) { return k >= 1000 ? fmt(k / 1000, k % 1000 ? 1 : 0) + " Mbit" : k + " kbit"; }
+// The ping buffer in a sentence, while it is holding a match. The ping above it is MatchWatch's own, measured
+// past the buffer; everything else on the Live page is the stream after the buffer. So this says what the
+// game sees, and what the buffer's own counters saw before the hold (refreshed about once a minute).
+function pbLine() {
+	var p = D.pb, s = session();
+	if (!p || !p.on) return "";
+	if (p.quit) return "Ping buffer: stepped aside for this match. This server's updates keep no steady beat, so nothing is being held.";
+	var t = "Ping buffer: holding this match's updates by " + p.hold + " ms.";
+	if (s && s.ping != null) t += " The ping shown here is your real one; your game reads about " + fmt(s.ping + p.hold, 0) + " ms.";
+	t += " The lines and counts on this page are the stream as your device receives it, after the buffer.";
+	if (p.pkts) t += " Before the buffer: " + (p.late ? p.late + " of " + p.pkts + " packets came later than it could hide" : "none of " + p.pkts + " packets came later than it could hide") + ", the latest " + fmt(p.worst, 0) + " ms behind the server's beat" + (p.moved ? "; the match has moved address " + p.moved + " time" + (p.moved === 1 ? "" : "s") : "") + ".";
+	return t;
+}
 function mmLine() {
 	var m = D.mm;
 	if (!m || !m.on) return "";
@@ -815,7 +828,7 @@ function updateLive() {
 		L.banner.appendChild(bn);
 	}
 	L.felt.disabled = !s;
-	if (L.mm) L.mm.textContent = mmLine();
+	if (L.mm) L.mm.textContent = [mmLine(), pbLine()].filter(function (x) { return x; }).join(" ");
 	if (L.game) {
 		// a match on a network several games share: ask which game, once per match and whenever the answer changes
 		var lg = s && !RO ? liveLabel(s) : null, named = lg && lg.name && !/^Game on port/.test(lg.name);
