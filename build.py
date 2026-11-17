@@ -20,6 +20,7 @@ items = [
     (f"{CORE}/countries.list", f"{LIB}/countries.list", "644"),
     (f"{CORE}/places.list", f"{LIB}/places.list", "644"),
     (f"{CORE}/games.list", f"{LIB}/games.list", "644"),
+    (f"{CORE}/pb.oct", f"{LIB}/pb.oct", "644"),
     (f"{CORE}/matchwatch.init", "/etc/init.d/matchwatch", "755"),
     (f"{LUCI_ROOT}/usr/libexec/rpcd/luci.matchwatch", "/usr/libexec/rpcd/luci.matchwatch", "755"),
     (f"{LUCI_ROOT}/usr/share/luci/menu.d/luci-app-matchwatch.json", "/usr/share/luci/menu.d/luci-app-matchwatch.json", "644"),

@@ -81,7 +81,7 @@ $1 == "TICK" {
 	advance(now - 2)
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
 	# names can change while running (the Tools page, matchwatch game name), so look again now and then
-	if (++TICKS % 20 == 0) { reload_games(); if (!REPLAY) { write_skipped(now); wan_find() } }
+	if (++TICKS % 20 == 0) { reload_games(); pb_read(); if (!REPLAY) { write_skipped(now); wan_find() } }
 	if (HOLDF != "") load_hold()
 	next
 }
@@ -580,6 +580,18 @@ function judge_mark(f, tm, sec,    kd, ku, dn, s, off, idx, dv, uv, pv, late, ml
 # gap ran over the server's normal beat; updates that arrived together after a stall were held up on the way,
 # and the one sent first is taken to have waited longest. Updates that never arrived are not here: nothing
 # can buffer those.
+# The ping buffer itself (0.42.0). The engine only says when: once a match's stream is running and its beat
+# is known, and again if the beat or the owner's setting changes. Only for a server labelled a game, so the
+# pings a game sends to choose a datacentre, relays and voice are never held.
+function pb_read(    x) { PBW = ""; if ((getline x < (DATA "/pingbuffer")) > 0) PBW = x; close(DATA "/pingbuffer") }
+function pb_ask(f, nom) {
+	if (PBW == "" || PBW == "0") { F_pbn[f] = 0; F_pbv[f] = ""; return }
+	if (F_pbv[f] == PBW && F_pbn[f] > 0 && abs(nom - F_pbn[f]) / F_pbn[f] <= 0.06) return
+	if (!isgame(F_rport[f], F_rip[f])) return
+	F_pbn[f] = nom; F_pbv[f] = PBW
+	if (REPLAY) print "PB " F_rip[f] ":" F_rport[f] " beat " nom
+	else system(SELF " _pb " F_rip[f] " " (F_rport[f] + 0) " " F_lip[f] " " (F_lport[f] + 0) " " int(nom * 1000) " >/dev/null 2>&1 &")
+}
 function pb_add(k, l,    b) { if (l < 0) l = 0; b = int(l / 5); if (b > 40) b = 40; S_pb[k, b]++ }
 
 function median_iv(k, n,    i, b, c, half) {
@@ -640,6 +652,7 @@ function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, 
 		}
 	}
 	if (nom > 0) P_nom[k] = nom
+	if (d == "D" && F_active[f] && nom > 0 && rate >= minr) pb_ask(f, nom)
 	for (i = 0; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 	W_n[k] = 0; W_tight[k] = 0
 }
@@ -668,6 +681,7 @@ function session_start(f, sec,    d, k, i, di) {
 	if (sec - QUALIFY - 2 > F_first[f]) F_first[f] = sec - QUALIFY - 2
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
+	F_pbn[f] = 0; F_pbv[f] = ""; pb_read()
 	F_unn[f] = (NGP > 0 && kindof(F_rport[f], F_rip[f]) == "") ? 1 : 0
 	print "START " F_sid[f] " " F_lip[f] " -> " F_rip[f] ":" F_rport[f]
 	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " " (kindof(F_rport[f], F_rip[f]) == "" ? "unnamed" : "named") " >/dev/null 2>&1 &")
@@ -716,13 +730,16 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		close(RUN "/probe." F_sid[f] "/hops.json")
 		if (HOPJ !~ /^\[.*\]$/) HOPJ = ""
 		close(RUN "/probe." F_sid[f] "/qm.json")
+		PBJ = ""; if ((getline PBJ < (RUN "/probe." F_sid[f] "/pb.json")) <= 0) PBJ = ""
+		close(RUN "/probe." F_sid[f] "/pb.json")
+		if (PBJ !~ /^\{.*\}$/) PBJ = ""
 		NETJ = ""; if ((getline NETJ < (RUN "/probe." F_sid[f] "/net.json")) <= 0) NETJ = ""
 		close(RUN "/probe." F_sid[f] "/net.json")
 		if (NETJ !~ /^\{.*\}$/) NETJ = ""
 		TRN = 0
 		while ((getline trl < (RUN "/probe." F_sid[f] "/trace")) > 0) if (trl ~ /^ *[0-9]+ /) TR[++TRN] = clean(trl)
 		close(RUN "/probe." F_sid[f] "/trace")
-	} else { TRN = 0; QM = ""; HOPJ = ""; if (PROBESUM != "") load_sum(PROBESUM) }
+	} else { TRN = 0; QM = ""; HOPJ = ""; PBJ = ""; if (PROBESUM != "") load_sum(PROBESUM) }
 
 	if (dsec < 20 || S_ticks[kd] + 0 == 0) {
 		print "END " F_sid[f] " " ip " too short to judge (" int(dur) "s)"
@@ -944,6 +961,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
 		PBL = -1; for (i = 0; i <= 40; i++) if ((S_pb[kd, i] + 0) > 0) PBL = i
 		if (PBL >= 0) { dj = dj ",\"pb\":{\"h\":["; for (i = 0; i <= PBL; i++) dj = dj (i ? "," : "") (S_pb[kd, i] + 0); dj = dj "]}" }
+		if (PBJ != "") dj = dj ",\"pbuf\":" PBJ
 		if (QM != "") dj = dj ",\"qm\":" QM
 		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ

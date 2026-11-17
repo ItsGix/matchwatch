@@ -35,8 +35,13 @@ def build():
     a.movi(R1, MAXB); a.jle(R5, R1, "okb"); a.mov(R5, R1)
     a.label("okb")
     a.ld64(R4, R9, T)                       # r4 = T
-    a.jnei(R4, 0, "havet")
-    a.ld64(R4, R8, 0); a.st64(R9, T, R4); a.jeqi(R4, 0, "out")
+    a.ld64(R3, R8, 0); a.jeqi(R3, 0, "out")
+    # no beat yet, or the engine has measured a different one (lobby to match): start again from its figure
+    a.jeqi(R4, 0, "sett0")
+    a.mov(R1, R3); a.rshi(R1, 4); a.mov(R2, R3); a.add(R2, R1); a.jgt(R4, R2, "sett0")
+    a.mov(R2, R3); a.sub(R2, R1); a.jge(R4, R2, "havet")
+    a.label("sett0")
+    a.mov(R4, R3); a.st64(R9, T, R4); a.st64i(R9, G, 0)
     a.label("havet")
     a.ld64(R1, R9, LAST_ARR); a.mov(R3, R7); a.sub(R3, R1); a.st64(R9, LAST_ARR, R7)   # r3 = gap
     a.ld64(R2, R9, G)                       # r2 = g
@@ -147,5 +152,8 @@ def build():
 if __name__ == "__main__":
     import sys
     a = build()
-    open(sys.argv[1], "wb").write(elf("mwpb", "mw_pb", a.code(), a.relocs, b"\0" * 64, BSS_SIZE))
-    print("wrote", sys.argv[1], len(a.ins), "instructions")
+    obj = elf("mwpb", "mw_pb", a.code(), a.relocs, b"\0" * 64, BSS_SIZE)
+    if sys.argv[1] == "--oct":      # as text for the installer: the router turns it back into the object with printf
+        open(sys.argv[2], "w", newline="\n").write("".join("\\%03o" % b for b in obj) + "\n")
+    else: open(sys.argv[1], "wb").write(obj)
+    print("wrote", sys.argv[-1], len(a.ins), "instructions,", len(obj), "bytes")

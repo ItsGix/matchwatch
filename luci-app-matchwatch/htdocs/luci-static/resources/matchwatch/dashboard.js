@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.41.0", reloading = false;
+var BUILT = "0.42.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1103,7 +1103,18 @@ function netBlock(m) {
 // the updates by how late they arrived, in 5 ms steps. A game hides about one update interval itself, so an
 // update is one it could not hide when it came later than that, and a buffer of B ms hides those up to B later.
 function pbLeft(m, B) { var hh = m.pb.h, n = 0, i; for (i = 0; i < hh.length; i++) if (i * 5 >= m.nom && i * 5 >= m.nom + B) n += hh[i]; return n; }
+// what the ping buffer did in a match it was on for, from the kernel program's own counters
+function pbufBlock(m) {
+	var p = m.pbuf; if (!p || !p.ms) return null;
+	var b = h("div", null, h("h2", "The ping buffer in this match"));
+	if (!p.pkts) { b.appendChild(h("p", { cls: "lede low", text: "The buffer was set to " + p.ms + " ms but saw none of this match's packets, so nothing was held." })); return b; }
+	var pct = 100 * p.late / p.pkts;
+	b.appendChild(h("p", { cls: "lede " + (pct < 1 ? "ok" : "low"), text: "Held the server's updates by " + p.ms + " ms. " + (p.late ? p.late + " of " + p.pkts + " (" + fmt(pct, pct < 10 ? 1 : 0) + "%) arrived later than that and went straight through" : "None of the " + p.pkts + " arrived later than that") + "; the latest was " + fmt(p.worst, 0) + " ms behind the beat." }));
+	b.appendChild(h("p", { cls: "note", text: "The scores above are for the stream as your device received it, after the buffer. The average hold was " + fmt(p.hold, 1) + " ms, on a server sending every " + fmt(p.beat, 1) + " ms. Your game showed its ping about " + p.ms + " ms higher than the figure here, which is measured without the buffer." }));
+	return b;
+}
 function pbBlock(m) {
+	if (m.pbuf) return null;
 	if (!m.pb || !m.pb.h || !(m.nom > 0) || !(m.analysed >= 60)) return null;
 	var late = pbLeft(m, 0), mins = m.analysed / 60, b = h("div", null, h("h2", "Would a ping buffer have helped?")), B, best = 0, parts = [];
 	if (late / mins < 1) {
@@ -1235,7 +1246,7 @@ function pageMatch(id) {
 		if (m.overall != null) view.appendChild(h("div", { cls: "actions cardrow" }, cardBtn(m)));
 		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
-		var pbb = full ? pbBlock(m) : null; if (pbb) view.appendChild(pbb);
+		var pbb = full ? (pbufBlock(m) || pbBlock(m)) : null; if (pbb) view.appendChild(pbb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }
@@ -1966,6 +1977,19 @@ function pageTools() {
 				h("div", { cls: "actions" }, act("Look at my matches", "qosadvice", null, { done: qaOut.show })), qaOut));
 		}
 		if (!RO) {
+			var pbv = D.pb || {}, pbAgain = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1200); };
+			var pbState = pbv.can === false ? pbv.why : (pbv.set === "auto" ? (pbv.ms > 0 ? "Sizing itself: " + pbv.ms + " ms, from your recent matches." : "Sizing itself, and at the moment that is nothing: your recent matches show too little to absorb.") : (pbv.set ? "Holding the server's updates by " + pbv.set + " ms in every match." : "Off. Nothing is held back."));
+			if (pbv.on) pbState += " Holding now, by " + pbv.hold + " ms.";
+			var pbNum = h("input", { type: "number", min: "5", max: "100", step: "1", inputmode: "numeric", placeholder: "ms", cls: "keep", "aria-label": "Buffer, in milliseconds" });
+			var pbGo = h("button", { type: "button", cls: "solid", text: "Hold this much" });
+			pbGo.addEventListener("click", function () {
+				var v = parseInt(pbNum.value, 10);
+				if (!(v >= 5 && v <= 100)) { toast("Give a figure from 5 to 100 ms.", true); return; }
+				api("pbhold", String(v)).then(function (j) { pbNum.value = ""; if (!j.ok) toast(j.error || j.out || "That did not work.", true); else pbAgain(j.out); });
+			});
+			view.appendChild(tool("Ping buffer", "Holds the server's updates back by a set time during matches, so that late ones can catch up and your game receives an even beat. It costs that much ping in every fight, so run the rehearsal below first: on a steady line it only adds delay. Only the match's own stream is held, on its way to your device; the pings a game uses to choose a server are never touched. Your game will show its ping higher by the buffer, while MatchWatch's own ping figure stays as it is.",
+				h("p", { cls: "note", text: pbState }),
+				pbv.can === false ? null : h("div", { cls: "actions" }, pbNum, pbGo, act("Size it for me", "pbauto", null, { done: pbAgain }), pbv.set ? act("Switch it off", "pboff", null, { done: pbAgain }) : null)));
 			var pbOut = outBox();
 			view.appendChild(tool("Would a ping buffer help me?", "Some routers hold your game's packets back by a set time so that a spiky line feels even, at the price of that much more ping in every fight. This rehearses it first: it reads how late the server's updates arrived in your last forty matches and says how many of the late ones a buffer of each size would have hidden. It holds nothing back and changes nothing.",
 				h("div", { cls: "actions" }, act("Rehearse it", "pbadvice", null, { done: pbOut.show })), pbOut));
@@ -2073,7 +2097,8 @@ function typing() { return Array.prototype.some.call(shadow.querySelectorAll("#p
 // rebuilding it each time made it flicker, and anything filled in a moment later pushed the rest down.
 var lastSig = "";
 function loadAll(then) {
-	var left = 11, done = function () { if (--left === 0) then(); };
+	var left = 12, done = function () { if (--left === 0) then(); };
+	get("pbuf.json", function (x) { D.pb = x || null; done(); });
 	get("matchmode.json", function (x) { D.mm = x || null; done(); });
 	get("hold.json", function (x) { D.hold = x || []; done(); });
 	get("history.json", function (x) { D.hist = x || []; done(); });
@@ -2088,7 +2113,7 @@ function loadAll(then) {
 	get("gameplaces.json", function (x) { D.gp = x || []; done(); });
 	get("coverage.json", function (x) { D.cov = x || null; done(); });
 }
-function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold, D.mm]); } catch (e) { return String(Date.now()); } }
+function sigNow() { try { return JSON.stringify([D.hist, D.servers, D.dcs, D.blocks, D.info, D.favs, D.regions, D.gp, D.cov, D.hold, D.mm, D.pb]); } catch (e) { return String(Date.now()); } }
 function refresh(force) {
 	loadAll(function () {
 		var sig = sigNow(), changed = sig !== lastSig;

@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.41.0 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.42.0 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -288,9 +288,9 @@ Nothing is counted between matches, it changes no score, and the figures stay on
 
 Every match report has **Save a picture of this match**. It makes a 1200 by 630 picture in your browser with the overall score, the verdict, the four parts and how late the server's updates arrived through the match, with the game, the place and the time. It carries no address and nothing is uploaded: the file is saved to your own device.
 
-### Would a ping buffer help?
+### The ping buffer, and whether it would help
 
-Some gaming routers sell a *ping buffer*: your game's packets are held back by a set time so that a spiky line feels even. MatchWatch does not hold packets back. What it does is rehearse the buffer on your real matches, so you can see what one would do on your line before paying for it in ping.
+Some gaming routers sell a *ping buffer*: your game's packets are held back by a set time so that a spiky line feels even. MatchWatch has one too, off until you set it, and it does something the others do not: it first rehearses the buffer on your real matches, so you can see what one would do on your line before paying for it in ping.
 
 **How a buffer works.** A game draws other players a little in the past, by at least one of the server's update intervals, so that an update arriving slightly late is never seen. An update that arrives later than that is the freeze, the teleport, the "packet burst". A buffer on the router holds every update back by, say, 20 ms. One that arrives 20 ms late is then passed straight on, one that arrives on time waits its 20 ms, and the game receives an even beat. The price is that everything you see is 20 ms older, in every fight, whether or not anything was late.
 
@@ -309,6 +309,14 @@ Some gaming routers sell a *ping buffer*: your game's packets are held back by a
 - **The other player's connection.** Dying behind cover is mostly the other player's delay and the server's update rate. Nothing on your router changes that.
 - **Close fights and peeking.** Whoever sees first wins those, and a buffer makes you see later.
 - **Stalls longer than the buffer.** Hiding an 80 ms stall takes about 65 ms of buffer, which costs more than it saves.
+
+**Switching the buffer on.** Under **Tools, Data and settings, Ping buffer**, type a figure from 5 to 100 ms and press **Hold this much**, or press **Size it for me** to have it use the smallest buffer that would have hidden nine in ten late updates in your recent matches (never more than 40 ms, and nothing at all on a steady line). From the command line: `matchwatch buffer hold 25`, `buffer auto`, `buffer off`, `buffer status`.
+
+- **It is a real buffer, not a delay.** A plain delay holds every packet the same time, so the spikes stay and only the ping rises. This keeps the server's beat: an update that arrives on time waits the whole buffer, one that arrives 15 ms late waits 15 ms less, and one later than the buffer goes straight through. Your game receives an even beat.
+- **Only the match is held.** It starts a few seconds into a match, once the server's beat is known, and stops when the match ends. The pings a game sends to choose a server are never held, so matchmaking sees your line as it is. Nothing your device sends is held, and no other device or traffic is touched.
+- **What you will see.** Your game shows its ping higher by the buffer. MatchWatch's own ping figure does not change. The match report scores the stream as your device received it, and a section says what the buffer did: how many updates arrived later than it could hide, and the latest.
+- **It lets go by itself.** It stops holding when the match ends, when MatchWatch stops, and within a minute if no match is on or it saw none of the match's packets.
+- **What it needs.** Four OpenWrt packages: `apk update && apk add kmod-sched-bpf kmod-sched kmod-ifb bpftool-minimal` (with `opkg` on OpenWrt before 25). Without them the row says so and the rehearsal still works. Routers with a big-endian processor are not supported yet. With software flow offloading on, the match's packets may pass the buffer by; it then switches itself off for that match and says so in the log.
 
 The count assumes the game hides one update interval itself. Games do not publish their buffer, so read the figures as a guide: a game that hides more needs less.
 
@@ -815,6 +823,7 @@ Everything is also available over SSH:
 | `matchwatch nat forward [port]` / `nat unforward` | Forwards the game's own UDP port to your gaming device, or removes the forward MatchWatch added |
 | `matchwatch qos advice` | What your last forty matches say about QoSmate's speed limits |
 | `matchwatch buffer` | The ping buffer rehearsal: how many late updates in your last forty matches a buffer of each size would have hidden. Holds nothing back |
+| `matchwatch buffer hold <ms>` / `buffer auto` / `buffer off` / `buffer status` | The ping buffer: hold the match's updates by 5 to 100 ms, have it sized from your matches, switch it off, or see what it is doing |
 | `matchwatch report` | Prints a report to pass on when something is wrong: the self-check, tool versions, settings, files and the last log lines, with your internet address, phone alert address and device names left out. The same report is under Tools, Checks, Report a problem |
 | `matchwatch service` / `service stop` / `service start` / `service restart` | Says whether MatchWatch is running, or stops, starts or restarts it. If it stops by itself, the Tools page and the router's log say why |
 | `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |
