@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.43.0"
+VERSION="0.43.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2745,6 +2745,10 @@ pb_stats() { # updates seen, held, later than the buffer; mean hold ms; latest m
 }
 pb_drop() { # stop holding. The filter goes first, so nothing is ever redirected to a queue that is not there
 	local dev
+	# let go gently: stop stamping, give what is queued a second to leave in order, then take the filter away
+	if [ -s "$RUN/pb.set" ] && pb_ids; then
+		bpftool map update id "$PBD" key 0 0 0 0 value hex $(pb_le64 0) $(pb_le64 0) $(pb_le64 0) $(pb_le64 0) $(pb_le64 0) $(pb_le64 0) $(pb_le64 0) $(pb_le64 0) >/dev/null 2>&1 && sleep 1
+	fi
 	for dev in $(cat "$RUN/pb.dev" 2>/dev/null); do tc filter del dev "$dev" egress prio $PB_PRIO 2>/dev/null; done
 	rm -f "$RUN/pb.dev" "$RUN/pb.flow" "$RUN/pb.since" "$RUN/pb.set"
 }
@@ -2768,6 +2772,7 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	[ "$beat" -ge 2000 ] && [ "$beat" -le 200000 ] || return 0
 	ms="$(pb_ms)"; ms="$(mm_num "$ms")"
 	if [ "$ms" -lt 5 ]; then [ -s "$RUN/pb.flow" ] && pb_drop; return 0; fi
+	[ "$(date +%s)" -lt "$(pb_rest)" ] && return 0
 	[ -z "$(pb_why)" ] || return 0
 	find_ifaces
 	[ -n "$LAN_IF" ] || return 1
@@ -2791,14 +2796,23 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	pb_log "holding this match's updates by $ms ms (the server sends every $((beat / 1000)) ms)"
 	pb_json
 }
+pb_rest() { mm_num "$(cat "$RUN/pb.backoff" 2>/dev/null)"; } # until when the buffer is resting, 0 for not
 pb_sum() { # the match is over: what the buffer did, as one line of JSON for the report, then stop holding
-	local rip flow ms beat
+	local rip flow ms beat since now
 	[ -s "$RUN/pb.flow" ] || return 0
 	rip="$(cut -d' ' -f1 "$PD/server" 2>/dev/null)"; flow="$(cat "$RUN/pb.flow")"
 	[ "${flow%% *}" = "$rip" ] || return 0
 	read -r ms beat < "$RUN/pb.set" 2>/dev/null
 	set -- $(pb_stats)
 	[ $# = 7 ] && [ -n "$ms" ] && printf '{"ms":%s,"beat":%s,"pkts":%s,"held":%s,"late":%s,"hold":%s,"worst":%s,"resync":%s}\n' "$ms" "$7" "$1" "$2" "$3" "$4" "$5" "$6" > "$PD/pb.json"
+	# The game left this server within a minute of the hold beginning. A game that has other servers to hand
+	# (in its lobby, say) sees the held one as slower and moves; the buffer would follow it and move it again.
+	# So it rests for a quarter of an hour. Setting the buffer afresh ends the rest.
+	now="$(date +%s)"; since="$(mm_num "$(cat "$RUN/pb.since" 2>/dev/null)")"
+	if [ "$since" -gt 0 ] && [ $((now - since)) -lt 60 ]; then
+		echo $((now + 900)) > "$RUN/pb.backoff"
+		pb_log "the game left this server $((now - since)) s after the buffer began holding it, so the buffer rests for 15 minutes. A game can move away from a held server when it has others to hand; if this happens in matches, set a smaller buffer"
+	fi
 	pb_drop
 	pb_json
 }
@@ -2820,7 +2834,8 @@ pb_json() { # for the dashboard
 	why="$(pb_why)"; ms=0
 	[ -n "$w" ] && ms="$(mm_num "$(pb_ms)")"
 	if [ -s "$RUN/pb.set" ]; then on=true; hold="$(mm_num "$(cut -d' ' -f1 "$RUN/pb.set")")"; fi
-	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","need":"%s","pkgs":%s,"on":%s,"hold":%s}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$why" "$( [ -s "$DATA/pb.pkgs" ] && echo true || echo false )" "$on" "$hold" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
+	local rest=$(( $(pb_rest) - $(date +%s) )); [ "$rest" -gt 0 ] || rest=0
+	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","need":"%s","pkgs":%s,"on":%s,"hold":%s,"rest":%s}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$why" "$( [ -s "$DATA/pb.pkgs" ] && echo true || echo false )" "$on" "$hold" "$rest" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
 }
 pb_status() {
 	local w why ms
@@ -2831,6 +2846,7 @@ pb_status() {
 		else echo "The ping buffer sizes itself, and at the moment that is nothing: your recent matches show too little for a buffer to absorb, or none has the record yet. Nothing is held back."; fi
 	else echo "The ping buffer holds the server's updates by $w ms in every match. Your game will show its ping that much higher."; fi
 	[ -n "$why" ] && [ "$w" != 0 ] && echo "It cannot work yet. $(pb_whytext "$why")"
+	[ "$(date +%s)" -lt "$(pb_rest)" ] && [ "$w" != 0 ] && echo "It is resting for another $(( ($(pb_rest) - $(date +%s) + 59) / 60 )) minutes: the game left a server soon after the buffer began holding it. Setting the buffer again ends the rest."
 	if [ -s "$RUN/pb.set" ]; then
 		set -- $(pb_stats)
 		[ $# = 7 ] && echo "Holding now, by $(cut -d' ' -f1 "$RUN/pb.set") ms: $1 updates so far, $3 of them later than the buffer, the latest $5 ms behind the beat. The average hold is $4 ms and the server sends every $7 ms."
@@ -2901,18 +2917,19 @@ cmd_pbuf() {
 		install) pb_install; return ;;
 		uninstall) pb_uninstall; return ;;
 		off)
-			rm -f "$DATA/pingbuffer"; find_ifaces; pb_clear
+			rm -f "$DATA/pingbuffer" "$RUN/pb.backoff"; find_ifaces; pb_clear
 			pb_log "switched off"; pb_json
 			echo "The ping buffer is off. Nothing is held back." ;;
 		hold|auto)
 			why="$(pb_why)"; [ -z "$why" ] || die "$(pb_whytext "$why")"
+			rm -f "$RUN/pb.backoff"
 			if [ "$1" = hold ]; then
 				case "$2" in ""|*[!0-9]*) die "give the buffer in milliseconds, from 5 to 100" ;; esac
 				[ "$2" -ge 5 ] && [ "$2" -le 100 ] || die "give the buffer in milliseconds, from 5 to 100"
 				echo "$2" > "$DATA/pingbuffer"; pb_log "set to hold $2 ms"
 			else echo auto > "$DATA/pingbuffer"; pb_log "set to size itself"; fi
 			pb_json; pb_status
-			echo "It starts a few seconds into each match, once the server's beat is known, and stops when the match ends. Only the match's own stream is held, never the pings a game uses to choose a server." ;;
+			echo "It starts half a minute into each match, once the stream has settled, and stops when the match ends. Only the match's own stream is held, never the pings a game uses to choose a server." ;;
 		*) die "usage: matchwatch buffer [hold <ms> | auto | off | status | install | uninstall]" ;;
 	esac
 }
@@ -4526,7 +4543,9 @@ function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, 
 		}
 	}
 	if (nom > 0) P_nom[k] = nom
-	if (d == "D" && F_active[f] && nom > 0 && rate >= minr) pb_ask(f, nom)
+	# not in a stream's first half minute: a game in its lobby keeps other servers to hand, and holding the
+	# one it is on makes that one look slower than the rest (seen: Call of Duty hopping between two every 15 s)
+	if (d == "D" && F_active[f] && nom > 0 && rate >= minr && S_win[k] >= 6) pb_ask(f, nom)
 	for (i = 0; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 	W_n[k] = 0; W_tight[k] = 0
 }
@@ -5873,7 +5892,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.43.0", reloading = false;
+var BUILT = "0.43.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -7825,6 +7844,7 @@ function pageTools() {
 			var pbv = D.pb || {}, pbAgain = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1200); };
 			var pbState = pbv.can === false ? pbv.why : (pbv.set === "auto" ? (pbv.ms > 0 ? "Sizing itself: " + pbv.ms + " ms, from your recent matches." : "Sizing itself, and at the moment that is nothing: your recent matches show too little to absorb.") : (pbv.set ? "Holding the server's updates by " + pbv.set + " ms in every match." : "Off. Nothing is held back."));
 			if (pbv.on) pbState += " Holding now, by " + pbv.hold + " ms.";
+			if (pbv.rest > 0 && pbv.set) pbState += " Resting for another " + Math.ceil(pbv.rest / 60) + " minutes: the game left a server soon after the buffer began holding it. Setting it again ends the rest.";
 			var pbSlow = function (label, action, ask, solid) {
 				var b = h("button", { type: "button", text: label, cls: solid ? "solid" : "" }), t;
 				b.addEventListener("click", function () {

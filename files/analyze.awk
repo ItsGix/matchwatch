@@ -654,7 +654,9 @@ function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, 
 		}
 	}
 	if (nom > 0) P_nom[k] = nom
-	if (d == "D" && F_active[f] && nom > 0 && rate >= minr) pb_ask(f, nom)
+	# not in a stream's first half minute: a game in its lobby keeps other servers to hand, and holding the
+	# one it is on makes that one look slower than the rest (seen: Call of Duty hopping between two every 15 s)
+	if (d == "D" && F_active[f] && nom > 0 && rate >= minr && S_win[k] >= 6) pb_ask(f, nom)
 	for (i = 0; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 	W_n[k] = 0; W_tight[k] = 0
 }
