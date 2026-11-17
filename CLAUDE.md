@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only. The one thing that alters game traffic is the ping buffer, off unless the owner sets it. Version 0.46.0.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only. The one thing that alters game traffic is the ping buffer, off unless the owner sets it. Version 0.47.0.
 
 ## Layout
 
@@ -32,7 +32,7 @@ Favourites (0.15.0): `/etc/matchwatch/favourites` holds one server per line: the
 
 Servers page (0.29.0): four tabs like the Tools page (`SERVTABS`, addresses `#/servers/<tab>`): Where I play (staying banner, map, one list of everything let in, the text box, how each game is filtered), Favourites, Servers (servers, blocks, datacentres), Regions and games. It had grown to ten sections and 4,500 pixels. `brief(text)` shows a long note as its first sentence with the rest behind More; write notes so the first sentence stands alone. The Live page lists three getting-started steps until there is a match on file. On a coarse pointer a circle is drawn with two taps. The mock page now has a viewport tag, without which phone-width checks silently render at 980 pixels.
 
-Dashboard look (0.15.0): colours and radii are variables at the top of `dashboard.css`; the chart reads the same variables. Buttons are a quiet fill (`--soft`), `solid` for the main action, `danger` for destructive ones. The Tools page is four tabs (`TOOLTABS`, addresses `#/tools/<tab>`) of rows built by `tool(title, description, controls...)`: say what a tool does on the left, put its control and result on the right. Check both themes after a style change (`dark:` in the mock page of `test/mockshots.py`).
+Dashboard look (0.15.0): colours and radii are variables at the top of `dashboard.css`; the chart reads the same variables. Buttons are a quiet fill (`--soft`), `solid` for the main action, `danger` for destructive ones. The Tools page is five tabs since 0.47.0 (`TOOLTABS`, addresses `#/tools/<tab>`: Checks, Connection, Games, Share, Data and settings; Connection took the ping buffer, the two questions about the line and the QoSmate rows out of Data and settings, which had grown to eleven rows) of rows built by `tool(title, description, controls...)`: say what a tool does on the left, put its control and result on the right. Check both themes after a style change (`dark:` in the mock page of `test/mockshots.py`).
 
 Removing (0.17.0): `cmd_forget match|server|dc` rewrites `sessions.tsv` without the chosen rows, deletes their `matches/<start>.json`, re-exports, and restarts the engine only when no match is in progress (its ratings live in memory). It refuses a favourite server, and a datacentre holding one. Actions `forgetmatch`, `forgetserver`, `forgetdc`.
 

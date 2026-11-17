@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.46.0", reloading = false;
+var BUILT = "0.47.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1741,7 +1741,7 @@ function brief(text) {
 	p.appendChild(h("details", { cls: "more" }, h("summary", "More"), h("span", text.slice(k + 2))));
 	return p;
 }
-var TOOLTABS = [["checks", "Checks"], ["games", "Games"], ["share", "Share"], ["data", "Data and settings"]];
+var TOOLTABS = [["checks", "Checks"], ["connection", "Connection"], ["games", "Games"], ["share", "Share"], ["data", "Data and settings"]];
 // one row on the Tools page: what the tool does on the left, its control and result on the right
 function tool(title, desc) {
 	var body = h("div", { cls: "toolbody" }), i;
@@ -1956,18 +1956,6 @@ function pageTools() {
 		var logOut = outBox();
 		view.appendChild(tool("Recent activity", "The last things MatchWatch wrote to the router's log: matches judged, servers blocked, alerts sent.",
 			h("div", { cls: "actions" }, act("Show recent activity", "log", null, { done: function (o) { logOut.show(o || "Nothing logged yet."); } })), logOut));
-
-		view.appendChild(h("h2", "QoSmate"));
-		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. You choose both sets of speeds. QoSmate does the prioritising; MatchWatch only switches its limit, and never changes QoSmate's settings.";
-		if (!hasQos) view.appendChild(tool("Match mode", mmDesc, needQos()));
-		else {
-			var mm = D.mm || {}, again = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1500); };
-			view.appendChild(tool("Match mode", mmDesc,
-				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
-					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
-				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet. " + (mm.whytext || "QoSmate must be switched on and in one of its cake modes.") : "Off: QoSmate's limits are on all the time" + (mm.up ? ", " + (mm.down ? mbit(mm.down) + " down and " : "") + mbit(mm.up) + " up." : ".") }),
-				mm.can === false ? null : mmSpeeds(mm, again)));
-		}
 		if (!RO) {
 			// the overlay's parts are chosen here and travel in its address, so two scenes can differ
 			var ovParts = [["place", "Where you're playing", 1], ["game", "Game", 1], ["ping", "Ping", 1], ["lights", "The four areas: server, route, line, PC", 1], ["lines", "A line for each area", 1], ["marks", "Marks for trouble in the last minute", 1], ["rate", "This server's rating", 0], ["time", "Match time", 0], ["miss", "Updates missing, as a figure", 0], ["played", "Matches played", 0], ["verdict", "The verdict when a match ends", 0]];
@@ -1989,11 +1977,11 @@ function pageTools() {
 			view.appendChild(tool("Live overlay", "A compact bar for a stream or a second screen, updated every second. Tick what it should show and copy the address it gives you. In OBS, add a Browser source with that address, about 560 wide and 70 high; its background is see-through. The four areas are a moment's best guess at where a problem is; the match report afterwards is the final word. It needs \"This dashboard without login\" switched on in Settings" + (i.web === false || i.web === 0 ? ", which is off at the moment." : "."),
 				ovForm, h("p", { cls: "note", text: "Which of the four areas to show. Untick Line if its light stays grey: that means your ISP's first hop answers no pings, so there is nothing to measure, and its faults show under Route." }), ovAreaRow, ovAddr, h("div", { cls: "actions" }, ovCopy, ovOpen)));
 		}
-		if (hasQos && !RO) {
-			var qaOut = outBox();
-			view.appendChild(tool("Are my QoSmate speeds right?", "Looks at what your last forty matches recorded and says what they show about QoSmate's speed limits: whether matches played on a busy line were rougher than the rest, and whether the queue QoSmate keeps for your game ever backed up. QoSmate does the prioritising; this only reads your match records and changes nothing.",
-				h("div", { cls: "actions" }, act("Look at my matches", "qosadvice", null, { done: qaOut.show })), qaOut));
-		}
+	}
+	// Everything that acts on the connection has its own tab since 0.47.0: the buffer and the two questions
+	// about the line first, then what works through QoSmate.
+	if (!RO && tab === "connection") {
+		view.appendChild(h("h2", "Ping buffer and your line"));
 		if (!RO) {
 			var pbv = D.pb || {}, pbAgain = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1200); };
 			var pbState = pbv.can === false ? pbv.why : (pbv.set === "auto" ? (pbv.ms > 0 ? "Sizing itself: " + pbv.ms + " ms, from your recent matches." : "Sizing itself, and at the moment that is nothing: your recent matches show too little to absorb.") : (pbv.set ? "Holding the server's updates by " + pbv.set + " ms in every match." : "Off. Nothing is held back."));
@@ -2029,6 +2017,22 @@ function pageTools() {
 			var lossOut = outBox();
 			view.appendChild(tool("Is my line losing packets?", "A lost packet from your device can be a shot the server never heard about. The router cannot see what the server received, but your match records hold signs: pings lost to your provider, to your device and to the servers that answer them, and anything QoSmate's game queue dropped. This reads your last forty matches and says what they show. It changes nothing.",
 				h("div", { cls: "actions" }, act("Look at my matches", "lossadvice", null, { done: lossOut.show })), lossOut));
+		}
+		view.appendChild(h("h2", "QoSmate"));
+		var mmDesc = "QoSmate keeps your game ahead of everything else by holding your line a little under its full speed. That limit also slows downloads when nobody is playing. With match mode on, MatchWatch lifts QoSmate's limit between matches and puts it back when a match starts, so you get QoSmate's low latency while you play and your line's full speed the rest of the time. You choose both sets of speeds. QoSmate does the prioritising; MatchWatch only switches its limit, and never changes QoSmate's settings.";
+		if (!hasQos) view.appendChild(tool("Match mode", mmDesc, needQos()));
+		else {
+			var mm = D.mm || {}, again = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1500); };
+			view.appendChild(tool("Match mode", mmDesc,
+				h("div", { cls: "actions" }, mm.on ? h("span", { cls: "tag keep", text: "On" }) : null,
+					mm.on ? act("Turn match mode off", "matchmodeoff", null, { done: again }) : (mm.can === false ? null : act("Turn match mode on", "matchmodeon", null, { solid: true, done: again }))),
+				h("p", { cls: "note", text: mm.on ? mmLine() : mm.can === false ? "It cannot be turned on yet. " + (mm.whytext || "QoSmate must be switched on and in one of its cake modes.") : "Off: QoSmate's limits are on all the time" + (mm.up ? ", " + (mm.down ? mbit(mm.down) + " down and " : "") + mbit(mm.up) + " up." : ".") }),
+				mm.can === false ? null : mmSpeeds(mm, again)));
+		}
+		if (hasQos && !RO) {
+			var qaOut = outBox();
+			view.appendChild(tool("Are my QoSmate speeds right?", "Looks at what your last forty matches recorded and says what they show about QoSmate's speed limits: whether matches played on a busy line were rougher than the rest, and whether the queue QoSmate keeps for your game ever backed up. QoSmate does the prioritising; this only reads your match records and changes nothing.",
+				h("div", { cls: "actions" }, act("Look at my matches", "qosadvice", null, { done: qaOut.show })), qaOut));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
