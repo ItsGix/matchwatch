@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.42.1"
+VERSION="0.43.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2631,7 +2631,10 @@ pb_want() { # what the owner asked for: 0, a number of ms, or auto
 }
 pb_mod() { local k; k="$(uname -r)"; [ -d "/sys/module/$1" ] || [ -e "/lib/modules/$k/$1.ko" ] || grep -q "/$1\.ko" "/lib/modules/$k/modules.builtin" 2>/dev/null; }
 pb_why() { # why packets cannot be held on this router; nothing when they can
-	if [ -n "$MW_PB_WHY" ]; then [ "$MW_PB_WHY" = ok ] || echo "$MW_PB_WHY"; return 0; fi
+	if [ -n "$MW_PB_WHY" ]; then # tests: the reason itself, or a file holding it
+		local t="$MW_PB_WHY"; [ -f "$t" ] && t="$(cat "$t")"
+		[ "$t" = ok ] || echo "$t"; return 0
+	fi
 	have tc && have ip || { echo nopkg; return 0; }
 	have bpftool || { echo nopkg; return 0; }
 	[ -s "$LIB/pb.oct" ] || { echo noobj; return 0; }
@@ -2640,7 +2643,7 @@ pb_why() { # why packets cannot be held on this router; nothing when they can
 }
 pb_whytext() {
 	case "$1" in
-		nopkg) echo "This router is missing what holds packets back. Add it with: apk update && apk add kmod-sched-bpf kmod-sched kmod-ifb bpftool-minimal (on OpenWrt before 25: opkg update && opkg install the same four), then set the buffer again." ;;
+		nopkg) echo "This router is missing what holds packets back: four OpenWrt packages (kmod-sched-bpf, kmod-sched, kmod-ifb, bpftool-minimal). Install them with the button here or with: matchwatch buffer install" ;;
 		endian) echo "This router's processor is big-endian, and the buffer's program has only been built and tested for the other, more common kind. The rehearsal still works here." ;;
 		noobj) echo "The buffer's program is missing from this install. Update MatchWatch." ;;
 	esac
@@ -2762,7 +2765,7 @@ pb_json() { # for the dashboard
 	why="$(pb_why)"; ms=0
 	[ -n "$w" ] && ms="$(mm_num "$(pb_ms)")"
 	if [ -s "$RUN/pb.set" ]; then on=true; hold="$(mm_num "$(cut -d' ' -f1 "$RUN/pb.set")")"; fi
-	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","on":%s,"hold":%s}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$on" "$hold" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
+	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","need":"%s","pkgs":%s,"on":%s,"hold":%s}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$why" "$( [ -s "$DATA/pb.pkgs" ] && echo true || echo false )" "$on" "$hold" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
 }
 pb_status() {
 	local w why ms
@@ -2779,11 +2782,69 @@ pb_status() {
 	fi
 	return 0
 }
+# ---- one press for what the buffer needs (0.43.0), at the owner's suggestion after adding the packages by
+# hand. The program itself ships with MatchWatch; what a router may lack is the kernel's side (kmod-sched-bpf
+# to run it, kmod-sched for the fq queue, kmod-ifb for the queue's device) and bpftool to set and read it.
+# What was newly installed is noted in pb.pkgs so that uninstall takes away exactly that and no more: on a
+# router with QoSmate, kmod-sched and kmod-ifb were there already and are left alone.
+pb_install() {
+	local pm new="" p why log="$RUN/pb.install.log"
+	mkdir -p "$RUN"
+	why="$(pb_why)"
+	case "$why" in
+		"") echo "Everything the ping buffer needs is already on this router."; return 0 ;;
+		endian|noobj) pb_whytext "$why"; return 1 ;;
+	esac
+	pm="$(pm_kind)"
+	[ -n "$pm" ] || { echo "This router has no package manager MatchWatch knows (apk or opkg). Install kmod-sched-bpf, kmod-sched, kmod-ifb and bpftool-minimal by hand, then set the buffer."; return 1; }
+	for p in kmod-sched-bpf kmod-sched kmod-ifb; do pm_has "$p" || new="$new $p"; done
+	have bpftool || new="$new bpftool-minimal"
+	echo "Installing${new:- nothing new}. This can take a minute."
+	case "$pm" in
+		apk) apk update; apk add $new ;;
+		opkg) opkg update; opkg install $new ;;
+	esac > "$log" 2>&1
+	why="$(pb_why)"
+	if [ -n "$why" ]; then
+		echo "Installing did not work. The package manager said: $(grep -v '^$' "$log" 2>/dev/null | tail -n 2 | tr '\n' ' ' | cut -c1-220). Install them under System, Software, or with: $pm $( [ "$pm" = apk ] && echo add || echo install ) kmod-sched-bpf kmod-sched kmod-ifb bpftool-minimal"
+		return 1
+	fi
+	for p in $new; do grep -qx "$p" "$DATA/pb.pkgs" 2>/dev/null || echo "$p" >> "$DATA/pb.pkgs"; done
+	pb_log "installed what it needs:${new:- nothing new}"
+	pb_json
+	echo "Installed:${new:- nothing new}. The ping buffer can be set now."
+}
+pb_uninstall() {
+	local pm pk
+	rm -f "$DATA/pingbuffer"; find_ifaces; pb_clear
+	pk="$(tr '\n' ' ' < "$DATA/pb.pkgs" 2>/dev/null)"
+	if [ -z "${pk% }" ]; then pb_json; echo "MatchWatch installed nothing for the ping buffer, so there is nothing to remove. The buffer is off."; return 0; fi
+	pm="$(pm_kind)"
+	case "$pm" in
+		apk) apk del $pk ;;
+		opkg) opkg remove $pk ;;
+	esac > "$RUN/pb.install.log" 2>&1
+	rm -f "$DATA/pb.pkgs"
+	pb_log "removed what it had installed: $pk"
+	pb_json
+	echo "The buffer is off and what MatchWatch installed for it is removed: $pk. A package something else needs is kept by the package manager."
+}
+cmd_pbjob() { # install | uninstall as a slow tool: a package manager takes longer than a button's call may
+	local id f="$RUN/www/pbinstall.json" out rc
+	mkdir -p "$RUN/www"
+	id="$(date +%s)$$"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( if out="$(pb_"$1" 2>&1)"; then rc=true; else rc=false; fi
+	  printf '{"id":"%s","state":"done","ok":%s,"msg":"%s"}\n' "$id" "$rc" "$(jesc "$(echo "$out" | tail -n 1)")" > "$f.tmp" && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+	echo "$id"
+}
 cmd_pbuf() {
 	local why
 	case "$1" in
 		""|advice) cmd_pbadvice; return 0 ;;
 		status) pb_status; return 0 ;;
+		install) pb_install; return ;;
+		uninstall) pb_uninstall; return ;;
 		off)
 			rm -f "$DATA/pingbuffer"; find_ifaces; pb_clear
 			pb_log "switched off"; pb_json
@@ -2797,7 +2858,7 @@ cmd_pbuf() {
 			else echo auto > "$DATA/pingbuffer"; pb_log "set to size itself"; fi
 			pb_json; pb_status
 			echo "It starts a few seconds into each match, once the server's beat is known, and stops when the match ends. Only the match's own stream is held, never the pings a game uses to choose a server." ;;
-		*) die "usage: matchwatch buffer [hold <ms> | auto | off | status]" ;;
+		*) die "usage: matchwatch buffer [hold <ms> | auto | off | status | install | uninstall]" ;;
 	esac
 }
 cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
@@ -3024,6 +3085,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		pbhold) cmd_pbuf hold "$arg" ;;
 		pbauto) cmd_pbuf auto ;;
 		pboff) cmd_pbuf off ;;
+		pbinstall) cmd_pbjob install ;;
+		pbuninstall) cmd_pbjob uninstall ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
 		trace) cmd_trace "$arg" ;;

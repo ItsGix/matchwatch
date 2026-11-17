@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.42.1"
+VERSION="0.43.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2686,7 +2686,10 @@ pb_want() { # what the owner asked for: 0, a number of ms, or auto
 }
 pb_mod() { local k; k="$(uname -r)"; [ -d "/sys/module/$1" ] || [ -e "/lib/modules/$k/$1.ko" ] || grep -q "/$1\.ko" "/lib/modules/$k/modules.builtin" 2>/dev/null; }
 pb_why() { # why packets cannot be held on this router; nothing when they can
-	if [ -n "$MW_PB_WHY" ]; then [ "$MW_PB_WHY" = ok ] || echo "$MW_PB_WHY"; return 0; fi
+	if [ -n "$MW_PB_WHY" ]; then # tests: the reason itself, or a file holding it
+		local t="$MW_PB_WHY"; [ -f "$t" ] && t="$(cat "$t")"
+		[ "$t" = ok ] || echo "$t"; return 0
+	fi
 	have tc && have ip || { echo nopkg; return 0; }
 	have bpftool || { echo nopkg; return 0; }
 	[ -s "$LIB/pb.oct" ] || { echo noobj; return 0; }
@@ -2695,7 +2698,7 @@ pb_why() { # why packets cannot be held on this router; nothing when they can
 }
 pb_whytext() {
 	case "$1" in
-		nopkg) echo "This router is missing what holds packets back. Add it with: apk update && apk add kmod-sched-bpf kmod-sched kmod-ifb bpftool-minimal (on OpenWrt before 25: opkg update && opkg install the same four), then set the buffer again." ;;
+		nopkg) echo "This router is missing what holds packets back: four OpenWrt packages (kmod-sched-bpf, kmod-sched, kmod-ifb, bpftool-minimal). Install them with the button here or with: matchwatch buffer install" ;;
 		endian) echo "This router's processor is big-endian, and the buffer's program has only been built and tested for the other, more common kind. The rehearsal still works here." ;;
 		noobj) echo "The buffer's program is missing from this install. Update MatchWatch." ;;
 	esac
@@ -2817,7 +2820,7 @@ pb_json() { # for the dashboard
 	why="$(pb_why)"; ms=0
 	[ -n "$w" ] && ms="$(mm_num "$(pb_ms)")"
 	if [ -s "$RUN/pb.set" ]; then on=true; hold="$(mm_num "$(cut -d' ' -f1 "$RUN/pb.set")")"; fi
-	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","on":%s,"hold":%s}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$on" "$hold" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
+	printf '{"set":"%s","ms":%s,"can":%s,"why":"%s","need":"%s","pkgs":%s,"on":%s,"hold":%s}\n' "$w" "$ms" "$( [ -z "$why" ] && echo true || echo false )" "$(pb_whytext "$why" | sed 's/["\\]/ /g')" "$why" "$( [ -s "$DATA/pb.pkgs" ] && echo true || echo false )" "$on" "$hold" > "$RUN/www/pbuf.json.tmp.$$" && mv -f "$RUN/www/pbuf.json.tmp.$$" "$RUN/www/pbuf.json"
 }
 pb_status() {
 	local w why ms
@@ -2834,11 +2837,69 @@ pb_status() {
 	fi
 	return 0
 }
+# ---- one press for what the buffer needs (0.43.0), at the owner's suggestion after adding the packages by
+# hand. The program itself ships with MatchWatch; what a router may lack is the kernel's side (kmod-sched-bpf
+# to run it, kmod-sched for the fq queue, kmod-ifb for the queue's device) and bpftool to set and read it.
+# What was newly installed is noted in pb.pkgs so that uninstall takes away exactly that and no more: on a
+# router with QoSmate, kmod-sched and kmod-ifb were there already and are left alone.
+pb_install() {
+	local pm new="" p why log="$RUN/pb.install.log"
+	mkdir -p "$RUN"
+	why="$(pb_why)"
+	case "$why" in
+		"") echo "Everything the ping buffer needs is already on this router."; return 0 ;;
+		endian|noobj) pb_whytext "$why"; return 1 ;;
+	esac
+	pm="$(pm_kind)"
+	[ -n "$pm" ] || { echo "This router has no package manager MatchWatch knows (apk or opkg). Install kmod-sched-bpf, kmod-sched, kmod-ifb and bpftool-minimal by hand, then set the buffer."; return 1; }
+	for p in kmod-sched-bpf kmod-sched kmod-ifb; do pm_has "$p" || new="$new $p"; done
+	have bpftool || new="$new bpftool-minimal"
+	echo "Installing${new:- nothing new}. This can take a minute."
+	case "$pm" in
+		apk) apk update; apk add $new ;;
+		opkg) opkg update; opkg install $new ;;
+	esac > "$log" 2>&1
+	why="$(pb_why)"
+	if [ -n "$why" ]; then
+		echo "Installing did not work. The package manager said: $(grep -v '^$' "$log" 2>/dev/null | tail -n 2 | tr '\n' ' ' | cut -c1-220). Install them under System, Software, or with: $pm $( [ "$pm" = apk ] && echo add || echo install ) kmod-sched-bpf kmod-sched kmod-ifb bpftool-minimal"
+		return 1
+	fi
+	for p in $new; do grep -qx "$p" "$DATA/pb.pkgs" 2>/dev/null || echo "$p" >> "$DATA/pb.pkgs"; done
+	pb_log "installed what it needs:${new:- nothing new}"
+	pb_json
+	echo "Installed:${new:- nothing new}. The ping buffer can be set now."
+}
+pb_uninstall() {
+	local pm pk
+	rm -f "$DATA/pingbuffer"; find_ifaces; pb_clear
+	pk="$(tr '\n' ' ' < "$DATA/pb.pkgs" 2>/dev/null)"
+	if [ -z "${pk% }" ]; then pb_json; echo "MatchWatch installed nothing for the ping buffer, so there is nothing to remove. The buffer is off."; return 0; fi
+	pm="$(pm_kind)"
+	case "$pm" in
+		apk) apk del $pk ;;
+		opkg) opkg remove $pk ;;
+	esac > "$RUN/pb.install.log" 2>&1
+	rm -f "$DATA/pb.pkgs"
+	pb_log "removed what it had installed: $pk"
+	pb_json
+	echo "The buffer is off and what MatchWatch installed for it is removed: $pk. A package something else needs is kept by the package manager."
+}
+cmd_pbjob() { # install | uninstall as a slow tool: a package manager takes longer than a button's call may
+	local id f="$RUN/www/pbinstall.json" out rc
+	mkdir -p "$RUN/www"
+	id="$(date +%s)$$"
+	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
+	( if out="$(pb_"$1" 2>&1)"; then rc=true; else rc=false; fi
+	  printf '{"id":"%s","state":"done","ok":%s,"msg":"%s"}\n' "$id" "$rc" "$(jesc "$(echo "$out" | tail -n 1)")" > "$f.tmp" && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+	echo "$id"
+}
 cmd_pbuf() {
 	local why
 	case "$1" in
 		""|advice) cmd_pbadvice; return 0 ;;
 		status) pb_status; return 0 ;;
+		install) pb_install; return ;;
+		uninstall) pb_uninstall; return ;;
 		off)
 			rm -f "$DATA/pingbuffer"; find_ifaces; pb_clear
 			pb_log "switched off"; pb_json
@@ -2852,7 +2913,7 @@ cmd_pbuf() {
 			else echo auto > "$DATA/pingbuffer"; pb_log "set to size itself"; fi
 			pb_json; pb_status
 			echo "It starts a few seconds into each match, once the server's beat is known, and stops when the match ends. Only the match's own stream is held, never the pings a game uses to choose a server." ;;
-		*) die "usage: matchwatch buffer [hold <ms> | auto | off | status]" ;;
+		*) die "usage: matchwatch buffer [hold <ms> | auto | off | status | install | uninstall]" ;;
 	esac
 }
 cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
@@ -3079,6 +3140,8 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		pbhold) cmd_pbuf hold "$arg" ;;
 		pbauto) cmd_pbuf auto ;;
 		pboff) cmd_pbuf off ;;
+		pbinstall) cmd_pbjob install ;;
+		pbuninstall) cmd_pbjob uninstall ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
 		trace) cmd_trace "$arg" ;;
@@ -5675,7 +5738,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_12'
 . /usr/share/libubox/jshn.sh
 
 READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice report pbadvice"
-WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff pbhold pbauto pboff svcstop svcstart svcrestart natfix natunfix natfwd natunfwd"
+WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff pbhold pbauto pboff pbinstall pbuninstall svcstop svcstart svcrestart natfix natunfix natfwd natunfwd"
 
 reply() { # ok(0|1) text
 	json_init
@@ -5810,7 +5873,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.42.1", reloading = false;
+var BUILT = "0.43.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -7762,6 +7825,15 @@ function pageTools() {
 			var pbv = D.pb || {}, pbAgain = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1200); };
 			var pbState = pbv.can === false ? pbv.why : (pbv.set === "auto" ? (pbv.ms > 0 ? "Sizing itself: " + pbv.ms + " ms, from your recent matches." : "Sizing itself, and at the moment that is nothing: your recent matches show too little to absorb.") : (pbv.set ? "Holding the server's updates by " + pbv.set + " ms in every match." : "Off. Nothing is held back."));
 			if (pbv.on) pbState += " Holding now, by " + pbv.hold + " ms.";
+			var pbSlow = function (label, action, ask, solid) {
+				var b = h("button", { type: "button", text: label, cls: solid ? "solid" : "" }), t;
+				b.addEventListener("click", function () {
+					if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = ask; t = setTimeout(function () { b.classList.remove("arm"); b.textContent = label; }, 5000); return; }
+					clearTimeout(t); b.classList.remove("arm"); b.textContent = label;
+					job(b, action, null, "pbinstall.json", function (x) { if (!x.ok) toast(x.msg || "That did not work.", true); else pbAgain(x.msg || "Done."); });
+				});
+				return b;
+			};
 			var pbNum = h("input", { type: "number", min: "5", max: "100", step: "1", inputmode: "numeric", placeholder: "ms", cls: "keep", "aria-label": "Buffer, in milliseconds" });
 			var pbGo = h("button", { type: "button", cls: "solid", text: "Hold this much" });
 			pbGo.addEventListener("click", function () {
@@ -7771,7 +7843,12 @@ function pageTools() {
 			});
 			view.appendChild(tool("Ping buffer", "Holds the server's updates back by a set time during matches, so that late ones can catch up and your game receives an even beat. It costs that much ping in every fight, so run the rehearsal below first: on a steady line it only adds delay. Only the match's own stream is held, on its way to your device; the pings a game uses to choose a server are never touched. Your game will show its ping higher by the buffer, while MatchWatch's own ping figure stays as it is.",
 				h("p", { cls: "note", text: pbState }),
-				pbv.can === false ? null : h("div", { cls: "actions" }, pbNum, pbGo, act("Size it for me", "pbauto", null, { done: pbAgain }), pbv.set ? act("Switch it off", "pboff", null, { done: pbAgain }) : null)));
+				pbv.can === false ? null : h("div", { cls: "actions" }, pbNum, pbGo, act("Size it for me", "pbauto", null, { done: pbAgain }), pbv.set ? act("Switch it off", "pboff", null, { done: pbAgain }) : null),
+				// what it needs is four packages from OpenWrt's own list. Installing takes a minute, so these are slow tools: pressed twice, then waited for
+				pbv.need === "nopkg" ? h("p", { cls: "note", text: "Nothing is installed until you press. The buffer's own program came with MatchWatch; the packages are the parts of OpenWrt it runs on. What gets installed is noted, so it can be removed again from here." }) : null,
+				(pbv.need === "nopkg" || pbv.pkgs) ? h("div", { cls: "actions" },
+					pbv.need === "nopkg" ? pbSlow("Install what it needs", "pbinstall", "Install four packages on this router?", true) : null,
+					pbv.pkgs ? pbSlow("Remove what was installed", "pbuninstall", "Switch the buffer off and remove them?", false) : null) : null));
 			var pbOut = outBox();
 			view.appendChild(tool("Would a ping buffer help me?", "Some routers hold your game's packets back by a set time so that a spiky line feels even, at the price of that much more ping in every fight. This rehearses it first: it reads how late the server's updates arrived in your last forty matches and says how many of the late ones a buffer of each size would have hidden. It holds nothing back and changes nothing.",
 				h("div", { cls: "actions" }, act("Rehearse it", "pbadvice", null, { done: pbOut.show })), pbOut));

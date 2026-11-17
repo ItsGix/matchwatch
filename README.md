@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.42.1 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.43.0 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -316,7 +316,7 @@ Some gaming routers sell a *ping buffer*: your game's packets are held back by a
 - **Only the match is held.** It starts a few seconds into a match, once the server's beat is known, and stops when the match ends. The pings a game sends to choose a server are never held, so matchmaking sees your line as it is. Nothing your device sends is held, and no other device or traffic is touched.
 - **What you will see.** Your game shows its ping higher by the buffer. MatchWatch's own ping figure does not change. The match report scores the stream as your device received it, and a section says what the buffer did: how many updates arrived later than it could hide, and the latest.
 - **It lets go by itself.** It stops holding when the match ends, when MatchWatch stops, and within a minute if no match is on or it saw none of the match's packets.
-- **What it needs.** Four OpenWrt packages: `apk update && apk add kmod-sched-bpf kmod-sched kmod-ifb bpftool-minimal` (with `opkg` on OpenWrt before 25). Without them the row says so and the rehearsal still works. Routers with a big-endian processor are not supported yet. With software flow offloading on, the match's packets may pass the buffer by; it then switches itself off for that match and says so in the log.
+- **What it needs.** Four OpenWrt packages (`kmod-sched-bpf`, `kmod-sched`, `kmod-ifb`, `bpftool-minimal`); a router running QoSmate has two of them already. When any is missing the Ping buffer row says so and offers **Install what it needs** (`matchwatch buffer install`). The buffer's own program comes with MatchWatch. What was installed is noted, and **Remove what was installed** (`matchwatch buffer uninstall`) switches the buffer off and takes away exactly those. Nothing is installed until you press, and the rehearsal works without any of it. Routers with a big-endian processor are not supported yet. With software flow offloading on, the match's packets may pass the buffer by; it then switches itself off for that match and says so in the log.
 
 The count assumes the game hides one update interval itself. Games do not publish their buffer, so read the figures as a guide: a game that hides more needs less.
 
@@ -824,6 +824,7 @@ Everything is also available over SSH:
 | `matchwatch qos advice` | What your last forty matches say about QoSmate's speed limits |
 | `matchwatch buffer` | The ping buffer rehearsal: how many late updates in your last forty matches a buffer of each size would have hidden. Holds nothing back |
 | `matchwatch buffer hold <ms>` / `buffer auto` / `buffer off` / `buffer status` | The ping buffer: hold the match's updates by 5 to 100 ms, have it sized from your matches, switch it off, or see what it is doing |
+| `matchwatch buffer install` / `buffer uninstall` | Install the OpenWrt packages the ping buffer needs, or switch it off and remove the ones MatchWatch installed |
 | `matchwatch report` | Prints a report to pass on when something is wrong: the self-check, tool versions, settings, files and the last log lines, with your internet address, phone alert address and device names left out. The same report is under Tools, Checks, Report a problem |
 | `matchwatch service` / `service stop` / `service start` / `service restart` | Says whether MatchWatch is running, or stops, starts or restarts it. If it stops by itself, the Tools page and the router's log say why |
 | `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |

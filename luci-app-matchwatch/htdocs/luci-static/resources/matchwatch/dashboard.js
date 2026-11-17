@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.42.1", reloading = false;
+var BUILT = "0.43.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1980,6 +1980,15 @@ function pageTools() {
 			var pbv = D.pb || {}, pbAgain = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1200); };
 			var pbState = pbv.can === false ? pbv.why : (pbv.set === "auto" ? (pbv.ms > 0 ? "Sizing itself: " + pbv.ms + " ms, from your recent matches." : "Sizing itself, and at the moment that is nothing: your recent matches show too little to absorb.") : (pbv.set ? "Holding the server's updates by " + pbv.set + " ms in every match." : "Off. Nothing is held back."));
 			if (pbv.on) pbState += " Holding now, by " + pbv.hold + " ms.";
+			var pbSlow = function (label, action, ask, solid) {
+				var b = h("button", { type: "button", text: label, cls: solid ? "solid" : "" }), t;
+				b.addEventListener("click", function () {
+					if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = ask; t = setTimeout(function () { b.classList.remove("arm"); b.textContent = label; }, 5000); return; }
+					clearTimeout(t); b.classList.remove("arm"); b.textContent = label;
+					job(b, action, null, "pbinstall.json", function (x) { if (!x.ok) toast(x.msg || "That did not work.", true); else pbAgain(x.msg || "Done."); });
+				});
+				return b;
+			};
 			var pbNum = h("input", { type: "number", min: "5", max: "100", step: "1", inputmode: "numeric", placeholder: "ms", cls: "keep", "aria-label": "Buffer, in milliseconds" });
 			var pbGo = h("button", { type: "button", cls: "solid", text: "Hold this much" });
 			pbGo.addEventListener("click", function () {
@@ -1989,7 +1998,12 @@ function pageTools() {
 			});
 			view.appendChild(tool("Ping buffer", "Holds the server's updates back by a set time during matches, so that late ones can catch up and your game receives an even beat. It costs that much ping in every fight, so run the rehearsal below first: on a steady line it only adds delay. Only the match's own stream is held, on its way to your device; the pings a game uses to choose a server are never touched. Your game will show its ping higher by the buffer, while MatchWatch's own ping figure stays as it is.",
 				h("p", { cls: "note", text: pbState }),
-				pbv.can === false ? null : h("div", { cls: "actions" }, pbNum, pbGo, act("Size it for me", "pbauto", null, { done: pbAgain }), pbv.set ? act("Switch it off", "pboff", null, { done: pbAgain }) : null)));
+				pbv.can === false ? null : h("div", { cls: "actions" }, pbNum, pbGo, act("Size it for me", "pbauto", null, { done: pbAgain }), pbv.set ? act("Switch it off", "pboff", null, { done: pbAgain }) : null),
+				// what it needs is four packages from OpenWrt's own list. Installing takes a minute, so these are slow tools: pressed twice, then waited for
+				pbv.need === "nopkg" ? h("p", { cls: "note", text: "Nothing is installed until you press. The buffer's own program came with MatchWatch; the packages are the parts of OpenWrt it runs on. What gets installed is noted, so it can be removed again from here." }) : null,
+				(pbv.need === "nopkg" || pbv.pkgs) ? h("div", { cls: "actions" },
+					pbv.need === "nopkg" ? pbSlow("Install what it needs", "pbinstall", "Install four packages on this router?", true) : null,
+					pbv.pkgs ? pbSlow("Remove what was installed", "pbuninstall", "Switch the buffer off and remove them?", false) : null) : null));
 			var pbOut = outBox();
 			view.appendChild(tool("Would a ping buffer help me?", "Some routers hold your game's packets back by a set time so that a spiky line feels even, at the price of that much more ping in every fight. This rehearses it first: it reads how late the server's updates arrived in your last forty matches and says how many of the late ones a buffer of each size would have hidden. It holds nothing back and changes nothing.",
 				h("div", { cls: "actions" }, act("Rehearse it", "pbadvice", null, { done: pbOut.show })), pbOut));
