@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.43.1"
+VERSION="0.43.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2721,7 +2721,14 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	[ -z "$(pb_why)" ] || return 0
 	find_ifaces
 	[ -n "$LAN_IF" ] || return 1
-	if [ "$(cat "$RUN/pb.flow" 2>/dev/null)" = "$rip $rport $lip $lport" ] && pb_ids; then pb_param "$beat" "$ms"; return 0; fi
+	if [ "$(cat "$RUN/pb.flow" 2>/dev/null)" = "$rip $rport $lip $lport" ] && pb_ids; then
+		# held already. The engine asks every minute, with a beat it measured after the buffer: giving the
+		# program that again would restart its grid, so only a new size or a beat far from the old one is passed on
+		local oms obeat; read -r oms obeat < "$RUN/pb.set" 2>/dev/null
+		oms="$(mm_num "$oms")"; obeat="$(mm_num "$obeat")"
+		if [ "$oms" != "$ms" ] || [ "$obeat" -le 0 ] || [ $((beat * 100 / obeat)) -gt 130 ] || [ $((beat * 100 / obeat)) -lt 70 ]; then pb_param "$beat" "$ms"; pb_json; fi
+		return 0
+	fi
 	pb_drop
 	printf "$(cat "$LIB/pb.oct")" > "$RUN/mwpb.o" 2>/dev/null
 	[ -s "$RUN/mwpb.o" ] || return 1
@@ -2755,8 +2762,12 @@ pb_sum() { # the match is over: what the buffer did, as one line of JSON for the
 	# So it rests for a quarter of an hour. Setting the buffer afresh ends the rest.
 	now="$(date +%s)"; since="$(mm_num "$(cat "$RUN/pb.since" 2>/dev/null)")"
 	if [ "$since" -gt 0 ] && [ $((now - since)) -lt 60 ]; then
-		echo $((now + 900)) > "$RUN/pb.backoff"
-		pb_log "the game left this server $((now - since)) s after the buffer began holding it, so the buffer rests for 15 minutes. A game can move away from a held server when it has others to hand; if this happens in matches, set a smaller buffer"
+		# once is usual (a lobby turning into a match on another server); twice within five minutes is the loop
+		if [ $((now - $(mm_num "$(cat "$RUN/pb.strike" 2>/dev/null)"))) -lt 300 ]; then
+			echo $((now + 900)) > "$RUN/pb.backoff"
+			pb_log "the game has twice left a server soon after the buffer began holding it, so the buffer rests for 15 minutes. A game can move away from a held server when it has others to hand; if this happens in matches, set a smaller buffer"
+		else pb_log "the game left this server $((now - since)) s after the buffer began holding it. Once is usual when a lobby turns into a match; a second time within five minutes and the buffer rests"; fi
+		echo "$now" > "$RUN/pb.strike"
 	fi
 	pb_drop
 	pb_json
@@ -2791,7 +2802,7 @@ pb_status() {
 		else echo "The ping buffer sizes itself, and at the moment that is nothing: your recent matches show too little for a buffer to absorb, or none has the record yet. Nothing is held back."; fi
 	else echo "The ping buffer holds the server's updates by $w ms in every match. Your game will show its ping that much higher."; fi
 	[ -n "$why" ] && [ "$w" != 0 ] && echo "It cannot work yet. $(pb_whytext "$why")"
-	[ "$(date +%s)" -lt "$(pb_rest)" ] && [ "$w" != 0 ] && echo "It is resting for another $(( ($(pb_rest) - $(date +%s) + 59) / 60 )) minutes: the game left a server soon after the buffer began holding it. Setting the buffer again ends the rest."
+	[ "$(date +%s)" -lt "$(pb_rest)" ] && [ "$w" != 0 ] && echo "It is resting for another $(( ($(pb_rest) - $(date +%s) + 59) / 60 )) minutes: the game twice left a server soon after the buffer began holding it. Setting the buffer again ends the rest."
 	if [ -s "$RUN/pb.set" ]; then
 		set -- $(pb_stats)
 		[ $# = 7 ] && echo "Holding now, by $(cut -d' ' -f1 "$RUN/pb.set") ms: $1 updates so far, $3 of them later than the buffer, the latest $5 ms behind the beat. The average hold is $4 ms and the server sends every $7 ms."
@@ -2862,19 +2873,19 @@ cmd_pbuf() {
 		install) pb_install; return ;;
 		uninstall) pb_uninstall; return ;;
 		off)
-			rm -f "$DATA/pingbuffer" "$RUN/pb.backoff"; find_ifaces; pb_clear
+			rm -f "$DATA/pingbuffer" "$RUN/pb.backoff" "$RUN/pb.strike"; find_ifaces; pb_clear
 			pb_log "switched off"; pb_json
 			echo "The ping buffer is off. Nothing is held back." ;;
 		hold|auto)
 			why="$(pb_why)"; [ -z "$why" ] || die "$(pb_whytext "$why")"
-			rm -f "$RUN/pb.backoff"
+			rm -f "$RUN/pb.backoff" "$RUN/pb.strike"
 			if [ "$1" = hold ]; then
 				case "$2" in ""|*[!0-9]*) die "give the buffer in milliseconds, from 5 to 100" ;; esac
 				[ "$2" -ge 5 ] && [ "$2" -le 100 ] || die "give the buffer in milliseconds, from 5 to 100"
 				echo "$2" > "$DATA/pingbuffer"; pb_log "set to hold $2 ms"
 			else echo auto > "$DATA/pingbuffer"; pb_log "set to size itself"; fi
 			pb_json; pb_status
-			echo "It starts half a minute into each match, once the stream has settled, and stops when the match ends. Only the match's own stream is held, never the pings a game uses to choose a server." ;;
+			echo "It starts a minute into each match, once the stream has settled, and stops when the match ends. Set during a match, it starts within a minute. Only the match's own stream is held, never the pings a game uses to choose a server." ;;
 		*) die "usage: matchwatch buffer [hold <ms> | auto | off | status | install | uninstall]" ;;
 	esac
 }

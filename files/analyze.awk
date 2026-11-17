@@ -588,7 +588,10 @@ function pb_ask(f, nom) {
 	if (PBW == "" || PBW == "0") { F_pbn[f] = 0; F_pbv[f] = ""; return }
 	# Once it is holding, the beat measured here is the buffer's own output, so it is only passed on again
 	# when it has moved by more than the program can follow by itself (a lobby turning into a match).
-	if (F_pbv[f] == PBW && F_pbn[f] > 0 && abs(nom - F_pbn[f]) / F_pbn[f] <= 0.3) return
+	# It is asked again every minute all the same: the script may have declined (the buffer resting, or set
+	# again by the owner to the same figure), and asking for a stream already held changes nothing.
+	if (F_pbv[f] == PBW && F_pbn[f] > 0 && abs(nom - F_pbn[f]) / F_pbn[f] <= 0.3 && ++F_pbc[f] < 12) return
+	F_pbc[f] = 0
 	if (!isgame(F_rport[f], F_rip[f])) return
 	F_pbn[f] = nom; F_pbv[f] = PBW
 	if (REPLAY) print "PB " F_rip[f] ":" F_rport[f] " beat " nom
@@ -654,9 +657,9 @@ function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, 
 		}
 	}
 	if (nom > 0) P_nom[k] = nom
-	# not in a stream's first half minute: a game in its lobby keeps other servers to hand, and holding the
+	# not in a stream's first minute (a pre-game lobby lasts about forty seconds): a game in its lobby keeps other servers to hand, and holding the
 	# one it is on makes that one look slower than the rest (seen: Call of Duty hopping between two every 15 s)
-	if (d == "D" && F_active[f] && nom > 0 && rate >= minr && S_win[k] >= 6) pb_ask(f, nom)
+	if (d == "D" && F_active[f] && nom > 0 && rate >= minr && S_win[k] >= 12) pb_ask(f, nom)
 	for (i = 0; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 	W_n[k] = 0; W_tight[k] = 0
 }
@@ -685,7 +688,7 @@ function session_start(f, sec,    d, k, i, di) {
 	if (sec - QUALIFY - 2 > F_first[f]) F_first[f] = sec - QUALIFY - 2
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
-	F_pbn[f] = 0; F_pbv[f] = ""; pb_read()
+	F_pbn[f] = 0; F_pbv[f] = ""; F_pbc[f] = 0; pb_read()
 	F_unn[f] = (NGP > 0 && kindof(F_rport[f], F_rip[f]) == "") ? 1 : 0
 	print "START " F_sid[f] " " F_lip[f] " -> " F_rip[f] ":" F_rport[f]
 	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " " (kindof(F_rport[f], F_rip[f]) == "" ? "unnamed" : "named") " >/dev/null 2>&1 &")

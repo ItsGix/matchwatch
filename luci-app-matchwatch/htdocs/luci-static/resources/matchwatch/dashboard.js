@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.43.1", reloading = false;
+var BUILT = "0.43.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1980,7 +1980,7 @@ function pageTools() {
 			var pbv = D.pb || {}, pbAgain = function (o) { toast(o); setTimeout(function () { loadAll(function () { if (page === "tools") pageTools(); }); }, 1200); };
 			var pbState = pbv.can === false ? pbv.why : (pbv.set === "auto" ? (pbv.ms > 0 ? "Sizing itself: " + pbv.ms + " ms, from your recent matches." : "Sizing itself, and at the moment that is nothing: your recent matches show too little to absorb.") : (pbv.set ? "Holding the server's updates by " + pbv.set + " ms in every match." : "Off. Nothing is held back."));
 			if (pbv.on) pbState += " Holding now, by " + pbv.hold + " ms.";
-			if (pbv.rest > 0 && pbv.set) pbState += " Resting for another " + Math.ceil(pbv.rest / 60) + " minutes: the game left a server soon after the buffer began holding it. Setting it again ends the rest.";
+			if (pbv.rest > 0 && pbv.set) pbState += " Resting for another " + Math.ceil(pbv.rest / 60) + " minutes: the game twice left a server soon after the buffer began holding it. Setting it again ends the rest.";
 			var pbSlow = function (label, action, ask, solid) {
 				var b = h("button", { type: "button", text: label, cls: solid ? "solid" : "" }), t;
 				b.addEventListener("click", function () {
