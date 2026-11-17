@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.40.0"
+VERSION="0.41.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2561,6 +2561,46 @@ cmd_qosadvice() {
 			print "What this cannot tell you: whether the limits are lower than they need to be. Matches only show a limit that is too high."
 		}'
 }
+# ---- the ping buffer rehearsal (0.41.0)
+# Other routers sell a "ping buffer": packets are held back so that a spiky line feels even. It costs ping in
+# every fight, so before anything is held MatchWatch measures what there is to absorb. The engine notes how
+# late each update from the server arrived (pb in the match detail, 5 ms steps); this reads the last forty
+# matches and says what a buffer of each size would have hidden. A game hides some lateness itself: it
+# draws other players a little in the past, by at least one update interval. So an update counts as one the
+# game could not hide when it came later than that, and a buffer of B ms hides those up to B ms later still.
+# It only reads match records and holds nothing back.
+cmd_pbadvice() {
+	ls "$DATA"/matches/*.json 2>/dev/null | sort | tail -n 40 | while read -r f; do head -c 4000 "$f" 2>/dev/null | head -n 1; echo; done | awk '
+		function num(k,   v) { if (match($0, "\"" k "\":-?[0-9.]+")) { v = substr($0, RSTART, RLENGTH); sub(/.*:/, "", v); return v + 0 } return -1 }
+		$0 == "" { next }
+		{ if (!match($0, /"pb":\{"h":\[[0-9,]*\]/)) next
+		  s = substr($0, RSTART + 12, RLENGTH - 13); n = split(s, a, ","); nom = num("nom"); an = num("analysed")
+		  if (nom <= 0 || an < 60) next
+		  M++; MIN += an / 60; late = 0
+		  for (i = 1; i <= n; i++) { lo = (i - 1) * 5; if (lo < nom) continue
+			late += a[i]; for (b = 1; b <= 12; b++) if (lo >= nom + b * 5) LEFT[b] += a[i] }
+		  LATE += late; if (late / (an / 60) >= 1) ROUGH++ }
+		END {
+			if (M < 1) { print "No match on file has this record yet. It is kept from version 0.41.0 on: play a match, then look here again."; exit }
+			printf "The ping buffer rehearsal, over your last %d match%s (%d minutes of play).\n\n", M, (M == 1 ? "" : "es"), MIN
+			print "MatchWatch timed every update from the server and worked out what a buffer on the router would have done with them. Nothing was held back: this is a rehearsal."
+			print ""
+			if (LATE / MIN < 1) {
+				printf "Nothing for a buffer to absorb. %d update%s in %d minutes arrived later than a game hides by itself, which is under one a minute. A buffer would add its delay to every fight and smooth nothing.\n", LATE, (LATE == 1 ? "" : "s"), MIN
+			} else {
+				printf "%d updates arrived later than a game hides by itself, about %.0f a minute, and %d of the %d matches had at least one a minute. Those are the moments that show as packet burst.\n\n", LATE, LATE / MIN, ROUGH, M
+				best = 0
+				for (b = 1; b <= 12; b++) { if (!best && (LATE - LEFT[b]) >= 0.9 * LATE) best = b * 5
+					if (b == 2 || b == 4 || b == 6 || b == 8 || b == 12) printf "  A buffer of %d ms would have hidden %d of them (%d%%).\n", b * 5, LATE - LEFT[b], 100 * (LATE - LEFT[b]) / LATE }
+				print ""
+				if (best) printf "The smallest buffer that hides nine in ten is %d ms. It would add %d ms to your ping in every fight, so it is worth it only if the bursts cost you more than that does.\n", best, best
+				else printf "Even 60 ms would hide only %d%% of them: the stalls on this line are too long for a buffer. Look at the line itself first (the line test, and QoSmate, which keeps your own traffic from causing them).\n", 100 * (LATE - LEFT[12]) / LATE
+			}
+			print ""
+			print "What this assumes: the game hides one update interval of lateness itself. Games do not publish their buffer, so read the counts as a guide. Updates that never arrived are not counted, because no buffer can bring them back."
+			print "Holding packets back is not in this version. This shows first whether it would be worth its cost on your line."
+		}'
+}
 cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
 	local id f="$RUN/www/linetest.json" busy="$RUN/linetest.busy"
 	mkdir -p "$RUN/www"
@@ -2781,6 +2821,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		natfwd) cmd_natfwd "$arg" ;;
 		natunfwd) cmd_natunfwd ;;
 		qosadvice) cmd_qosadvice ;;
+		pbadvice) cmd_pbadvice ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
 		trace) cmd_trace "$arg" ;;
@@ -3466,6 +3507,7 @@ case "$1" in
 	_migrate) cmd_migrate ;;
 	mark) cmd_mark ;;
 	qos) if [ "$2" = advice ]; then cmd_qosadvice; else cmd_qos "$2"; fi ;;
+	buffer) cmd_pbadvice ;;
 	block) shift; cmd_block "$@" ;;
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;

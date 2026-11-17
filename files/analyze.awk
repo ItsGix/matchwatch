@@ -573,6 +573,15 @@ function judge_mark(f, tm, sec,    kd, ku, dn, s, off, idx, dv, uv, pv, late, ml
 
 # ---------------------------------------------------------------- windows
 
+# The ping buffer rehearsal (0.41.0). A buffer on the router would hold every update back by a fixed time so
+# that one arriving late can be passed on with less of a hold, and the game sees an even beat. Before any
+# packet is held, this measures what such a buffer would have had to absorb: how late each update arrived,
+# in 5 ms steps (the last step is 200 ms and over). An update that came on its own is late by however much its
+# gap ran over the server's normal beat; updates that arrived together after a stall were held up on the way,
+# and the one sent first is taken to have waited longest. Updates that never arrived are not here: nothing
+# can buffer those.
+function pb_add(k, l,    b) { if (l < 0) l = 0; b = int(l / 5); if (b > 40) b = 40; S_pb[k, b]++ }
+
 function median_iv(k, n,    i, b, c, half) {
 	split("", H)
 	for (i = 1; i <= n; i++) { b = int(W_iv[k, i] * 10); if (b > 3000) b = 3000; H[b]++ }
@@ -581,7 +590,7 @@ function median_iv(k, n,    i, b, c, half) {
 	return 0
 }
 
-function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, dev, devn, miss, rec, minr, rate, trans, wworst, stut) {
+function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, dev, devn, miss, rec, minr, rate, trans, wworst, stut, pj) {
 	k = f SUBSEP d
 	n = W_n[k] + 0
 	rate = n / WIN
@@ -607,12 +616,14 @@ function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, 
 				miss = (rec > 0) ? int(x / nom) - 1 : int(x / nom + 0.5) - 1
 				if (miss < 1) miss = 1
 				if (rec > miss) rec = miss
+				if (d == "D" && !trans) for (pj = 1; pj <= rec; pj++) pb_add(k, x - pj * nom)
 				lost += miss - rec; dly += rec; gaps++
 				if (x > 100 && x > 3 * nom) frz++
 				if (x > 50 && x > 3 * nom) stut++
 				if (x > wworst) wworst = x
 			} else {
 				if (d == "D" && x > 1.4 * nom) late++
+				if (d == "D" && !trans) pb_add(k, x - nom)
 				dev += abs(x - nom); devn++
 			}
 		}
@@ -650,6 +661,7 @@ function session_start(f, sec,    d, k, i, di) {
 	for (di = 1; di <= 2; di++) {
 		d = (di == 1) ? "D" : "U"; k = f SUBSEP d
 		for (i = 1; i <= S_rn[k] + 0; i++) delete S_rate[k, i]
+		for (i = 0; i <= 40; i++) delete S_pb[k, i]
 		S_rn[k] = 0; S_ticks[k] = 0; S_late[k] = 0; S_lost[k] = 0; S_dly[k] = 0; S_gaps[k] = 0
 		S_frz[k] = 0; S_stut[k] = 0; S_dev[k] = 0; S_devn[k] = 0; S_win[k] = 0; S_bad[k] = 0; S_worst[k] = 0
 	}
@@ -930,6 +942,8 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"s_server\":" jn2(s_srv) ",\"s_route\":" jn2(s_route) ",\"s_line\":" jn2(s_line) ",\"s_pc\":" jn2(s_pc) ",\"overall\":" overall ",\"rating\":" rating
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
+		PBL = -1; for (i = 0; i <= 40; i++) if ((S_pb[kd, i] + 0) > 0) PBL = i
+		if (PBL >= 0) { dj = dj ",\"pb\":{\"h\":["; for (i = 0; i <= PBL; i++) dj = dj (i ? "," : "") (S_pb[kd, i] + 0); dj = dj "]}" }
 		if (QM != "") dj = dj ",\"qm\":" QM
 		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ

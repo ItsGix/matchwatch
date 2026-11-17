@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.40.0"
+VERSION="0.41.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2616,6 +2616,46 @@ cmd_qosadvice() {
 			print "What this cannot tell you: whether the limits are lower than they need to be. Matches only show a limit that is too high."
 		}'
 }
+# ---- the ping buffer rehearsal (0.41.0)
+# Other routers sell a "ping buffer": packets are held back so that a spiky line feels even. It costs ping in
+# every fight, so before anything is held MatchWatch measures what there is to absorb. The engine notes how
+# late each update from the server arrived (pb in the match detail, 5 ms steps); this reads the last forty
+# matches and says what a buffer of each size would have hidden. A game hides some lateness itself: it
+# draws other players a little in the past, by at least one update interval. So an update counts as one the
+# game could not hide when it came later than that, and a buffer of B ms hides those up to B ms later still.
+# It only reads match records and holds nothing back.
+cmd_pbadvice() {
+	ls "$DATA"/matches/*.json 2>/dev/null | sort | tail -n 40 | while read -r f; do head -c 4000 "$f" 2>/dev/null | head -n 1; echo; done | awk '
+		function num(k,   v) { if (match($0, "\"" k "\":-?[0-9.]+")) { v = substr($0, RSTART, RLENGTH); sub(/.*:/, "", v); return v + 0 } return -1 }
+		$0 == "" { next }
+		{ if (!match($0, /"pb":\{"h":\[[0-9,]*\]/)) next
+		  s = substr($0, RSTART + 12, RLENGTH - 13); n = split(s, a, ","); nom = num("nom"); an = num("analysed")
+		  if (nom <= 0 || an < 60) next
+		  M++; MIN += an / 60; late = 0
+		  for (i = 1; i <= n; i++) { lo = (i - 1) * 5; if (lo < nom) continue
+			late += a[i]; for (b = 1; b <= 12; b++) if (lo >= nom + b * 5) LEFT[b] += a[i] }
+		  LATE += late; if (late / (an / 60) >= 1) ROUGH++ }
+		END {
+			if (M < 1) { print "No match on file has this record yet. It is kept from version 0.41.0 on: play a match, then look here again."; exit }
+			printf "The ping buffer rehearsal, over your last %d match%s (%d minutes of play).\n\n", M, (M == 1 ? "" : "es"), MIN
+			print "MatchWatch timed every update from the server and worked out what a buffer on the router would have done with them. Nothing was held back: this is a rehearsal."
+			print ""
+			if (LATE / MIN < 1) {
+				printf "Nothing for a buffer to absorb. %d update%s in %d minutes arrived later than a game hides by itself, which is under one a minute. A buffer would add its delay to every fight and smooth nothing.\n", LATE, (LATE == 1 ? "" : "s"), MIN
+			} else {
+				printf "%d updates arrived later than a game hides by itself, about %.0f a minute, and %d of the %d matches had at least one a minute. Those are the moments that show as packet burst.\n\n", LATE, LATE / MIN, ROUGH, M
+				best = 0
+				for (b = 1; b <= 12; b++) { if (!best && (LATE - LEFT[b]) >= 0.9 * LATE) best = b * 5
+					if (b == 2 || b == 4 || b == 6 || b == 8 || b == 12) printf "  A buffer of %d ms would have hidden %d of them (%d%%).\n", b * 5, LATE - LEFT[b], 100 * (LATE - LEFT[b]) / LATE }
+				print ""
+				if (best) printf "The smallest buffer that hides nine in ten is %d ms. It would add %d ms to your ping in every fight, so it is worth it only if the bursts cost you more than that does.\n", best, best
+				else printf "Even 60 ms would hide only %d%% of them: the stalls on this line are too long for a buffer. Look at the line itself first (the line test, and QoSmate, which keeps your own traffic from causing them).\n", 100 * (LATE - LEFT[12]) / LATE
+			}
+			print ""
+			print "What this assumes: the game hides one update interval of lateness itself. Games do not publish their buffer, so read the counts as a guide. Updates that never arrived are not counted, because no buffer can bring them back."
+			print "Holding packets back is not in this version. This shows first whether it would be worth its cost on your line."
+		}'
+}
 cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
 	local id f="$RUN/www/linetest.json" busy="$RUN/linetest.busy"
 	mkdir -p "$RUN/www"
@@ -2836,6 +2876,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		natfwd) cmd_natfwd "$arg" ;;
 		natunfwd) cmd_natunfwd ;;
 		qosadvice) cmd_qosadvice ;;
+		pbadvice) cmd_pbadvice ;;
 		updatecheck) cmd_update check ;;
 		update) cmd_update now ;;
 		trace) cmd_trace "$arg" ;;
@@ -3521,6 +3562,7 @@ case "$1" in
 	_migrate) cmd_migrate ;;
 	mark) cmd_mark ;;
 	qos) if [ "$2" = advice ]; then cmd_qosadvice; else cmd_qos "$2"; fi ;;
+	buffer) cmd_pbadvice ;;
 	block) shift; cmd_block "$@" ;;
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
@@ -4133,6 +4175,15 @@ function judge_mark(f, tm, sec,    kd, ku, dn, s, off, idx, dv, uv, pv, late, ml
 
 # ---------------------------------------------------------------- windows
 
+# The ping buffer rehearsal (0.41.0). A buffer on the router would hold every update back by a fixed time so
+# that one arriving late can be passed on with less of a hold, and the game sees an even beat. Before any
+# packet is held, this measures what such a buffer would have had to absorb: how late each update arrived,
+# in 5 ms steps (the last step is 200 ms and over). An update that came on its own is late by however much its
+# gap ran over the server's normal beat; updates that arrived together after a stall were held up on the way,
+# and the one sent first is taken to have waited longest. Updates that never arrived are not here: nothing
+# can buffer those.
+function pb_add(k, l,    b) { if (l < 0) l = 0; b = int(l / 5); if (b > 40) b = 40; S_pb[k, b]++ }
+
 function median_iv(k, n,    i, b, c, half) {
 	split("", H)
 	for (i = 1; i <= n; i++) { b = int(W_iv[k, i] * 10); if (b > 3000) b = 3000; H[b]++ }
@@ -4141,7 +4192,7 @@ function median_iv(k, n,    i, b, c, half) {
 	return 0
 }
 
-function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, dev, devn, miss, rec, minr, rate, trans, wworst, stut) {
+function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, dev, devn, miss, rec, minr, rate, trans, wworst, stut, pj) {
 	k = f SUBSEP d
 	n = W_n[k] + 0
 	rate = n / WIN
@@ -4167,12 +4218,14 @@ function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, 
 				miss = (rec > 0) ? int(x / nom) - 1 : int(x / nom + 0.5) - 1
 				if (miss < 1) miss = 1
 				if (rec > miss) rec = miss
+				if (d == "D" && !trans) for (pj = 1; pj <= rec; pj++) pb_add(k, x - pj * nom)
 				lost += miss - rec; dly += rec; gaps++
 				if (x > 100 && x > 3 * nom) frz++
 				if (x > 50 && x > 3 * nom) stut++
 				if (x > wworst) wworst = x
 			} else {
 				if (d == "D" && x > 1.4 * nom) late++
+				if (d == "D" && !trans) pb_add(k, x - nom)
 				dev += abs(x - nom); devn++
 			}
 		}
@@ -4210,6 +4263,7 @@ function session_start(f, sec,    d, k, i, di) {
 	for (di = 1; di <= 2; di++) {
 		d = (di == 1) ? "D" : "U"; k = f SUBSEP d
 		for (i = 1; i <= S_rn[k] + 0; i++) delete S_rate[k, i]
+		for (i = 0; i <= 40; i++) delete S_pb[k, i]
 		S_rn[k] = 0; S_ticks[k] = 0; S_late[k] = 0; S_lost[k] = 0; S_dly[k] = 0; S_gaps[k] = 0
 		S_frz[k] = 0; S_stut[k] = 0; S_dev[k] = 0; S_devn[k] = 0; S_win[k] = 0; S_bad[k] = 0; S_worst[k] = 0
 	}
@@ -4490,6 +4544,8 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"s_server\":" jn2(s_srv) ",\"s_route\":" jn2(s_route) ",\"s_line\":" jn2(s_line) ",\"s_pc\":" jn2(s_pc) ",\"overall\":" overall ",\"rating\":" rating
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
+		PBL = -1; for (i = 0; i <= 40; i++) if ((S_pb[kd, i] + 0) > 0) PBL = i
+		if (PBL >= 0) { dj = dj ",\"pb\":{\"h\":["; for (i = 0; i <= PBL; i++) dj = dj (i ? "," : "") (S_pb[kd, i] + 0); dj = dj "]}" }
 		if (QM != "") dj = dj ",\"qm\":" QM
 		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
@@ -5384,7 +5440,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice report"
+READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice report pbadvice"
 WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart natfix natunfix natfwd natunfwd"
 
 reply() { # ok(0|1) text
@@ -5520,7 +5576,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.40.0", reloading = false;
+var BUILT = "0.41.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6591,6 +6647,25 @@ function netBlock(m) {
 	return b;
 }
 // what QoSmate's queues did during the match: the game's own queue, and everything else on the line
+// The ping buffer rehearsal (0.41.0): what a buffer on the router would have hidden in this match. m.pb.h counts
+// the updates by how late they arrived, in 5 ms steps. A game hides about one update interval itself, so an
+// update is one it could not hide when it came later than that, and a buffer of B ms hides those up to B later.
+function pbLeft(m, B) { var hh = m.pb.h, n = 0, i; for (i = 0; i < hh.length; i++) if (i * 5 >= m.nom && i * 5 >= m.nom + B) n += hh[i]; return n; }
+function pbBlock(m) {
+	if (!m.pb || !m.pb.h || !(m.nom > 0) || !(m.analysed >= 60)) return null;
+	var late = pbLeft(m, 0), mins = m.analysed / 60, b = h("div", null, h("h2", "Would a ping buffer have helped?")), B, best = 0, parts = [];
+	if (late / mins < 1) {
+		b.appendChild(h("p", { cls: "lede ok", text: "No. " + (late ? late + " update" + (late === 1 ? "" : "s") : "No update") + " in this match arrived later than the game hides by itself, so a buffer would have added its delay to every fight and smoothed nothing." }));
+	} else {
+		for (B = 5; B <= 60; B += 5) if (!best && late - pbLeft(m, B) >= 0.9 * late) best = B;
+		[10, 20, 30, 40, 60].forEach(function (x) { parts.push(x + " ms: " + (late - pbLeft(m, x)) + " (" + Math.round(100 * (late - pbLeft(m, x)) / late) + "%)"); });
+		b.appendChild(h("p", { cls: "lede low", text: late + " updates arrived later than the game hides by itself (about one update interval, " + fmt(m.nom, 0) + " ms on this server). Those are the moments that show as packet burst." }));
+		b.appendChild(h("p", "How many of them a buffer would have hidden, by its size. " + parts.join(", ") + "."));
+		b.appendChild(h("p", best ? "The smallest buffer that hides nine in ten is " + best + " ms, at the price of " + best + " ms more ping in every fight." : "Even 60 ms would not have hidden nine in ten: the stalls were too long for a buffer."));
+	}
+	b.appendChild(h("p", { cls: "note", text: "A rehearsal: MatchWatch timed the updates and held nothing back. It assumes the game hides one update interval itself; games do not publish theirs. Updates that never arrived are not counted, because no buffer can bring them back." }));
+	return b;
+}
 function qmBlock(m) {
 	var q = m.qm;
 	if (!q || !q.up) return null;
@@ -6708,6 +6783,7 @@ function pageMatch(id) {
 		if (m.overall != null) view.appendChild(h("div", { cls: "actions cardrow" }, cardBtn(m)));
 		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
+		var pbb = full ? pbBlock(m) : null; if (pbb) view.appendChild(pbb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }
@@ -7436,6 +7512,11 @@ function pageTools() {
 			var qaOut = outBox();
 			view.appendChild(tool("Are my QoSmate speeds right?", "Looks at what your last forty matches recorded and says what they show about QoSmate's speed limits: whether matches played on a busy line were rougher than the rest, and whether the queue QoSmate keeps for your game ever backed up. QoSmate does the prioritising; this only reads your match records and changes nothing.",
 				h("div", { cls: "actions" }, act("Look at my matches", "qosadvice", null, { done: qaOut.show })), qaOut));
+		}
+		if (!RO) {
+			var pbOut = outBox();
+			view.appendChild(tool("Would a ping buffer help me?", "Some routers hold your game's packets back by a set time so that a spiky line feels even, at the price of that much more ping in every fight. This rehearses it first: it reads how late the server's updates arrived in your last forty matches and says how many of the late ones a buffer of each size would have hidden. It holds nothing back and changes nothing.",
+				h("div", { cls: "actions" }, act("Rehearse it", "pbadvice", null, { done: pbOut.show })), pbOut));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
@@ -8613,7 +8694,7 @@ var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: 
 var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name', 'data' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1, nat: 1, qosadvice: 1, report: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1, nat: 1, qosadvice: 1, report: 1, pbadvice: 1 };
 
 /* The dashboard's two files are asked for by MatchWatch's version, so a browser that still holds
    an older version's copies fetches the new ones after an update instead of showing the old page. */

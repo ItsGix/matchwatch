@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.40.0 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.41.0 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -67,7 +67,7 @@ The pictures are made from invented data (`test/mockshots.py`). The game titles 
 
 - [Install, update, remove](#install-update-remove)
 - [The dashboard](#the-dashboard), including the overlay
-- [How a match is judged](#how-a-match-is-judged), including the early warning
+- [How a match is judged](#how-a-match-is-judged), including the early warning and the ping buffer rehearsal
 - [Alerts](#alerts)
 - [Choosing your servers](#choosing-your-servers)
 - [Games and voice chat](#games-and-voice-chat)
@@ -287,6 +287,30 @@ Nothing is counted between matches, it changes no score, and the figures stay on
 ### A picture to share
 
 Every match report has **Save a picture of this match**. It makes a 1200 by 630 picture in your browser with the overall score, the verdict, the four parts and how late the server's updates arrived through the match, with the game, the place and the time. It carries no address and nothing is uploaded: the file is saved to your own device.
+
+### Would a ping buffer help?
+
+Some gaming routers sell a *ping buffer*: your game's packets are held back by a set time so that a spiky line feels even. MatchWatch does not hold packets back. What it does is rehearse the buffer on your real matches, so you can see what one would do on your line before paying for it in ping.
+
+**How a buffer works.** A game draws other players a little in the past, by at least one of the server's update intervals, so that an update arriving slightly late is never seen. An update that arrives later than that is the freeze, the teleport, the "packet burst". A buffer on the router holds every update back by, say, 20 ms. One that arrives 20 ms late is then passed straight on, one that arrives on time waits its 20 ms, and the game receives an even beat. The price is that everything you see is 20 ms older, in every fight, whether or not anything was late.
+
+**What MatchWatch measures.** For every update from the server it notes how late it arrived: by how much its gap ran over the server's normal beat, and for updates that arrived together after a stall, how long each had been held up. From that it counts the updates that came later than the game hides by itself, and how many of those a buffer of each size would have hidden. Each match report has the answer for that match under **Would a ping buffer have helped?**, and **Tools, Data and settings, Would a ping buffer help me?** (or `matchwatch buffer`) answers for your last forty matches.
+
+**Where a buffer can help**
+
+- A line that stalls for a few tens of milliseconds and then delivers the held updates together: cable at busy times, 4G and 5G, a long Wi-Fi or powerline link between router and modem. The rehearsal shows these as late updates that a 20 to 40 ms buffer would hide.
+- Fights at range and holding an angle, where an even picture of the other player matters more than the last few milliseconds.
+
+**Where it cannot**
+
+- **A steady line.** If the rehearsal finds under one late update a minute, a buffer adds ping and smooths nothing.
+- **Updates that never arrive.** A buffer can re-time what comes late; it cannot bring back what was lost.
+- **Your own shots.** Your packets to the server are sent as you play, with no beat to restore, and their spikes happen after the router. A buffer there would only add delay.
+- **The other player's connection.** Dying behind cover is mostly the other player's delay and the server's update rate. Nothing on your router changes that.
+- **Close fights and peeking.** Whoever sees first wins those, and a buffer makes you see later.
+- **Stalls longer than the buffer.** Hiding an 80 ms stall takes about 65 ms of buffer, which costs more than it saves.
+
+The count assumes the game hides one update interval itself. Games do not publish their buffer, so read the figures as a guide: a game that hides more needs less.
 
 ## Alerts
 
@@ -790,6 +814,7 @@ Everything is also available over SSH:
 | `matchwatch nat fix` / `nat unfix` | Installs UPnP if it is missing and switches it on for your gaming device only, or puts things back as they were |
 | `matchwatch nat forward [port]` / `nat unforward` | Forwards the game's own UDP port to your gaming device, or removes the forward MatchWatch added |
 | `matchwatch qos advice` | What your last forty matches say about QoSmate's speed limits |
+| `matchwatch buffer` | The ping buffer rehearsal: how many late updates in your last forty matches a buffer of each size would have hidden. Holds nothing back |
 | `matchwatch report` | Prints a report to pass on when something is wrong: the self-check, tool versions, settings, files and the last log lines, with your internet address, phone alert address and device names left out. The same report is under Tools, Checks, Report a problem |
 | `matchwatch service` / `service stop` / `service start` / `service restart` | Says whether MatchWatch is running, or stops, starts or restarts it. If it stops by itself, the Tools page and the router's log say why |
 | `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |

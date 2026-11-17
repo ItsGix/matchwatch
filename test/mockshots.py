@@ -54,7 +54,7 @@ def build(site):
         if code in s: s[code] = max(2, overall - 20)
         p = round(ping + random.uniform(-0.4, 0.4), 1)
         m = {"game": "Fortnite" if cc == "SE" else "Call of Duty", "label": "Fortnite" if cc == "SE" else "Call of Duty", "start": start, "dur": dur, "analysed": dur - 6, "device": "192.168.1.50", "ip": ip, "port": 30120, "cc": cc, "city": city, "org": org, "asn": "AS64500",
-             "tick": 20.1, "jit": 2.68 if code == "server" else round(random.uniform(0.2, 0.6), 2), "late": 2.78 if code == "server" else 0.03, "lost": 2.4 if code == "server" else round(random.uniform(0, 0.1), 2),
+             "tick": 20.1, "nom": 16.7, "pb": {"h": [14200, 310, 40, 6, 22, 31, 9, 0, 0, 18, 0, 0, 37, 30, 22, 16, 9, 4] if code == "route" else [14500, 60, 2]}, "jit": 2.68 if code == "server" else round(random.uniform(0.2, 0.6), 2), "late": 2.78 if code == "server" else 0.03, "lost": 2.4 if code == "server" else round(random.uniform(0, 0.1), 2),
              "clump": 3.1 if code == "route" else 0.0, "freeze": 3 if code == "server" else 0, "rough": 51.0 if code == "server" else (18.0 if bad else 0.0), "uprate": 95.2, "upjit": 0.2,
              "hitch": 4 if code == "pc" else 0, "farkind": "server", "ping": p, "pingjit": 3.9 if code == "route" else 0.3, "pingloss": 1.5 if code == "route" else 0.0, "nearping": 3.7, "nearjit": 0.3, "nearloss": 0,
              "lanping": 0.2, "s_server": s["server"], "s_route": s["route"], "s_line": s["line"], "s_pc": s["pc"], "overall": overall, "rating": s["server"] if code == "server" else 100, "counted": 1,
@@ -109,7 +109,7 @@ def build(site):
     blocks = [{"ip": DCS["mad"][5][0].rsplit(".", 1)[0] + ".0/24", "days": None, "reason": "stay"}, {"ip": "203.0.113.77", "days": 12, "reason": "manual"}]
     for s in servers: s["blocked"] = s["ip"] == "203.0.113.77"; s["in"] = s["cc"] in ("DE", "SE"); s["lat"], s["lon"] = {"DE": (50.11, 8.68), "SE": (59.33, 18.07), "ES": (40.42, -3.70)}[s["cc"]]
     out = {"history": hist, "servers": servers, "datacentres": dlist, "regions": rj, "blocklist": blocks,
-           "info": {"version": "0.40.0", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
+           "info": {"version": "0.41.0", "ping": [5, 45], "device": "192.168.1.50", "stay": "Germany + Sweden", "autoblock": False, "notify": True, "pc_score": True, "geo": True, "block_days": 14, "stays": ["Near Frankfurt 450 km", "Sweden"], "web": False, "qosmate": True, "away": 412, "allowed": ["192.0.2.150"], "lan_if": "br-lan", "wan_if": "pppoe-wan", "qos_if": "eth1", "port_warn": "", "pool": [{"n": 1, "name": "Near Frankfurt 450 km", "lat": 50.11, "lon": 8.68, "km": 450, "cc": ""}, {"n": 2, "name": "Sweden", "lat": None, "lon": None, "km": 0, "cc": "SE"}]}}
     out["favourites"] = [servers[-1]["ip"], servers[-2]["ip"], servers[-4]["ip"]]
     out["mygames"] = [{"name": "Fortnite", "ports": "9000-9100", "kind": "", "hosts": ""}, {"name": "Call of Duty", "ports": "3074,30000-45000", "kind": "", "hosts": "vultr,as20473"}, {"name": "Not a game", "ports": "19306", "kind": "voice", "hosts": ""}]
     out["gameplaces"] = [
@@ -129,7 +129,7 @@ def build(site):
     d, u = timeline(120, "clean"); d[40], d[41], d[95] = 265.3, 98, 150; u[70] = 166
     p = [round(random.uniform(5.8, 6.4), 1) for _ in range(120)]; p[40], p[41] = 14.5, 9.0
     out["status"] = {"ts": NOW + 3600, "since": NOW - 6 * 3600 - 1260, "candidates": 0, "flows": 3, "sessions": [{"ip": "203.0.113.21", "port": 30120, "device": "192.168.1.50", "age": 412, "start": NOW - 412, "game": "Call of Duty", "loc": "Frankfurt, DE", "org": "Example Hosting Frankfurt",
-                     "tick": 20.1, "jit": 0.41, "late": 0.02, "lost": 0, "uprate": 95.2, "upjit": 0.3, "s_lost": 0.04, "s_frz": 1, "s_hitch": 1, "rep": 97, "repn": 3, "ping": 6.1, "tl_d": d, "tl_u": u, "tl_p": p,
+                     "tick": 20.1, "nom": 16.7, "pb": {"h": [14200, 310, 40, 6, 22, 31, 9, 0, 0, 18, 0, 0, 37, 30, 22, 16, 9, 4] if code == "route" else [14500, 60, 2]}, "jit": 0.41, "late": 0.02, "lost": 0, "uprate": 95.2, "upjit": 0.3, "s_lost": 0.04, "s_frz": 1, "s_hitch": 1, "rep": 97, "repn": 3, "ping": 6.1, "tl_d": d, "tl_u": u, "tl_p": p,
                      "marks": [{"t": NOW + 3600 - 76, "k": "server+ping", "x": "server updates stalled: one arrived 217 ms late; ping jumped to 14 ms (normally 6)"}]}]}
     # results of the two slow tools, as the router would leave them (job number 1)
     out["linetest"] = {"id": "1", "state": "done", "ts": NOW, "verdict": "good", "score": 100, "msg": "Your line is steady: about 4 ms to the nearest target, no loss, jitter 0.2 ms.",
@@ -211,8 +211,9 @@ ratings: 3 server rating(s) from someone else. They are shown to you and mention
 		if (p.action === "shareimport") out = `Added 2 game label(s). Ones for ports you had already named were left out.
 Took in 3 server rating(s). They are listed on the Tools page.`;
 		if (p.action === "linetest" || p.action === "trace" || p.action === "nat" || p.action === "natfix" || p.action === "natunfix") out = "1";
+		if (p.action === "pbadvice") out = "The ping buffer rehearsal, over your last 14 matches (212 minutes of play).\\n\\nMatchWatch timed every update from the server and worked out what a buffer on the router would have done with them. Nothing was held back: this is a rehearsal.\\n\\nNothing for a buffer to absorb. 31 updates in 212 minutes arrived later than a game hides by itself, which is under one a minute. A buffer would add its delay to every fight and smooth nothing.";
 		if (p.action === "qosadvice") out = "QoSmate holds your line to 60 Mbit down and 18 Mbit up. This looks at your last 14 matches.\\n\\nThe limits look right: in 4 matches your line reached 70%% of its limit, and it was as steady in those as in the 9 where it stayed quiet (0.4 ms of jitter against 0.3 ms). A short burst in a long match weighs little here, so take this as a sign, not proof.\\n\\nThe queue QoSmate keeps for your game never backed up: 0.6 ms at most over 14 matches.\\n\\nWhat this cannot tell you: whether the limits are lower than they need to be. Matches only show a limit that is too high.";
-		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.40.0.";
+		if (p.action === "updatecheck") out = "Version 0.24.0 is available. You have 0.41.0.";
 		return Promise.resolve({ ok: true, out: out });
 	} });
 // for the README: the shareable picture on its own, and the network section on its own

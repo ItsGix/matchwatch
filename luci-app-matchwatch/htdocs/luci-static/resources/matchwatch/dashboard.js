@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.40.0", reloading = false;
+var BUILT = "0.41.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1099,6 +1099,25 @@ function netBlock(m) {
 	return b;
 }
 // what QoSmate's queues did during the match: the game's own queue, and everything else on the line
+// The ping buffer rehearsal (0.41.0): what a buffer on the router would have hidden in this match. m.pb.h counts
+// the updates by how late they arrived, in 5 ms steps. A game hides about one update interval itself, so an
+// update is one it could not hide when it came later than that, and a buffer of B ms hides those up to B later.
+function pbLeft(m, B) { var hh = m.pb.h, n = 0, i; for (i = 0; i < hh.length; i++) if (i * 5 >= m.nom && i * 5 >= m.nom + B) n += hh[i]; return n; }
+function pbBlock(m) {
+	if (!m.pb || !m.pb.h || !(m.nom > 0) || !(m.analysed >= 60)) return null;
+	var late = pbLeft(m, 0), mins = m.analysed / 60, b = h("div", null, h("h2", "Would a ping buffer have helped?")), B, best = 0, parts = [];
+	if (late / mins < 1) {
+		b.appendChild(h("p", { cls: "lede ok", text: "No. " + (late ? late + " update" + (late === 1 ? "" : "s") : "No update") + " in this match arrived later than the game hides by itself, so a buffer would have added its delay to every fight and smoothed nothing." }));
+	} else {
+		for (B = 5; B <= 60; B += 5) if (!best && late - pbLeft(m, B) >= 0.9 * late) best = B;
+		[10, 20, 30, 40, 60].forEach(function (x) { parts.push(x + " ms: " + (late - pbLeft(m, x)) + " (" + Math.round(100 * (late - pbLeft(m, x)) / late) + "%)"); });
+		b.appendChild(h("p", { cls: "lede low", text: late + " updates arrived later than the game hides by itself (about one update interval, " + fmt(m.nom, 0) + " ms on this server). Those are the moments that show as packet burst." }));
+		b.appendChild(h("p", "How many of them a buffer would have hidden, by its size. " + parts.join(", ") + "."));
+		b.appendChild(h("p", best ? "The smallest buffer that hides nine in ten is " + best + " ms, at the price of " + best + " ms more ping in every fight." : "Even 60 ms would not have hidden nine in ten: the stalls were too long for a buffer."));
+	}
+	b.appendChild(h("p", { cls: "note", text: "A rehearsal: MatchWatch timed the updates and held nothing back. It assumes the game hides one update interval itself; games do not publish theirs. Updates that never arrived are not counted, because no buffer can bring them back." }));
+	return b;
+}
 function qmBlock(m) {
 	var q = m.qm;
 	if (!q || !q.up) return null;
@@ -1216,6 +1235,7 @@ function pageMatch(id) {
 		if (m.overall != null) view.appendChild(h("div", { cls: "actions cardrow" }, cardBtn(m)));
 		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
+		var pbb = full ? pbBlock(m) : null; if (pbb) view.appendChild(pbb);
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }
@@ -1944,6 +1964,11 @@ function pageTools() {
 			var qaOut = outBox();
 			view.appendChild(tool("Are my QoSmate speeds right?", "Looks at what your last forty matches recorded and says what they show about QoSmate's speed limits: whether matches played on a busy line were rougher than the rest, and whether the queue QoSmate keeps for your game ever backed up. QoSmate does the prioritising; this only reads your match records and changes nothing.",
 				h("div", { cls: "actions" }, act("Look at my matches", "qosadvice", null, { done: qaOut.show })), qaOut));
+		}
+		if (!RO) {
+			var pbOut = outBox();
+			view.appendChild(tool("Would a ping buffer help me?", "Some routers hold your game's packets back by a set time so that a spiky line feels even, at the price of that much more ping in every fight. This rehearses it first: it reads how late the server's updates arrived in your last forty matches and says how many of the late ones a buffer of each size would have hidden. It holds nothing back and changes nothing.",
+				h("div", { cls: "actions" }, act("Rehearse it", "pbadvice", null, { done: pbOut.show })), pbOut));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
