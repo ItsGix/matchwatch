@@ -8,7 +8,7 @@ MatchWatch watches your game's traffic as it passes through the router and says 
 
 > **OpenWrt only.** It runs on a router with [OpenWrt](https://openwrt.org/) firmware. Nothing is installed on your PC or console, and it does not run on a router with its maker's stock firmware.
 
-It works from packet timing only. Game traffic is never decoded, changed, delayed or injected, so it has no effect on your ping and gives anti-cheat nothing to object to. Blocking servers and changing other settings on the router only happen when you ask.
+It works from packet timing only: game traffic is never decoded or injected. Out of the box it changes nothing about your connection. Blocking servers, the [ping buffer](#the-ping-buffer) (the one feature that holds game packets) and changes to other settings on the router only happen when you ask.
 
 > **Status:** an early release, used daily on one router running OpenWrt 25.12, mostly with one game. Scores are a diagnostic estimate, not proof of a server's health. See [Limits](#limits).
 
@@ -26,7 +26,7 @@ Half a minute into a match, usually while you are still in the lobby or the warm
 
 ### It shows who to blame, live and afterwards
 
-A see-through bar for a stream or a second screen, showing where you are playing, your ping, and the server, route, line and PC each with its own line, and a picture of any match to share, with the scores and the timing and no address.
+A see-through bar for a stream or a second screen, with where you are playing, your ping, and a line each for the server, route, line and PC. And a picture of any match to share, with the scores and the timing and no address.
 
 ![The overlay: where you are playing, ping, and a line for each of the four areas](docs/overlay.png)
 
@@ -59,7 +59,7 @@ A ping buffer holds the server's updates back by a set time so that late ones ca
 ### And the rest
 
 - Remembers every match, with ratings per server, datacentre and hour of the day, and your favourite servers by game.
-- Recognises around thirty popular games and lets you name any other. Voice chat is left alone: calls are never recorded and never blocked.
+- Recognises around thirty popular games and lets you name any other. Voice chat is never recorded and never blocked.
 - Phone alerts through ntfy: a match started, a poor server ahead, a bad match.
 - Match mode: with QoSmate, one pair of speeds while you play and another the rest of the time.
 - Share files you choose the contents of, item by item. Nothing is ever uploaded.
@@ -86,13 +86,7 @@ The pictures are made from invented data (`test/mockshots.py`). The game titles 
 
 ## Install, update, remove
 
-MatchWatch only works on OpenWrt. You need:
-
-- A router running OpenWrt 22.03 or newer, with LuCI. It must be the router your gaming device connects through, so it sees the game's traffic.
-- SSH access to it as root.
-- A few megabytes of free storage.
-
-If your router runs its maker's own firmware, check whether OpenWrt supports it at [openwrt.org/toh](https://openwrt.org/toh/start) first.
+You need a router running OpenWrt 22.03 or newer with LuCI, SSH access to it as root, and a few megabytes of free storage. It must be the router your gaming device connects through. If your router runs its maker's firmware, check [openwrt.org/toh](https://openwrt.org/toh/start) for whether OpenWrt supports it.
 
 ### Install
 
@@ -106,21 +100,20 @@ Then, in LuCI:
 
 1. Log out and back in, and open **Services → MatchWatch**. The menu entry only appears after a fresh login.
 2. On the **Settings** tab, set **Device to watch** to your gaming PC or console. Until you do, MatchWatch watches every device.
-3. Give that device a fixed address under Network → DHCP and DNS → Static Leases, so MatchWatch does not lose track of it.
+3. Give that device a fixed address under Network → DHCP and DNS → Static Leases.
 
 Then play a match. It shows up on the Live page within about ten seconds.
 
-- To choose the device at install time, add its address to the end of the command: `... && sh /tmp/matchwatch-install.sh 192.168.1.50`.
+- To choose the device at install time, add its address to the end: `... && sh /tmp/matchwatch-install.sh 192.168.1.50`.
 - If the router cannot download the file, fetch [`dist/matchwatch-install.sh`](dist/matchwatch-install.sh) on a computer and copy it over with `scp matchwatch-install.sh root@192.168.1.1:/tmp/`.
 
-**What the installer does.** Read it before you run it: it runs as root. It installs `tcpdump` if missing, copies the program and the LuCI app into place, creates `/etc/config/matchwatch`, starts the service and runs a self-check. It works on both `apk` (OpenWrt 25.12) and `opkg` (older releases).
+**What the installer does.** Read it before you run it: it runs as root. It installs `tcpdump` if missing, copies the program and the LuCI app into place, creates `/etc/config/matchwatch`, starts the service and runs a self-check. It works with both `apk` (OpenWrt 25.12) and `opkg` (older releases).
 
 ### Update
 
-Open **Tools → Data and settings** and press **Check for an update**. If there is a newer version, **Update now** downloads the installer from this repository, checks it against a published checksum, and runs it. The page reloads itself. History and settings are kept.
+Open **Tools → Data and settings** and press **Check for an update**. If there is a newer version, **Update now** downloads the installer from this repository, checks it against a published checksum, and runs it. History and settings are kept.
 
-- Nothing is checked or downloaded until you press the button.
-- The exception is **Tell me when a new version is out**, under Alerts in Settings. The router then looks once a day, the dashboard shows "Update available" on every page, and your phone is told once per version. It never installs anything by itself.
+- Nothing is checked or downloaded until you press the button, unless you switch on **Tell me when a new version is out** in Settings. Then the router looks once a day and tells you; it never installs by itself.
 - It refuses during a match, because updating restarts MatchWatch.
 - Over SSH: `matchwatch update` checks, `matchwatch update now` installs.
 - A firmware upgrade keeps history and settings but removes the program. Run the installer again.
@@ -135,20 +128,17 @@ keeps your history and settings. Use `purge` instead of `remove` to delete those
 
 ## The dashboard
 
-The dashboard is where you watch matches, read reports and press buttons. **Services → MatchWatch** has two tabs, Dashboard and Settings. The Dashboard has five pages:
+**Services → MatchWatch** has two tabs, Dashboard and Settings. The Dashboard has five pages:
 
 | Page | What is on it |
 |---|---|
-| **Live** | The match in progress: ping, update rate, jitter, late and missing updates, freezes, your PC's send rate and pauses, a two-minute chart, and the "I felt that" button. When the game starts connecting you somewhere, a banner says where, how far, and how that server has rated |
-| **Last match** | One match in full: verdict, the four scores with the reason for each, a chart of the whole match, every figure, each stop on the route, what QoSmate's queues did, and your marks |
-| **Matches** | Every recorded match, your latest session in a sentence, and ratings by hour of the day. Flags is how many moments you marked with "I felt that" |
-| **Servers** | Four tabs. **Where I play**: the map, everything that is let in, and how each game is filtered. **Favourites**. **Servers**: servers, datacentres and blocks. **Regions and games**: pings to every region and where each game plays |
-| **Tools** | Checks, games, sharing, updating and data. See [Tools](#tools) |
+| **Live** | The match in progress: ping, update rate, jitter, late and missing updates, freezes, your PC's pauses, a two-minute chart and the "I felt that" button. A banner says where the game is sending you and how that server has rated |
+| **Last match** | One match in full: verdict, the four scores with the reason for each, a chart of the whole match, each stop on the route, what QoSmate's queues did, and your marks |
+| **Matches** | Every recorded match, your latest session in a sentence, and ratings by hour of the day |
+| **Servers** | Four tabs. **Where I play**: the map, everything that is let in, and how each game is filtered. **Favourites**. **Servers**: servers, datacentres and blocks. **Regions and games** |
+| **Tools** | Checks, connection tools, games, sharing, updating and data. See [Tools](#tools) |
 
-- Data is fetched every fifteen seconds, and a page redraws only when something has changed.
-- Longer explanations show their first sentence, with a **More** link for the rest.
-- Until your first match, the Live page lists the three steps to get started.
-- Every page fits a phone. On a touch screen a circle is drawn with two taps, the middle and then the edge.
+Data is fetched every fifteen seconds and a page redraws only when something has changed. Longer explanations show their first sentence with a **More** link. Every page fits a phone.
 
 **Settings.** The device to watch, phone alerts, blocking and staying, and the advanced capture options. Saving restarts MatchWatch, which ends the recording of a match in progress, so change settings between matches.
 
@@ -158,79 +148,35 @@ Turn on "Dashboard without login" in Settings to also serve the dashboard at `ht
 
 ### The overlay
 
-A compact bar on a see-through background, updated every second, for a stream or a second screen. It is at `http://<router address>/matchwatch/#/overlay` and needs the dashboard without login switched on.
+A compact bar on a see-through background, updated every second, for a stream or a second screen. It is at `http://<router address>/matchwatch/#/overlay` and needs the dashboard without login switched on. Under **Tools, Data and settings, Live overlay**, tick what you want and copy the address it builds.
 
-Under Tools, Data and settings, Live overlay, tick what you want and copy the address it builds. The choices travel in the address, so two scenes can use different bars.
-
-- **Every part is optional**: where you are playing (the city and country, never the address), the game, your ping, the lights, the lines, the marks, this server's rating and the match time. The bar closes up around whatever is left. There are three sizes, and it can hide itself between matches.
-- **The four areas** are Server, Route, Line and PC, in two rows of two. Each has a light and a small line of its last minute, which turn amber or red while a problem lasts. Each has its own tick box; with one or two left they stack in a single column.
-- **Three extras, off until you tick them.** *Matches played* adds a line under the place and game counting the matches of this sitting, and it stays on screen between matches; a sitting ends after two hours without a match, and matches too short to be rated are not counted. *Updates missing* puts the share of the server's updates that never arrived under the ping, amber from 1% and red from 3%. *The verdict when a match ends* swaps the ping and the lights for the match's score and one line about it for half a minute, a few seconds after the match ends.
-- **The marks** under a line stay for the rest of the minute: green for a small blip, amber for one you would feel, red for a bad one.
+- **Every part is optional**: the place (city and country, never the address), the game, your ping, the lights, the lines, the marks, this server's rating and the match time. There are three sizes, and it can hide itself between matches.
+- **The four areas** are Server, Route, Line and PC. Each has a light and a line of its last minute, which turn amber or red while a problem lasts, and marks underneath that stay for the minute.
+- **Three extras, off until ticked:** *Matches played* this sitting (a sitting ends after two hours without a match), *Updates missing* under the ping (amber from 1%, red from 3%), and *the verdict* for half a minute when a match ends.
 - **If the Line light stays grey**, your ISP's first hop answers no pings. Untick Line; line faults show under Route instead.
-- **In OBS**, add a Browser source with the address, about 560 wide and 70 high (480 by 60 for the small size, 700 by 90 for the large one; add a tenth to the height with Matches played ticked). Spare room shows nothing, because the page is see-through. On a phone or a second screen, just open it.
-- **The address, by hand.** `#/overlay?show=place,game,ping,lights,lines,marks,rate,time,miss,played,verdict&areas=server,route,pc&size=s` (sizes `s`, `m`, `l`; `&idle=0` hides the bar between matches). Leave out a word to leave out that part.
+- **In OBS**, add a Browser source with the address: 480 by 60 for the small size, 560 by 70 for medium, 700 by 90 for large, a tenth taller with Matches played.
+- **By hand:** `#/overlay?show=place,game,ping,lights,lines,marks,rate,time,miss,played,verdict&areas=server,route,pc&size=s` (sizes `s`, `m`, `l`; `&idle=0` hides the bar between matches). Leave out a word to leave out that part.
 
-**How a fault is placed.** It goes to the nearest thing that explains it:
-
-- A jump in the ping to your ISP's first hop is the line.
-- Extra ping beyond that hop is the route.
-- Late updates with a steady ping are the server.
-- A pause in what your PC sends is the PC.
-
-It is a moment's best guess. The match report has the whole match to judge from and is the final word, and the two can disagree.
-
-**How far to trust it.**
-
-- The PC row is the surest: the router sees every packet your PC sends.
-- The Line row is sound when your ISP's first hop answers.
-- Telling the server from the route is the weakest part. The ping is taken once a second, so a shorter route hiccup looks like the server, and some servers ration their ping replies.
-- The lines between green, amber and red are first guesses, not yet checked against a real rough match.
+A fault is placed with the nearest thing that explains it: a jump in the ping to your ISP's first hop is the line, extra ping beyond that is the route, late updates with a steady ping are the server, and a pause in what your PC sends is the PC. It is a moment's best guess, and its amber and red lines are first guesses too. The match report has the whole match to judge from and is the final word.
 
 ## How a match is judged
 
-MatchWatch times the game's own packets, adds a few pings of its own, and scores four parts out of 100: the server, the route, your line and your PC.
+MatchWatch times the game's own packets, adds a few pings of its own, and scores four parts out of 100.
 
 ### What it measures
 
-**Server.** A server sends updates on a fixed beat. MatchWatch measures how evenly they arrive:
-
-- Update rate: the server's tick rate as seen on the wire.
-- Timing jitter: average wobble around the beat.
-- Late updates: arrived well after their slot.
-- Arrived in clumps: held up somewhere, then delivered together. This points at the route.
-- Missing updates: never arrived. Lost in transit or never sent.
-- Stutters and freezes: gaps over 50 ms and 100 ms.
-
-**Route.** One ping a second to the server during the match.
-
-- If the server ignores ping but can be reached the way traceroute reaches it, it is probed that way every two seconds instead. Servers ration those replies, so unanswered ones are not counted as loss.
-- Failing that, the last hop that answers is used and judged more leniently.
-
-**Your line.** One ping a second to the first hop inside your ISP.
-
-**Your PC.** Whether your PC keeps sending without pauses, measured as its packets arrive at the router, plus a ping from router to PC if the PC answers.
-
-- Only pauses over 100 ms are scored. They usually mean frame drops or a loading screen.
-- Send jitter is shown but barely scored, because games tie their send rate to frame rate.
-- Turn off "Count your PC towards scores" in Settings to leave your PC out of the overall score and verdict.
+- **Server.** A server sends updates on a fixed beat. MatchWatch measures how evenly they arrive: the update rate, timing jitter, late updates, updates that arrived in clumps (held up on the way), missing updates, and stutters and freezes (gaps over 50 and 100 ms).
+- **Route.** One ping a second to the server. If it ignores ping, it is probed the way traceroute does every two seconds; servers ration those replies, so unanswered ones are not loss. Failing that, the last hop that answers is used and judged more leniently.
+- **Your line.** One ping a second to the first hop inside your ISP.
+- **Your PC.** Whether it keeps sending without pauses, measured as its packets reach the router. Only pauses over 100 ms are scored, because games tie their send rate to frame rate. "Count your PC towards scores" in Settings leaves it out of the overall score.
 
 ### Which stop on the way
 
-Through every match MatchWatch pings each stop between you and the server that answers, once every six seconds. The match report lists them under Route, with typical ping, jitter and loss for each.
-
-- If trouble starts at one stop and is still there at every stop after it, the report says so: "Trouble on the way starts at stop 7 (address): jitter 6.2 ms, and it is still there at every stop after it. The 6 stops before it were steady."
-- If it starts at the first stop that answers, it says the trouble is at or near your own provider.
-- Routers answer pings when they have a moment, so a single rough stop with steady stops after it means nothing, and is not blamed.
-
-This is information to act on, such as showing your provider. It changes no score.
+Through every match MatchWatch pings each stop on the route that answers, every six seconds, and the report lists them with ping, jitter and loss. If trouble starts at one stop and is still there at every stop after it, the report says so, and says when that stop is at or near your own provider. A single rough stop with steady stops after it means nothing and is not blamed. This is information to show your provider; it changes no score.
 
 ### The four scores, and why
 
-Under each score the match report prints one short line saying what cost the most points, or "Nothing to fault". For example:
-
-- Route 84: "Ping 73 ms: a long way to the server"
-- Your PC 95: "4 pauses over 100 ms in what it sent"
-- Server 24: "2.40% of updates went missing; 3 freezes over 100 ms"
+Under each score the report prints one line saying what cost the most points, or "Nothing to fault": for example "Ping 73 ms: a long way to the server" or "2.40% of updates went missing; 3 freezes over 100 ms".
 
 ### What takes points off
 
@@ -251,258 +197,173 @@ Under each score the match report prints one short line saying what cost the mos
 | | Send jitter above 60% of one update | 10 |
 | | Jitter or loss between router and PC | 80 |
 
-So a steady route to a server a long way off scores in the low 80s for distance alone, and a handful of short pauses in a long match costs the PC a few points. Neither is a fault.
+So a steady route to a far server scores in the low 80s for distance alone, and a few short pauses in a long match cost the PC a few points. Neither is a fault.
 
 ### The overall score and the verdict
 
-- The overall score is 60% the weakest counted part and 40% a weighted average (server 45%, route 25%, line 15%, PC 15%).
-- Grades: 85 and over Excellent, 70 Good, 50 Fair, below that Poor.
+- The overall score is 60% the weakest counted part and 40% a weighted average (server 45%, route 25%, line 15%, PC 15%). Grades: 85 and over Excellent, 70 Good, 50 Fair, below that Poor.
 - **The game's own traffic is the ground truth.** When its packets arrived cleanly (server 80 or more), a lower route score is shown but not counted.
-- The verdict names the weakest part.
-- Scoring starts when steady game traffic begins, so the wait before a match is not counted. Sessions with under a minute analysed are not judged.
-- A match only counts towards a server's rating when it lasted at least a minute and your own line was stable.
+- Scoring starts when steady game traffic begins, so the wait before a match is not counted.
+- A match counts towards a server's rating only when it lasted at least a minute and your own line was stable.
 
 ### "I felt that"
 
-Press the button on the Live page (or the M key with the page focused) when something feels off: a shot that should have hit, a rubber-band, a death behind cover. MatchWatch looks at the six seconds before the press and says whether the server stalled, your ping jumped, your PC stopped sending, or nothing showed on the network at all. Marks appear on the chart, in the match report and in the history.
+Press the button on the Live page (or the M key) when something feels off: a shot that should have hit, a rubber-band, a death behind cover. MatchWatch looks at the six seconds before the press and says whether the server stalled, your ping jumped, your PC stopped sending, or nothing showed on the network. Marks appear on the chart, in the report and in the history.
 
 ### The early warning
 
-A match report arrives when the match is already lost. The early warning looks at the first half minute of a game's steady traffic, usually the lobby or the warm-up, and speaks once, only if the server is already clearly rough: 3% or more of its updates missing, 8% or more late, two freezes, or rough for half of that half minute.
+The early warning looks at the first half minute of a game's steady traffic and speaks once, only if the server is already clearly rough: 3% or more of its updates missing, 8% or more late, two freezes, or rough for half of that time. The Live page shows the reason in red, the overlay gains a light, and your phone gets one line if you use alerts.
 
-The Live page shows the reason in red, the overlay gains a fourth light, and your phone gets one short line if you use phone alerts.
-
-- The lines are set high on purpose, because a false alarm costs you a good match. They are first guesses and will be tuned.
-- It only tells you. Whether leaving a lobby costs you anything is the game's rule.
-- It applies to recognised games, not to streams on a port nobody has named.
+- The lines are set high on purpose, because a false alarm costs you a good match. They are first guesses.
+- It applies to recognised games only, and it only tells you: whether leaving a lobby costs anything is the game's rule.
 - To keep it off your phone: `uci set matchwatch.main.early_warn=0`, `uci commit matchwatch`.
 
 ### What on your network was busy
 
-The router carries every device's traffic, so it can say whether something else in the house was busy while your match went rough. During a match, MatchWatch counts each device's traffic every five seconds. The report shows the result under **Your network during this match**:
+During a match MatchWatch counts each device's traffic every five seconds, and the report shows the result under **Your network during this match**.
 
-- **A row per busy device**, by the name it gave the router: how much it downloaded and uploaded, and for how long. Busy means above 2 Mbit down or 0.5 Mbit up. Your gaming device has a row too, for a download or a video call beside the game.
-- **A comparison, not a guess.** The game's timing and your ping while the device was busy are set against the rest of the match. If they were clearly worse, it says so with the figures. If they were the same, it says that: with QoSmate holding the line, a busy device often changes nothing.
-- A device busy from start to finish has nothing to be compared with, and the report says so.
-- IPv6 traffic is one row for all devices together.
-- If flow offloading is on in the router's firewall, most traffic bypasses the point where it is counted, and the report says the figures are incomplete.
+- **A row per busy device**, by the name it gave the router: above 2 Mbit down or 0.5 Mbit up. Your gaming device has a row too.
+- **A comparison, not a guess.** The game's timing and your ping while the device was busy are set against the rest of the match, and the report says whether they were clearly worse or the same. With QoSmate holding the line, a busy device often changes nothing.
+- IPv6 traffic is one row for all devices. With flow offloading on in the firewall the figures are incomplete, and the report says so.
 
 Nothing is counted between matches, it changes no score, and the figures stay on the router. To switch it off: `uci set matchwatch.main.net_watch=0`, `uci commit matchwatch`.
 
 ### A picture to share
 
-Every match report has **Save a picture of this match**. It makes a 1200 by 630 picture in your browser with the overall score, the verdict, the four parts and how late the server's updates arrived through the match, with the game, the place and the time. It carries no address and nothing is uploaded: the file is saved to your own device.
+Every match report has **Save a picture of this match**: the overall score, the verdict, the four parts and the timing, with the game, the place and the time. It carries no address and is saved to your own device.
 
 ## Alerts
 
-MatchWatch can send short messages to your phone through ntfy. Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.sh/<your topic>` under Alerts in Settings. **Send a test alert** on the Tools page proves it works.
-
-Alerts are one short line each, with no addresses. The full detail is in the dashboard and in Recent activity on the Tools page.
+MatchWatch can send short messages to your phone through ntfy. Install the ntfy app, subscribe to a hard-to-guess topic, and put `https://ntfy.sh/<your topic>` under Alerts in Settings. **Send a test alert** on the Tools page proves it works. Alerts are one short line each, with no addresses; the detail is in the dashboard.
 
 | Alert | Reads like | When |
 |---|---|---|
-| Match started | Match started: United Kingdom, 5 ms. | Each match, if switched on |
+| Match started | Match started: United Kingdom, 5 ms. | Each match, if switched on. For stepping away during a long queue |
 | Lobby | Poor server ahead: United Kingdom, 5 ms. Rated 40/100 before. | A far or poor server, at most one a minute |
 | Match ended | Match ended: 41/100 Poor. | After a bad match, or every match if switched on |
 | New game | New game on server port 4444. Name it in MatchWatch, or mark it as not a game. | The first match on an unknown port |
 
-**Match started** is for stepping away during a long queue: it means "get back to your seat now".
+**The lobby check** runs when the game first contacts a server MatchWatch recognises as a game server. It looks up where the server is, measures the ping and checks its history. The Live page shows the result with a button to block the server before the match starts, and your phone is told when the server is far or has rated badly. It needs at least one recorded match first.
 
-- It fires when the steady game traffic starts, not in the lobby or on a loading screen.
-- It waits up to about fourteen seconds for a ping. If the server does not answer, it is sent without one.
-- It is only sent for named games, and is off by default.
-
-**The lobby check** runs when the game first contacts a server MatchWatch recognises as a game server: a port labelled as a game, and either a host that matches the game or the same port or address block as an earlier match.
-
-- MatchWatch looks up where the server is, measures the ping and checks its history.
-- The Live page shows the result, with a button to block the server before the match starts.
-- Your phone is told when the server is noticeably further than your best datacentre or has rated badly.
-- It needs at least one recorded match before it can recognise game servers.
-- A server turned away because you are staying somewhere else does not alert your phone, unless the lobby alert is set to "Always alert my phone". A game can try several servers in a minute.
-
-**Ping sweeps are not announced.** Some games measure their ping to every datacentre at once. Call of Duty does it every twenty minutes, to about twenty servers around the world, in a match or out of one.
-
-- MatchWatch waits three seconds before it announces a server. Four or more different servers in that time count as a sweep: one line in the log, and nothing on the Live page or your phone.
-- If you are staying on places, each of those servers is still let in or turned away the moment it is seen.
+**Ping sweeps are not announced.** Some games measure their ping to every datacentre at once; Call of Duty does it every twenty minutes. Four or more different servers within three seconds count as a sweep: one line in the log, and nothing on the Live page or your phone.
 
 ## Choosing your servers
 
-The game decides which server you get. MatchWatch cannot request one. What it can do is refuse servers, so the game has to place you elsewhere. There are three ways: block servers, stay in a pool of places, or set a ping range.
+The game decides which server you get. MatchWatch cannot request one, but it can refuse servers so the game has to place you elsewhere: block servers, stay in a pool of places, or set a ping range.
 
 ### Blocking
 
 A block refuses one server or one datacentre. Blocks live in their own nftables table, so your firewall rules are untouched.
 
 - Blocking takes effect on your next match. Never block the server you are playing on unless you want to be disconnected.
-- Server addresses are reused, so blocks expire ("Blocks last" in Settings).
-- Blocking many servers lengthens matchmaking.
+- Server addresses are reused, so blocks expire ("Blocks last" in Settings). Blocking many servers lengthens matchmaking.
 - Automatic blocking is off by default. When on, a server is blocked after two counted matches averaging under 45.
-- Individual addresses rotate, so ratings are also grouped by datacentre: one operator in one city. Blocking a datacentre blocks every /24 address block you have been placed on there. It can't know the datacentre's other blocks.
+- Blocking a datacentre blocks every /24 address block you have been placed on there. It cannot know the datacentre's other blocks.
 
 ### Favourites
 
-Press the star beside any server, on the Servers page, the Live page or a match report. The Favourites tab lists them by game, best rated first.
+Press the star beside any server. The Favourites tab lists them by game, best rated first.
 
-- A favourite is never blocked automatically, however it rates. You can still block one yourself.
-- A star does not put a server in the pool. Your places and your ping range treat a favourite like any other server unless you [add it to the pool](#single-servers-in-the-pool).
-- The lobby check tells you when the game is sending you to one.
-- Favourites can be shared. Ones you take from someone else show under the same games, marked "Not played on yet" until you land on them.
-- Clearing your match history keeps your favourites.
+- A favourite is never blocked automatically, and the lobby check tells you when the game is sending you to one.
+- A star does not put a server in the pool; [add it to the pool](#single-servers-in-the-pool) for that.
+- Favourites can be shared, and clearing your match history keeps them.
 
 ### Staying in a pool of places
 
-Staying keeps you to servers in places you choose, whoever hosts them. Type places into the box on the Servers page, press a "Stay here" button, or use `matchwatch stay <places>`. Give one or several, separated by commas:
+Staying keeps you to servers in places you choose, whoever hosts them. Type places into the box on the Servers page, press a "Stay here" button, or use `matchwatch stay <places>`, separated by commas:
 
-- **A city**: `milan`, `helsinki`. Servers within 150 km of it are allowed. Cities in the regions table work offline; any other is looked up with the Open-Meteo geocoding service, which is sent only the name you typed.
-- **A country**: `italy` or `it`.
-- **An area**: `western-europe`. `matchwatch places` lists them.
-- **A datacentre number** from `matchwatch datacentres`.
+- **A city**: `milan`, `helsinki`. Servers within 150 km are allowed. Cities not in the regions table are looked up with Open-Meteo, which is sent only the name.
+- **A country** (`italy` or `it`), **an area** (`western-europe`; `matchwatch places` lists them), or **a datacentre number** from `matchwatch datacentres`.
 
-Several places make one pool, and the game picks among them. A bigger pool means shorter queues.
+Several places make one pool. A bigger pool means shorter queues.
 
-How it works:
-
-- Every address block you have played on outside the pool is blocked at once.
-- When the game reaches for any other server, MatchWatch looks up where it is and turns it away if it is outside the pool, before measuring anything. You are refused in the lobby, not thrown out of a match later.
-- Changing the pool keeps the turn-aways that still apply.
-- A match in progress is never cut off. A server outside your places is turned away once the match on it has ended.
-
-What to expect:
-
-- The game decides which regions to offer you. Places it already gives you work well. Far ones may take several failed connections, or never come up.
-- It applies only to servers MatchWatch recognises as game servers. If a game shows as "Game on port N", name it first: unnamed games are left alone.
-- Server locations come from a public lookup and are occasionally wrong.
-- A place is dropped from the pool, and you are told, if its last three counted matches average under the warning rating. When the pool is empty, staying ends.
+- Every address block you have played on outside the pool is blocked at once, and any other server is looked up and turned away as the game reaches for it, before anything is measured. You are refused in the lobby, not thrown out of a match later.
+- A match in progress is never cut off.
+- It applies only to servers MatchWatch recognises as game servers. Name a "Game on port N" first.
+- The game decides which regions to offer you. Far places may take several failed connections, or never come up. Server locations come from a public lookup and are occasionally wrong.
+- A place is dropped from the pool, and you are told, if its last three counted matches average under the warning rating.
 
 ### The map
 
-The Servers page has a map of everything MatchWatch knows, beside the box where you type places.
+The Servers page has a map of everything MatchWatch knows.
 
-- **Your places** are green circles. Press **Draw a circle**, press where the middle should be, drag outwards and let go. MatchWatch says how many of the servers you have played on are inside before you confirm.
-- **To change a circle**, press it: move it by its middle, resize it by its edge, or remove it.
-- **A drawn circle** is an ordinary place in the pool, named after the nearest datacentre city ("Near Frankfurt 450 km"), between 25 and 3000 km across. Countries and areas are still typed in the box, and are listed under the map.
-- **Servers you have played on** are round markers coloured by rating: green, amber or red. A number means several in one city, and a faded marker is outside your places. Press one for its servers, with the favourite, Add to pool and Block buttons.
-- **Datacentre regions** are small hollow dots; hover for the ping and its grade. Places learned from share files are small solid dots.
-- **Set home** marks roughly where you are, and during a match a dashed line runs from home to the server. Home is remembered only by your browser, not stored on the router.
+- **Your places** are green circles. Press **Draw a circle**, press the middle, drag outwards and let go (two taps on a touch screen). Press a circle to move, resize or remove it.
+- **Servers you have played on** are markers coloured by rating; a faded one is outside your places. Press one for its servers and the favourite, Add to pool and Block buttons.
+- **Datacentre regions** are small hollow dots; hover for the ping and its grade.
+- **Set home** marks roughly where you are. It is remembered only by your browser.
 
-The map pictures are tiles from OpenStreetMap, fetched by your browser while the map is on screen. The map library, Leaflet, is installed on the router with MatchWatch, so nothing else is loaded from outside.
+Map pictures are tiles from OpenStreetMap, fetched by your browser. The map library, Leaflet, is installed on the router with MatchWatch.
 
 ### The ping range
 
-A ping range lets in only game servers whose ping is between a lowest and a highest you set. The rest are turned away the same way as servers outside your places. It is on Servers, Where I play, under **Ping range**.
+A ping range lets in only game servers whose ping is between a lowest and a highest you set. It is on Servers, Where I play, under **Ping range**.
 
-Setting it:
+- Drag the two handles or type the figures. Each mark on the line is a measured datacentre, lit when the range lets it in. Put an end of the range in a gap between groups of marks, not on one.
+- **A highest alone** keeps you on near servers, **a lowest alone** keeps you off them, **both** make a band. With places as well, a server has to pass both.
+- **The ping has to be known before the game connects**, or the game would join and then be thrown out. MatchWatch uses the lowest ping of your own matches on that server's address block, and otherwise the nearest measured datacentre within 250 km. A server whose ping is not known is let in.
+- **A game's relays are never turned away.** Call of Duty keeps a few packets going to a relay beside its game server; turning that away leaves the game on "connecting to relay".
+- Single servers you added to the pool are always let in.
 
-- Drag the two handles on the line, or type a lowest ping, a highest ping, or both, in ms.
-- Each mark on the line is a datacentre MatchWatch has measured, at its ping, lit when the range lets it in.
-- Datacentres come in groups. Put an end of the range in a gap between groups, not on a mark, where a ping that moves by a millisecond would move the datacentre in or out.
-- A handle pulled to its end of the line means no limit on that side. The line runs to 200 ms; anything higher is typed.
-- As you type, the page says which measured datacentres the numbers would let in, before anything changes.
-- If no measured datacentre is inside the range, MatchWatch says so when you set it: games hosted in them would not find a match.
-
-How it behaves:
-
-- **A highest alone** ("40 or less") keeps you on near servers. **A lowest alone** ("60 or more") keeps you off them. **Both** make a band.
-- **With places as well**, a server has to pass both: inside one of your places and inside the range.
-- **The ping has to be known before the game connects.** Measuring it as the game joins would let the game join and then throw you out of the lobby. MatchWatch uses the lowest ping of your own matches on that server's address block, and otherwise the measured ping of the nearest datacentre in the regions table, within 250 km.
-- **It follows the measurements.** The regions table is measured again every few hours, and what is turned away is worked out again when a datacentre crosses an edge of your range.
-- **A server whose ping is not known is let in.** MatchWatch does not guess. A strict game's server is being held anyway, so it is pinged then and judged on that.
-- **Whole regions ahead of time.** For hosts whose address lists MatchWatch has (see [Whole regions, ahead of time](#whole-regions-ahead-of-time)), every range whose city has a measured datacentre outside your range is refused before the game tries it.
-- **A game's relays are never turned away.** Beside its game server, Call of Duty keeps a few packets going to a relay on Microsoft's network, usually the one nearest you. Turning it away leaves the game on "connecting to relay", so the ping range, your places and strict games all leave relays alone.
-- **Single servers in the pool** are always let in, whatever their ping. A favourite is not, unless you add it.
-
-It is strongest for games on hosts MatchWatch measures (Call of Duty on Vultr today). It only refuses servers by a ping MatchWatch has measured; it does not change your connection or what the game sees of it.
-
-From the command line: `matchwatch pingrange` (what is set, and each datacentre in or out), `matchwatch pingrange 60 110`, `matchwatch pingrange 0 40` (no lowest), `matchwatch pingrange off`.
+It only refuses servers by a ping MatchWatch has measured; it does not change your connection or what the game sees of it. From the command line: `matchwatch pingrange`, `pingrange 60 110`, `pingrange 0 40` (no lowest), `pingrange off`.
 
 ### Single servers in the pool
 
-Sometimes one server outside your places or your ping range is worth keeping: a favourite, or one you played well on last night. **Add to pool** lets that one server through, whatever region it is in. Everything else outside your places is still turned away.
+**Add to pool** lets one server through your places and your ping range, whatever region it is in. The button appears beside servers and on match reports while either is set.
 
-- The button appears while you are staying on places or have a ping range: beside every server in your favourites and the server list, and on each match report. A server already inside your places shows "In your places" instead.
-- Only the exact address is allowed. Its neighbours in the same datacentre are still refused. Games do move players between neighbouring addresses, so you may not be offered the same one often.
-- The servers you have added are listed under **What is let in** on the Servers page, each with a Remove button. A favourite also has **Take out of pool** on the Favourites tab, which leaves its star where it is.
-- An allowed server is never blocked automatically. Blocking it yourself takes it back out of the pool.
+- Only the exact address is allowed; its neighbours are still refused.
+- An allowed server is never blocked automatically. Blocking it yourself takes it back out.
 - The game still decides. Allowing a server means it will not be refused, not that you will be sent to it.
 
-From the command line: `matchwatch allow`, `matchwatch allow add <ip>`, `matchwatch allow remove <ip>`.
+From the command line: `matchwatch allow`, `allow add <ip>`, `allow remove <ip>`.
 
 ### When a server is turned away
 
-How soon staying on places acts on a game depends on how sure MatchWatch is that a server belongs to that game. The Servers page shows which applies to each game you have played, under "How each game is filtered".
+How soon staying acts depends on how sure MatchWatch is that a server belongs to a game. The Servers page shows which applies to each game, under "How each game is filtered".
 
 | The game is | A server outside your places is turned away | You need to |
 |---|---|---|
-| Known by port and by who hosts it (Call of Duty, Valorant, League of Legends, Overwatch 2, War Thunder, iRacing) | From the first one the game tries, once it has been looked up | Nothing |
+| Known by port and by who hosts it (Call of Duty, Valorant, League of Legends, Overwatch 2, War Thunder, iRacing) | From the first one the game tries, once looked up | Nothing |
 | Hosted by a company with a published address list (Call of Duty on Vultr) | Before the game even tries it | Nothing |
-| Known by port alone (Fortnite, Apex Legends, Rocket League and most others) | Only on a port or address block where you have already played a match | Play one match, or make the game strict |
+| Known by port alone (Fortnite, Apex Legends, Rocket League and most others) | Only on a port or address block where you have already played | Play one match, or make the game strict |
 | Any named game you made strict | Before it can connect, every time | Press Make strict |
 | Not named ("Game on port N") | Never | Name it first |
 
-- The middle row exists because other traffic uses the same ports. A port alone is not proof of a game, so MatchWatch waits for a match there before refusing anything, unless you make the game strict.
-- **Show all games** lists every game MatchWatch recognises, so you can check a new one, and make it strict, before your first match.
-- When a server outside your places is let through because its game is known by port alone, the Live page says so, with a button to make that game strict.
-- If you then play the match there, its report opens with "Played outside your places" and the reason it was not turned away.
+Other traffic uses the same ports, so a port alone is not proof of a game. A match played on a server outside your places opens its report with the reason it was not turned away.
 
 ### Strict games
 
-Normally a server MatchWatch has not seen before gets its first packets through while it is being looked up, and is turned away a moment later if it is outside your places. Where that is not good enough, make the game **strict**: on the Servers page, under Strict games, press **Make strict** beside it.
+Normally a new server gets its first packets through while it is being looked up. Make a game **strict** (Servers page, Strict games) and every new server on its ports is held until MatchWatch has placed it, usually well under a second.
 
-- Every new server on that game's ports is then held until MatchWatch has placed it, usually well under a second.
-- A server outside your places never gets a packet through. One inside them, or one that turns out not to be a game server at all, is let through and not asked about again.
-- It applies only to your gaming device, only to that game's server ports, and only while you are staying on places or have a ping range set.
-- **Voice chat is never held.** Ports that voice chat uses are cut out of what is held, and a game that lives mostly on voice chat ports, such as Roblox, cannot be made strict.
-- **It fails open.** If MatchWatch is stopped, restarting, or cannot look a server up, nothing is held.
-- A match in progress keeps its server when you change the pool.
-- A server you added to the pool yourself is always let through. If a game needs a matchmaking server that sits outside your places, add it with **Add to pool**.
+- It applies only to your gaming device, that game's server ports, and while you are staying on places or have a ping range.
+- **Voice chat is never held**, and a game that lives mostly on voice chat ports, such as Roblox, cannot be made strict.
+- **It fails open.** If MatchWatch is stopped or cannot look a server up, nothing is held.
 
-From the command line: `matchwatch strict` lists the games, `matchwatch strict on "Call of Duty"` and `strict off` switch one.
+From the command line: `matchwatch strict`, `strict on "Call of Duty"`, `strict off`.
 
 ### Whole regions, ahead of time
 
-Learning servers one at a time is slow: the game tries one, waits, gives up and tries the next, and a single city can have dozens of server ranges. So when you stay on places, MatchWatch also refuses every address range it knows to be outside them, before the game tries any.
+When you stay on places, MatchWatch also refuses every address range it knows to be outside them, before the game tries any. It knows from lists hosting companies publish themselves. One is built in: Vultr, which hosts every Call of Duty server seen so far. The router downloads the list when you start staying and weekly after; nothing about you is sent.
 
-It knows from lists that hosting companies publish themselves, saying which of their address ranges is in which city. One is built in: Vultr, which hosts every Call of Duty server seen so far (several hundred ranges). The router downloads the list when you start staying and once a week after; nothing about you is sent.
-
-- **It tells you which games this covers.** The Servers page names the hosts and the games they are known to carry ("Vultr (Call of Duty)"). Any other game is still turned away one server at a time.
-- **It warns you when a place has no servers.** Choose a country with none, and the Servers page says you will not find a match with only that place in the pool, and offers the nearest places that do have servers, each with an Add button. For a game on a host MatchWatch has no list for, it cannot know this in advance.
-- **Only your gaming device's game traffic is refused** (UDP from the device you chose to watch). Web sites on the same hosting company, and every other device in the house, are untouched. With no device chosen, this part is skipped.
-- **A range whose city cannot be placed is left alone**, and so is any range holding a match in progress.
-- **Other hosts.** If a game's host publishes such a list, add it to `/etc/matchwatch/geofeeds.local` as `name|address` and run `matchwatch ranges refresh`. Many hosts, including the large clouds, do not publish one in this form.
-- **Stop staying** removes all of it. "Turn whole regions away ahead of time" in Settings switches it off.
-
-A pool far from home can still mean a long queue: the game decides who to match you with.
+- The Servers page names the hosts and games this covers, and warns when a place you chose has no servers, offering the nearest that do.
+- Only your gaming device's game traffic is refused. Web sites on the same company and every other device are untouched.
+- A range whose city cannot be placed is left alone.
+- To add a host that publishes such a list: `name|address` in `/etc/matchwatch/geofeeds.local`, then `matchwatch ranges refresh`.
+- "Turn whole regions away ahead of time" in Settings switches it off.
 
 ### Regions and where each game plays
 
-Two tables on the Servers page help you choose places.
-
-**Every region.** The ping from your router to about thirty datacentre regions worldwide, each with a grade from A+ to F, your matches there and how they rated. It pings the public test server Vultr runs in each of its datacentres, and refreshes every six hours and on "Measure now". It is not a complete list of where a game has servers.
-
-**Where each game plays.** One row per game and place, with the host, how many server networks are known there, your matches and rating, and whether that place is in your pool.
-
-- Your own router only learns the places a game offers you, which are mostly near home. The rest of the world comes from other players, through the "Game servers by place" section of a [share file](#sharing-with-other-players). Those are marked "Shared with you".
-- When you stay on places, a game with nothing known inside them is called out, with where it is known to have servers.
-- Shared entries are information. Nothing is blocked or allowed because of them.
+- **Every region.** The ping from your router to about thirty datacentre regions, graded A+ to F, with your matches there. It pings Vultr's public test servers, every six hours and on "Measure now".
+- **Where each game plays.** One row per game and place. Your own router only learns the places a game offers you; the rest comes from other players' [share files](#sharing-with-other-players), marked "Shared with you". Nothing is blocked or allowed because of shared entries.
 
 ### Removing things
 
-Every row you might want gone has a **Remove** button, and each asks you to press twice.
-
-- **A match**: that match and its report.
-- **A server**: the server and every match on it.
-- **A datacentre**: the datacentre, its servers and their matches.
-- **A rating someone shared with you**, **a game you added** and **a block**: on their own rows.
-
-Ratings, the regions table, the hour chart and the recap are rebuilt without what you removed. A favourite cannot be removed by accident: it shows **Kept** where Remove would be, and removing its datacentre is refused. Take the star off first.
+Matches, servers, datacentres, shared ratings, games you added and blocks each have a **Remove** button that asks twice. Ratings and tables are rebuilt without what you removed. A favourite shows **Kept** where Remove would be: take the star off first.
 
 ## Games and voice chat
 
-MatchWatch has to know a stream is a game before it will name it, alert you about it or turn its servers away. It recognises voice chat too, so that it can leave it alone.
-
 ### How a game is recognised
 
-MatchWatch never looks inside packets, so it recognises a game from two things it can see: the **port** on the game's server, and, where a port is shared, **who hosts the server**. The list ships with MatchWatch as a plain text file. Nothing is downloaded: it only changes when you update, name a game yourself, or import names from a share file.
+MatchWatch never looks inside packets. It recognises a game from the **port** on its server and, where a port is shared, **who hosts the server**. The list ships as a plain text file and changes only when you update, name a game or import names.
 
 | | |
 |---|---|
@@ -510,94 +371,58 @@ MatchWatch never looks inside packets, so it recognises a game from two things i
 | By port | Fortnite, Apex Legends, Rocket League, Counter-Strike 2, Dota 2, Deadlock, Team Fortress 2, Destiny 2, Minecraft (Bedrock), Rust, ARK, DayZ, Palworld, Among Us, Genshin Impact, Street Fighter 6 |
 | By port, from unofficial figures | Battlefield, Rainbow Six Siege, Escape from Tarkov, World of Tanks, EA Sports FC, Smite, Paladins |
 
-This list cannot be complete:
-
-- Many publishers do not publish their server ports. PUBG, Marvel Rivals, Helldivers 2, The Finals and Dead by Daylight are examples.
-- Several games share a range. Counter-Strike 2, Dota 2 and Destiny 2 all use Steam's network, so they show under one "Steam games" label until you say which you are playing. See [Which game a match was](#which-game-a-match-was).
-- Games hosted player-to-player, such as GTA Online and most Nintendo Switch games, have no server port to recognise.
-- Final Fantasy XIV, World of Warcraft and Minecraft Java do not use UDP for play, so MatchWatch does not see them as matches.
+The list cannot be complete. Many publishers do not publish their ports, games on Steam's network share one label, games hosted player-to-player have no server port, and games that do not use UDP for play (Final Fantasy XIV, World of Warcraft, Minecraft Java) are not seen as matches.
 
 ### Which game a match was
 
-A port cannot always name the game, so you can say which game a match was. There are two cases, and both open the same box.
+A port cannot always name the game. Games on Steam's network all look alike, so they show as "A Steam game" until you say which, and now and then a port names the wrong game. The Live page and every match report have a small link (**which game?**, **Wrong game?** or **change**) that opens a box: type the name and choose how long it applies.
 
-**Games that share a network.** Every game on Steam's own network reaches the same Valve servers on the same ports, so Counter-Strike 2, Dota 2 and a newly released indie shooter look identical from the router. MatchWatch files them under one label, "Steam games".
+- **This match only**, the default for a wrongly named game.
+- **1 day** (the default for a shared network), **1 month** or **until I change it**, which rename every match filed under that label for that long.
 
-- The Live page asks **Which game is this?** while such a match has no name, and shows "A Steam game" under the server.
-- Every match report has a small **which game?** link beside "A Steam game". It reads **change** once you have named it.
-- Once named, the report reads, for example, "Wardogs, on Steam's network".
-- **Back to Steam games** removes a name.
-
-**A wrongly named game.** Ports are shared, so now and then MatchWatch will call a match by the wrong game. Beside the game's name, on the Live page and on every match report, is a small **Wrong game?** link.
-
-**The box.** Type the name and choose how long it should carry on. Names you have used before appear as buttons, so answering is one press.
-
-- **This match only.** Your other matches keep the name MatchWatch gives them. This is the default for a wrongly named game.
-- **1 day**, **1 month** or **until I change it** rename every match MatchWatch would file under that same name, for that long.
-- **1 day** is the default for a shared network. An evening's matches take the name and tomorrow asks again, which stops a different Steam game being filed under last week's name.
-
-This changes the name only. Staying on places, strict and the lobby check still go by the server's port. If a port is always another game for you, **Add a game** on the Tools page is the better tool: it gives the port its own name for good, and that does change how it is filtered.
-
-From the command line: `matchwatch matchgame <match start> <name>`.
+This changes the name only. Filtering still goes by the server's port; if a port is always another game for you, use **Add a game** on the Tools page. From the command line: `matchwatch matchgame <match start> <name>`.
 
 ### Games it does not recognise
 
-A game not on the list is still detected and rated, as "Game on port N", provided it looks like a game: at least two minutes of play and a steady stream of updates.
+A game not on the list is still rated, as "Game on port N", if it looks like one: at least two minutes of play and a steady stream of updates.
 
-- Calls, launchers and other programs use unknown ports too. A stream shorter than that, or with too many updates missing, is not recorded. It is listed under **Skipped, not recorded** on the Tools page, where you can name it if it was a game after all.
-- A stream on an unknown port that keeps starting and stopping (video and calls often do) is left alone for six hours after the second time, so it stops appearing on the Live page as a match.
-- Match mode does not switch to the playing speeds for an unknown port until the stream has run two minutes at a steady rate.
+- Shorter or patchier streams are not recorded. They are listed under **Skipped, not recorded** on the Tools page, where you can name one if it was a game. A stream that keeps starting and stopping is left alone for six hours.
+- The first time an unknown game is recorded, a banner offers a box to name it and a **Not a game** button.
+- **Add a game** on the Tools page takes a port or range, a name and, for a range over 2000 ports, a word from the name of the company hosting the servers.
 
-**Naming it.** The first time an unknown game is recorded, a banner appears on the Live and Matches pages with a box to name it, a **Not a game** button, and a cross to hide the notice. With phone alerts set up, your phone is told too.
-
-You do not have to wait for a match. **Add a game** on the Tools page takes a server port or a range, a name and, where the range is shared, a word from the name of the company hosting the servers. A range over 2000 ports wide must have one.
-
-Name it once and every match on that port, past and future, carries the name. Until a game has a name, staying on places, the lobby check and automatic blocking leave it alone: MatchWatch only turns servers away when it is sure they are a game.
+Until a game has a name, staying on places, the lobby check and automatic blocking leave it alone.
 
 ### Voice chat is left alone
 
-Voice chat is not a match. MatchWatch does not record it, does not show "In a match" for it, sends no alerts about it and can never block it. Recognised as voice: Discord, TeamSpeak, Mumble, Valorant's voice servers, and the ports consoles and games use for party chat.
-
-- Discord's voice servers use the high ports from 50000 upwards, and so does Roblox. MatchWatch tells them apart by host. This check needs "Look up where servers are" switched on.
-- A block you add by hand applies to whatever address you give it.
-- If you use the QoSmate fix, voice chat from your gaming device is prioritised along with the game, because those rules cover all of that device's UDP.
+Voice chat is not a match. MatchWatch does not record it, alert about it or block it. Recognised as voice: Discord, TeamSpeak, Mumble, Valorant's voice servers, and the ports consoles and games use for party chat. Discord and Roblox share the same high ports and are told apart by host, which needs "Look up where servers are" switched on.
 
 ## Sharing with other players
 
-One person cannot research every game's ports or try every datacentre. A share file lets MatchWatch users pass what they have learned to each other. It is a small text file you can read in any editor, post on a forum or send to a friend. Make one, or take one in, on the **Tools → Share** tab.
+A share file lets MatchWatch users pass what they have learned to each other. It is a small text file you can read in any editor. Make one, or take one in, on the **Tools → Share** tab.
 
 ### What a share file can hold
 
-| Section | What it is | What importing it does |
-|---|---|---|
-| Game names | The games you have named, with their server ports and, where needed, who hosts them | Adds them to your own names. A name you gave yourself always wins |
-| Places you stay on | Your pool of cities, countries and areas | Adds them to your pool and turns staying on |
-| Game servers by place | Where each game has put you or tried to: the game, the server network, its city, country and host, your matches there and their rating | Adds them to **Where each game plays**, marked "Shared with you" |
-| Favourite servers | Servers you have starred, or any you pick by game, rating, place or number of matches | Adds them to the other person's favourites under the same games. They can also choose **Stay near those servers**, which adds the servers' cities to their pool |
-| Network ratings | How each server network has rated for you: number of matches and average rating | Shows them in a table, and the lobby check mentions one when you land on that network for the first time |
-| Ping hosts | Extra test hosts for the regions table, for hosting companies other than Vultr | Adds them to the regions table and measures them |
-| Thresholds | Your rating and capture thresholds | Sets yours to match, and restarts MatchWatch |
+| Section | What importing it does |
+|---|---|
+| Game names | Adds them to your own names. A name you gave yourself always wins |
+| Places you stay on | Adds them to your pool and turns staying on |
+| Game servers by place | Adds them to **Where each game plays**, marked "Shared with you" |
+| Favourite servers | Adds them to your favourites. You can also choose **Stay near those servers** |
+| Network ratings | Shows them in a table, and the lobby check mentions one the first time you land on that network |
+| Ping hosts | Adds test hosts to the regions table and measures them |
+| Thresholds | Sets your rating and capture thresholds to match, and restarts MatchWatch |
 
 ### Choosing exactly what to share
 
-"Choose what to share" lists everything you could share, and every item has its own tick: each game name, each place, each server network, each ping host and each threshold. Nothing goes in unless it is ticked.
-
-- **All** and **None** on every section.
-- **Favourite servers** starts with your starred servers ticked. Switch it to every server you have played on, then narrow the list by game, rating, country or city, and number of matches.
-- The dropdowns choose what is listed, and never untick anything. A line under the list says how many ticked items are not currently shown.
-- Networks with only one match start unticked, because one match says little. Thresholds start unticked.
-- **A note** can be added for whoever gets the file. It is the only free text in the file.
-
-The box underneath is the file itself and changes as you tick. Save it or copy it from there. When you take a file in, you choose by section; to take only some lines, delete the others from the text before checking it.
+"Choose what to share" lists everything you could share, each item with its own tick. Favourite servers can be narrowed by game, rating, place and number of matches. The box underneath is the file itself and changes as you tick. When you take a file in, you choose by section.
 
 ### What keeps it safe
 
-- **Nothing is uploaded.** You make the file and you decide who gets it.
-- **Nothing about your home goes in.** No device name, no LAN or ISP address, no match times. The whole file is shown to you before you save it.
-- **Every imported line is checked.** Lines that are malformed, or that could do harm, are left out and listed. A game label covering more than 2000 ports must name the company hosting its servers; otherwise it would take unrelated traffic for that game.
-- **Other people's ratings never block anything.** They are shown, with a Block button beside each, and that is all.
-- **Checking a file changes nothing**, and **Undo the last import** puts things back as they were.
-- A share file cannot turn on automatic blocking, change your phone alerts address, or choose the device to watch.
+- **Nothing is uploaded**, and nothing about your home goes in: no device name, no LAN or ISP address, no match times. The whole file is shown before you save it.
+- **Every imported line is checked.** Lines that are malformed or could do harm are left out and listed.
+- **Other people's ratings never block anything.**
+- **Checking a file changes nothing**, and **Undo the last import** puts things back.
+- A share file cannot turn on automatic blocking, change your alerts address or choose the device to watch.
 
 ### From the command line
 
@@ -611,100 +436,59 @@ matchwatch share undo
 matchwatch share forget                       # remove ratings other people shared with you
 ```
 
-The [`packs/`](packs/) folder is for game packs anyone can use: share files with only a `[games]` section. [`packs/README.md`](packs/README.md) has the format and what a pack needs before it is accepted.
+The [`packs/`](packs/) folder is for game packs anyone can use; [`packs/README.md`](packs/README.md) has the format.
 
 ## Tools
 
-The Tools page holds the checks and the housekeeping, on five tabs: Checks, Connection, Games, Share, and Data and settings. Each tool says what it does beside its button.
+The Tools page has five tabs: Checks, Connection, Games, Share, and Data and settings. Each tool says what it does beside its button.
 
 ### Checks
 
-- **MatchWatch service.** Says whether MatchWatch is running and since when, with **Stop**, **Start** and **Restart**. The same status is at the top right of every page.
-  - While it is stopped, no match is watched or recorded and no new server is judged.
-  - Servers already blocked stay blocked, strict games are released, and match mode hands your line back at QoSmate's own speeds.
-  - Stopping lasts until you press Start or the router restarts.
-  - Do either between matches: a match in progress is not recorded, and the buttons ask first when one is.
+- **MatchWatch service.** Whether it is running and since when, with **Stop**, **Start** and **Restart**. While stopped, no match is recorded and no new server is judged; existing blocks stay, strict games are released, and match mode hands your line back at QoSmate's own speeds. If it stops by itself, the row says why.
+- **Check MatchWatch is working.** Confirms it can see your device's traffic and is looking at [the right ports](#the-three-ports). Five seconds, changes nothing.
+- **Report a problem.** Gathers the self-check, versions, settings, files and the last log lines into one text to pass on, with your internet address, alert address and device names left out.
 - **NAT type.** See [The NAT check](#the-nat-check).
-- **Check MatchWatch is working.** Confirms the programs it needs are present, that it can see your device's traffic, and that it is looking at [the right ports](#the-three-ports). Takes five seconds and changes nothing.
-- **Test your line.** Twenty seconds of pings from the router to your provider's first hop and two public servers, with no game needed, so you can tell before you queue whether your connection is steady. Trouble seen on every target is blamed on your line; trouble with one target is not.
-- **Is my game prioritised?** Needs [QoSmate](#qosmate) and a match in progress. Changes nothing.
-- **Phone alerts.** Sends one test message.
-- **Route to a server.** Traces the path to any server in your history, to compare with the route in a match report.
+- **Test your line.** Twenty seconds of pings to your provider's first hop and two public servers, with no game needed.
+- **Is my game prioritised?** Needs [QoSmate](#qosmate) and a match in progress.
+- **Phone alerts** sends one test message, and **Route to a server** traces the path to any server in your history.
 
-**Grades.** Tests get a letter from A+ to F.
+Tests get a letter from A+ to F:
 
 | Test | Graded on | A+ | A | B | C | D | E |
 |---|---|---|---|---|---|---|---|
 | Line test | Loss, jitter and slow replies shared by every target, as a score | 97+ | 90 | 80 | 70 | 55 | 40 |
-| Route trace, region pings | Distance alone: the ping in ms | to 15 | 30 | 50 | 80 | 120 | 180 |
-
-A trace is one sample, so it shows how far a server is, not how steady the route is. A match report does that. If the server does not answer the trace, it gets no grade.
+| Route trace, region pings | The ping in ms | to 15 | 30 | 50 | 80 | 120 | 180 |
 
 ### The NAT check
 
-The NAT check says what your router's side makes likely for the NAT type games report (Open, Moderate or Strict), and why. It checks three things:
+It says what your router's side makes likely for the NAT type games report (Open, Moderate or Strict), and why: whether your internet address is your own or shared by your ISP, whether another router sits in front of this one, and whether anything opens ports for your gaming device. It asks one outside server which address it sees you as, only when you press the button, and shows no address.
 
-- whether your internet address is really your own or one your ISP shares between customers,
-- whether another router sits in front of this one,
-- whether anything opens ports for your gaming device (UPnP mappings or port forwards).
+**UPnP.** If nothing opens ports for your games, the check offers **Install and set up UPnP for my gaming device**.
 
-It asks one outside server which address it sees you as, only when you press the button, and shows no address. The check itself changes nothing: where there is something you can do, it says what. A shared address at your ISP cannot be fixed from your side.
+- It installs the build that suits your firewall (`miniupnpd-nftables` on current OpenWrt) and `luci-app-upnp`, replacing the wrong build if that is there.
+- It switches the service on and narrows its access list so only your gaming device may open ports. The stock list lets every device.
+- **Put UPnP back as it was** restores the old settings and removes what MatchWatch installed.
 
-**UPnP.** If nothing opens ports for your games, the check offers one button, **Install and set up UPnP for my gaming device**.
+**A port forward, for games that never ask.** Call of Duty on PC stayed on Moderate with UPnP running. Once one of your games has sent from the same port in three recent matches, the check offers **Forward port N to my gaming device**: one UDP port, to that device only, as an ordinary port forward. **Remove the forward MatchWatch added** takes out only that.
 
-- If UPnP is missing, it installs the build that suits your router's firewall (`miniupnpd-nftables` on current OpenWrt) and `luci-app-upnp`, from OpenWrt's package servers, after asking.
-- If the wrong build is there, it replaces it. `luci-app-upnp` installed alone can bring `miniupnpd-iptables`, which cannot start on the nftables firewall.
-- If UPnP is already installed, it skips straight to setting up.
-- Setting up switches the service on and narrows its access list so only your gaming device may open ports and every other device is refused. The stock list lets every device open ports.
-- **Put UPnP back as it was** restores the settings from before and removes whatever MatchWatch installed.
-- By hand: install `miniupnpd-nftables` first and `luci-app-upnp` second, under System, Software.
-
-**A port forward, for games that never ask.** Some games do not ask UPnP for a port even when it is running; Call of Duty on PC stayed on Moderate that way.
-
-- Once one of your games has sent from the same port on your gaming device in three recent matches, the check offers **Forward port N to my gaming device**.
-- It is one UDP port, to that device only, added as an ordinary port forward you can see under Network, Firewall, Port Forwards.
-- It stays open all the time, not only while the game runs.
-- The port comes from your own matches, never from a list.
-- **Remove the forward MatchWatch added** takes out only that.
-
-From the command line: `matchwatch nat`, `matchwatch nat fix`, `matchwatch nat unfix`, `matchwatch nat forward [port]`, `matchwatch nat unforward`.
+From the command line: `matchwatch nat`, `nat fix`, `nat unfix`, `nat forward [port]`, `nat unforward`.
 
 ### The three ports
 
-MatchWatch relies on three network ports on the router, and a wrong one never shows as an error: a feature just quietly does nothing. **Check MatchWatch is working** tests each and says where to correct it, a warning appears at the top of the Tools page if one is wrong, and all three are listed under Settings in use.
+MatchWatch relies on three network ports on the router, and a wrong one never shows as an error: a feature just quietly does nothing. **Check MatchWatch is working** tests each, and a warning appears at the top of the Tools page if one is wrong.
 
 | Port | Used for | If it is wrong, correct it in |
 |---|---|---|
 | The one your gaming device is on | Seeing matches at all | MatchWatch: Settings, Advanced, LAN interface |
 | The internet one | Other traffic on your line, the priority check | MatchWatch: Settings, Advanced, WAN interface |
-| The one QoSmate shapes | Match mode, "QoSmate in this match", the priority check | QoSmate's own settings. MatchWatch reads it from there and has no setting of its own for it, so the two can never disagree |
-
-The first two are detected and rarely need setting: a gaming device on its own network or VLAN, or more than one internet connection, are the cases that do.
+| The one QoSmate shapes | Match mode, "QoSmate in this match", the priority check | QoSmate's own settings. MatchWatch reads it from there |
 
 ### Connection, Games, Share, Data and settings
 
-**Connection**
-
-- **Ping buffer**, **Would a ping buffer help me?**: see [The ping buffer](#the-ping-buffer).
-- **Is my line losing packets?** Reads your last forty matches for signs of lost packets: pings lost to your provider, to your device and to the servers that answer them, and anything QoSmate's game queue dropped. The router cannot see what the server received, so these are signs, not a count.
-- **Match mode**, **Are my QoSmate speeds right?**, **Prioritise my game traffic**: see [QoSmate](#qosmate).
-
-**Games**
-
-- **Name a game** and **Add a game**: see [Games it does not recognise](#games-it-does-not-recognise).
-- **Your games.** Everything you have added, named or imported, each with a Remove button.
-- **Skipped, not recorded.** Streams from the last six hours that were left out, as voice chat or because they did not look like a game.
-
-**Share**: see [Sharing with other players](#sharing-with-other-players).
-
-**Data and settings**
-
-- **Update MatchWatch**: see [Update](#update).
-- **Match history.** Downloads your matches as a spreadsheet (CSV) file.
-- **Clear all history.** Deletes every match and the ratings built from them. It cannot be undone. Blocks, favourites, the places you stay on and your settings are kept.
-- **Recent activity.** The last things MatchWatch wrote to the router's log.
-- **Live overlay**: see [The overlay](#the-overlay).
-- **Settings in use**, at a glance.
+- **Connection.** **Ping buffer** and **Would a ping buffer help me?**: see [The ping buffer](#the-ping-buffer). **Is my line losing packets?** reads your last forty matches for signs of lost packets (pings lost to your provider, your device and the servers that answer them, and drops in QoSmate's game queue); the router cannot see what the server received, so these are signs, not a count. **Match mode**, **Are my QoSmate speeds right?** and **Prioritise my game traffic**: see [QoSmate](#qosmate).
+- **Games.** **Name a game** and **Add a game** (see [Games it does not recognise](#games-it-does-not-recognise)), **Your games** with a Remove button each, and **Skipped, not recorded**.
+- **Share.** See [Sharing with other players](#sharing-with-other-players).
+- **Data and settings.** **Update MatchWatch** (see [Update](#update)), **Match history** as a spreadsheet file, **Clear all history** (blocks, favourites, places and settings are kept), **Recent activity**, **Live overlay** (see [The overlay](#the-overlay)) and the settings in use.
 
 ## The ping buffer
 
@@ -720,7 +504,7 @@ The buffer follows the server's beat. An update that arrives on time waits the w
 
 The price is that everything you see is older by the buffer, in every fight. It also cannot help with:
 
-- **updates that never arrive**: it re-times what comes late and cannot bring back what was lost;
+- **updates that never arrive**: it cannot bring back what was lost;
 - **your own shots**: nothing your device sends is held, because those packets have no beat to restore;
 - **the other player's connection**, which is most of dying behind cover;
 - **stalls longer than the buffer**: hiding an 80 ms stall takes about 65 ms of buffer;
@@ -736,14 +520,14 @@ The count assumes the game hides one update interval itself. Games do not publis
 
 Under **Tools, Connection, Ping buffer**, type a figure from 5 to 100 ms and press **Hold this much**, or press **Size it for me** for the smallest buffer that would have hidden nine in ten late updates in your recent matches (never over 40 ms, and nothing on a steady line). From the command line: `matchwatch buffer hold 25`, `buffer auto`, `buffer off`, `buffer status`.
 
-It starts a minute into a match, once the stream has settled and any pre-game lobby is over, and stops when the match ends. Set during a match, it starts within a minute.
+It starts a minute into a match, once any pre-game lobby is over, and stops when the match ends. Set during a match, it starts within a minute.
 
 ### What is held, and what the game sees
 
 - **Held:** from a minute into a match until it ends, everything arriving from the port the match is on for your gaming device, whichever address sends it. A game can have more than one route to a match (Call of Duty does), so all are held alike: the match's own updates get the buffer, anything else on that port a plain hold of the same size.
 - **Not held:** other ports, everything between matches, everything your device sends, and every other device.
 - **What the game sees:** every route to that match looks slower by the buffer, and your game shows its ping higher by that much. A ping the game sends to a server on the same port while the match is on reads slower too, so matchmaking can see some servers as further away than they are during a match. If you would rather a game never saw anything but your true line, leave the buffer off.
-- **What MatchWatch shows:** its own ping is measured past the buffer and stays your real one. Everything else on the Live page, and the match's scores, are the stream as your device received it. A line on the Live page and a section in the report say what the buffer did: its size, what your game's ping reads, how many updates came later than it could hide, and the latest.
+- **What MatchWatch shows:** its own ping is measured past the buffer and stays your real one. Everything else on the Live page, and the match's scores, are the stream as your device received it. A line on the Live page and a section in the report say what the buffer did.
 
 ### When it stands back
 
@@ -753,63 +537,43 @@ It starts a minute into a match, once the stream has settled and any pre-game lo
 
 ### What it needs
 
-Four OpenWrt packages: `kmod-sched-bpf`, `kmod-sched`, `kmod-ifb` and `bpftool-minimal`. A router running QoSmate has two already. When any is missing the Ping buffer row says so and offers **Install what it needs** (`matchwatch buffer install`); **Remove what was installed** (`matchwatch buffer uninstall`) switches the buffer off and takes away exactly those. Nothing is installed until you press, and the rehearsal works without any of it. The buffer's own program comes with MatchWatch. Routers with a big-endian processor are not supported yet.
+Four OpenWrt packages: `kmod-sched-bpf`, `kmod-sched`, `kmod-ifb` and `bpftool-minimal`. A router running QoSmate has two already. When any is missing the Ping buffer row says so and offers **Install what it needs** (`matchwatch buffer install`); **Remove what was installed** (`matchwatch buffer uninstall`) switches the buffer off and takes away exactly those. Nothing is installed until you press, and the rehearsal works without any of it. Routers with a big-endian processor are not supported yet.
 
 ## QoSmate
 
-[QoSmate](https://github.com/hudra0/qosmate), by hudra0, is a separate package that prioritises traffic on OpenWrt. It is what gives a game low latency on a busy line; MatchWatch measures, and QoSmate does the work. MatchWatch runs without it; with it, four things are added. Without it, the QoSmate tools say so and link to it.
+[QoSmate](https://github.com/hudra0/qosmate), by hudra0, is a separate package that prioritises traffic on OpenWrt. It is what gives a game low latency on a busy line; MatchWatch measures, and QoSmate does the work. MatchWatch runs without it; with it, four things are added.
 
 ### Match mode
 
-QoSmate keeps your game ahead of everything else by holding your line a little under its full speed, so that any queue forms in your router, where QoSmate can put the game first. The cost is that the limit is there all day, slowing downloads when nobody is playing. On a slow line or a small router that cost is large.
-
-With match mode on, MatchWatch switches the limit between two sets of speeds, and you choose both. It is off by default. Turn it on under Tools, Connection, or in Settings.
+QoSmate keeps your game ahead by holding your line a little under its full speed, so that any queue forms in your router. The cost is that the limit is there all day. With match mode on, MatchWatch switches the limit between two sets of speeds, and you choose both. It is off by default: turn it on under **Tools, Connection**, or in Settings.
 
 | | What it is | If you leave it alone |
 |---|---|---|
-| **While you play** | The download and upload speeds QoSmate holds your line to during a match | QoSmate's own rates, and it follows them if you change them in QoSmate |
-| **Between matches** | The speeds for the rest of the time: no limit, or speeds you choose | No limit |
-| **Switch after a match** | How long after a match ends before the between-matches speeds take over: at once, 30 seconds, 2 minutes or 5 minutes | 5 minutes, long enough to cover the gap between matches |
+| **While you play** | The speeds QoSmate holds your line to during a match | QoSmate's own rates |
+| **Between matches** | The speeds for the rest of the time | No limit |
+| **Switch after a match** | How long after a match before the between-matches speeds take over | 5 minutes |
 
-Each speed has a box to type megabits into and a slider beside it, kept in step. The slider works in percent of QoSmate's own rate, so "80%" means 80% of what you set in QoSmate. Nothing changes until you press **Save these speeds**, and **Back to QoSmate's own** undoes your choices.
+Each speed has a box for megabits and a slider in percent of QoSmate's own rate. Nothing changes until you press **Save these speeds**.
 
-How it behaves:
+- The playing speeds come on when the game first reaches for a game server.
+- MatchWatch never writes QoSmate's settings and does not restart it. It gives the queue a rate, or "unlimited", and nothing else.
+- It fails towards QoSmate's own limits: stopping MatchWatch, switching match mode off, or restarting QoSmate all put QoSmate's rates back. MatchWatch checks once a minute and sets your speeds again if something else moved them.
+- It needs QoSmate switched on, in one of its cake modes, with QoSmate's autorate off. If it cannot work, the Tools page says why.
+- A playing speed above what your line really delivers gives QoSmate nothing to work with, and one far below it only slows everyone else.
 
-- The speeds for playing come on when the game first reaches for a game server, or at the latest when the match itself starts.
-- The Live page says which speeds are in force, and Recent activity records each switch.
-- MatchWatch never writes QoSmate's settings and does not restart it. It gives the queue a rate, or "unlimited", and nothing else, so no option you chose in QoSmate is lost and there is no blip.
-- It fails towards QoSmate's own limits. Stopping or restarting MatchWatch, switching match mode off, or anything that restarts QoSmate all put QoSmate's own rates back.
-- If QoSmate is restarted while match mode is on, MatchWatch checks the queues once a minute and sets your speeds again, so the most you see is a minute at QoSmate's rates.
-
-What it needs:
-
-- QoSmate switched on, in one of its cake modes, with QoSmate's autorate off. Autorate keeps changing the same speed limit, so only one of the two can be used. If match mode cannot work, the Tools page says which of these is the reason.
-- MatchWatch looks at the port QoSmate itself is set to shape, which on a line with a login (PPPoE) is often not the one OpenWrt calls the internet.
-- "QoSmate's own" speeds are read from QoSmate's queues, so they are what is really in force, including QoSmate's defaults and its cap on download speed. If QoSmate is set to leave downloads unshaped, only an upload speed is offered.
-
-Two things worth knowing when you choose:
-
-- A speed for playing above what your line really delivers gives QoSmate nothing to work with: the queue moves to your provider and the game is no longer in front.
-- Lowering the speed for playing below a little under your line's real speed does not lower your latency further; it only slows everyone else.
-
-Over SSH: `matchwatch matchmode on`, `matchmode off`, and `matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]`, in kbit, where 0 means the default for that slot.
+Over SSH: `matchwatch matchmode on`, `matchmode off`, and `matchwatch matchmode speeds <playing down> <playing up> <between down> <between up> [seconds]`, in kbit, where 0 means the default.
 
 ### Did QoSmate do its job in this match?
 
-In one of QoSmate's cake modes, each match report has a "QoSmate in this match" section. MatchWatch reads QoSmate's queue counters when the match starts and ends, and the longest wait every five seconds in between. It says in a sentence whether the game's own queue dropped or delayed anything, and whether other traffic had to be held back while the game went ahead. It only reads. In HFSC mode the section is left out.
+In QoSmate's cake modes, each match report has a "QoSmate in this match" section, read from QoSmate's queue counters: whether the game's own queue dropped or delayed anything, and whether other traffic was held back while the game went ahead. It only reads.
 
 ### Is my game prioritised?
 
-Once per match, and on demand, MatchWatch checks that the game's traffic is in the top priority queue, by comparing that queue's packet count with what the game is sending.
+Once per match, and on demand, MatchWatch checks that the game's traffic is in the top priority queue.
 
 ### Prioritise my game traffic
 
-If the game is not in the top queue, this button (or `matchwatch qos fix`) adds two QoSmate rules, `matchwatch_out` and `matchwatch_in`. It only happens when you ask for it.
-
-- The rules mark all UDP to and from your gaming device, except web ports 80 and 443, as top priority.
-- QoSmate is then restarted, which causes a brief blip, so do it between matches.
-- "Remove the rules" takes them out again.
-- If you already have rules named `Game_Outbound` and `Game_Inbound`, made from commands an older version printed, the fix adopts and renames them, and removing then deletes them.
+If it is not, this button (or `matchwatch qos fix`) adds two QoSmate rules, `matchwatch_out` and `matchwatch_in`, which mark all UDP to and from your gaming device, except web ports 80 and 443, as top priority. QoSmate is then restarted, so do it between matches. "Remove the rules" takes them out again. Rules named `Game_Outbound` and `Game_Inbound` from an older version are adopted and renamed.
 
 ## Commands
 
@@ -829,45 +593,44 @@ Everything is also available over SSH:
 | `matchwatch fav` / `fav add <ip>` / `fav remove <ip>` | Your favourite servers |
 | `matchwatch stay <places>` / `stay off` | Keep to a pool of places, separated by commas |
 | `matchwatch stay add <places>` / `stay remove <n>` | Change the pool |
-| `matchwatch pingrange` / `pingrange <lowest> <highest>` / `pingrange off` | Only let in game servers whose ping is in that range, in ms (0 for no limit on that side) |
-| `matchwatch allow` / `allow add <ip>` / `allow remove <ip>` | Single servers let through the places you stay on and the ping range |
-| `matchwatch strict` / `strict on <game>` / `strict off <game>` | Hold every new server of a game until it has been placed |
 | `matchwatch stay circle <lat> <lon> <km>` | Add a circle to the pool, as the map does |
+| `matchwatch pingrange` / `pingrange <lowest> <highest>` / `pingrange off` | Only let in game servers whose ping is in that range, in ms (0 for no limit on that side) |
+| `matchwatch allow` / `allow add <ip>` / `allow remove <ip>` | Single servers let through your places and ping range |
+| `matchwatch strict` / `strict on <game>` / `strict off <game>` | Hold every new server of a game until it has been placed |
 | `matchwatch places` | The areas you can stay on |
 | `matchwatch ranges [refresh]` | The hosting companies' address lists used to turn whole regions away |
 | `matchwatch regions [measure]` | Ping every region, nearest first |
 | `matchwatch game name <port or lo-hi> <name> [hosts] [voice]` / `game remove` | Name a game by port, or take a name away |
-| `matchwatch matchgame <start> [name]` | Say which game a match was, when its label covers several |
+| `matchwatch matchgame <start> [name]` | Say which game a match was |
 | `matchwatch mark` | Flag this moment, same as the "I felt that" button |
 | `matchwatch qos` | During a match: is the game in QoSmate's top priority queue? |
 | `matchwatch qos fix` / `qos unfix` | Add or remove QoSmate rules that prioritise your gaming device |
+| `matchwatch qos advice` | What your last forty matches say about QoSmate's speed limits |
 | `matchwatch matchmode` / `matchmode on` / `matchmode off` | With QoSmate: one pair of speeds while you play, another between matches |
 | `matchwatch matchmode speeds <down> <up> <down> <up> [seconds]` | Choose those speeds, in kbit, and how soon after a match they switch |
+| `matchwatch buffer` | The ping buffer rehearsal over your last forty matches. Holds nothing back |
+| `matchwatch buffer hold <ms>` / `buffer auto` / `buffer off` / `buffer status` | The ping buffer: hold by 5 to 100 ms, size it from your matches, switch it off, or see what it is doing |
+| `matchwatch buffer install` / `buffer uninstall` | Install the OpenWrt packages the buffer needs, or remove the ones MatchWatch installed |
+| `matchwatch loss` | Signs of lost packets in your last forty matches |
 | `matchwatch device [<ip>\|all]` | List the devices on your network and choose which to watch |
 | `matchwatch doctor` | Checks that capture works. Changes nothing |
-| `matchwatch nat` | What your router's side makes likely for your NAT type, and why. Changes nothing |
-| `matchwatch nat fix` / `nat unfix` | Installs UPnP if it is missing and switches it on for your gaming device only, or puts things back as they were |
-| `matchwatch nat forward [port]` / `nat unforward` | Forwards the game's own UDP port to your gaming device, or removes the forward MatchWatch added |
-| `matchwatch qos advice` | What your last forty matches say about QoSmate's speed limits |
-| `matchwatch loss` | Signs of lost packets in your last forty matches: pings lost to your provider, your device and the servers that answer them, and drops in QoSmate's game queue. The same under Tools, Connection, Is my line losing packets? |
-| `matchwatch buffer` | The ping buffer rehearsal: how many late updates in your last forty matches a buffer of each size would have hidden. Holds nothing back |
-| `matchwatch buffer hold <ms>` / `buffer auto` / `buffer off` / `buffer status` | The ping buffer: hold the match's updates by 5 to 100 ms, have it sized from your matches, switch it off, or see what it is doing |
-| `matchwatch buffer install` / `buffer uninstall` | Install the OpenWrt packages the ping buffer needs, or switch it off and remove the ones MatchWatch installed |
-| `matchwatch report` | Prints a report to pass on when something is wrong: the self-check, tool versions, settings, files and the last log lines, with your internet address, phone alert address and device names left out. The same report is under Tools, Checks, Report a problem |
-| `matchwatch service` / `service stop` / `service start` / `service restart` | Says whether MatchWatch is running, or stops, starts or restarts it. If it stops by itself, the Tools page and the router's log say why |
-| `matchwatch update` / `update now` | Says whether GitHub has a newer version; with `now`, downloads and installs it |
-| `matchwatch forget match <start>` / `server <ip>` / `dc <n>` | Removes one match, server or datacentre. Favourites are kept |
-| `matchwatch clear-history` | Forgets every recorded match. Blocks and settings are kept |
+| `matchwatch report` | One text to pass on when something is wrong, with your addresses and device names left out |
+| `matchwatch nat` | What your router's side makes likely for your NAT type, and why |
+| `matchwatch nat fix` / `nat unfix` | Install and set up UPnP for your gaming device only, or put things back |
+| `matchwatch nat forward [port]` / `nat unforward` | Forward the game's own UDP port to your gaming device, or remove that forward |
+| `matchwatch service` / `service stop` / `service start` / `service restart` | Whether MatchWatch is running, or stop, start or restart it |
+| `matchwatch update` / `update now` | Whether GitHub has a newer version; with `now`, download and install it |
+| `matchwatch forget match <start>` / `server <ip>` / `dc <n>` | Remove one match, server or datacentre. Favourites are kept |
+| `matchwatch clear-history` | Forget every recorded match. Blocks and settings are kept |
 | `matchwatch share export` / `check` / `import` / `undo` / `forget` | Make, inspect or take in a share file |
 
 Settings live in `/etc/config/matchwatch`. To change one over SSH: `uci set matchwatch.main.<option>=<value>`, `uci commit matchwatch`, then `/etc/init.d/matchwatch restart`.
 
 ## Privacy and security
 
-MatchWatch keeps what it learns on the router. This section says who can use it, and the few things that leave.
+MatchWatch keeps what it learns on the router.
 
-- The dashboard and every button sit behind the LuCI login. Each action is checked against the logged-in account's permissions, with looking and changing granted separately.
-- The optional dashboard without login is view only and off by default.
+- The dashboard and every button sit behind the LuCI login, with looking and changing granted separately. The optional dashboard without login is view only and off by default.
 - Keep LuCI on a network you trust and never expose it through a public port forward.
 
 What leaves your router, and when:
@@ -878,25 +641,26 @@ What leaves your router, and when:
 | A city name | Open-Meteo, to place it on the map | When you stay on a city not in the regions table, and for cities in a hosting company's list |
 | A request for a hosting company's address list | That company (Vultr) | When you start staying, then weekly |
 | A request for one small version file, then the installer | This repository on GitHub | When you press Check for an update or Update now. Once a day too, if you switched on the update notice |
-| Requests for map pictures, from your browser and not the router | OpenStreetMap's tile servers | While the map on the Servers page is on screen. They show which part of the world you are looking at |
+| A request for OpenWrt packages | OpenWrt's package servers | Only when you press a button that installs something (UPnP, what the ping buffer needs) |
+| Requests for map pictures, from your browser | OpenStreetMap's tile servers | While the map is on screen |
 | Your alerts | The ntfy address you set | Only if you set up phone alerts |
 
 Nothing about you or your matches is in any of those except the alerts you asked for. Share files are only made when you ask, are shown to you in full, and are never uploaded.
 
 Updating downloads the installer and runs it as root, exactly as installing by hand does. The project has not had a security audit.
 
-**Storage.** Everything MatchWatch keeps is small: the match history is trimmed to its newest 5,000 matches (under 2 MB), and the lists of where games play are capped at a few thousand lines.
+**Storage.** The match history is trimmed to its newest 5,000 matches (under 2 MB), and the lists of where games play are capped at a few thousand lines.
 
 ## Limits
 
 - Any steady two-way UDP stream that is not recognised as voice chat can be recorded as a match. "Only look at this traffic" under Advanced narrows capture, for example `port 3074 or portrange 30000-45000` for Call of Duty.
 - IPv4 only.
-- When neither the server nor any hop near it answers probes, uneven delivery can't be split between server and route. The report says so.
+- When neither the server nor any hop near it answers probes, uneven delivery cannot be split between server and route. The report says so.
+- A server that sends at changing intervals is judged against a single beat and can score worse than it plays.
+- With the ping buffer on, a match is scored as your device received it, after the buffer.
 - Scores were first calibrated from simulated traffic. Expect the thresholds to need tuning against real matches.
 - Up-front refusal of whole regions covers only hosts with a published address list: today that is Vultr.
-- Tested on one router and mostly one game. [`CLAUDE.md`](CLAUDE.md) keeps the current list.
-  - Seen working there: capture and scoring, phone alerts, the lobby check, staying on places against real matchmaking, the QoSmate match record, and updating from the dashboard.
-  - Not yet proven: whether refusing whole regions ahead of time shortens matchmaking, the filter for unnamed ports on a real stream, and the QoSmate fix buttons.
+- Tested on one router and mostly one game. [`CLAUDE.md`](CLAUDE.md) keeps the current list of what has and has not been proven there.
 
 ## For developers
 
@@ -906,22 +670,17 @@ Updating downloads the installer and runs it as root, exactly as installing by h
 | `files/analyze.awk` | Packet timing, flow detection and scoring |
 | `files/report.awk` | Reports and JSON exports |
 | `files/matchwatch.config` | Default settings, installed as `/etc/config/matchwatch` |
-| `files/public.html` | Shell page for the dashboard without login |
+| `files/pb.oct` | The ping buffer's kernel program, as text. Built from `bpf/` |
 | `files/*.list` | Region probes, places, country centres, hosting companies' address lists and game-port labels |
+| `bpf/` | The ping buffer's program, a small assembler for it, and a simulator that runs its bytecode against invented streams |
 | `luci-app-matchwatch/htdocs/` | The dashboard, and the LuCI Dashboard and Settings pages. `leaflet.js` and `leaflet.css` there are Leaflet 1.9.4, unchanged, under its BSD 2-Clause licence |
 | `luci-app-matchwatch/root/` | LuCI menu entry, permissions and the rpcd backend the buttons call |
 | `packs/` | Community game packs and their format |
 | `build.py` | Builds the one-file installer and `dist/version` |
 | `dist/` | The installer, and the version file routers read when checking for an update |
-| `test/` | Simulated traffic, stand-ins for router tools, a test site for the view-only dashboard, and `mockshots.py`, which makes the screenshots |
+| `test/` | Simulated traffic, stand-ins for router tools, the ping buffer's two test tools, and `mockshots.py`, which makes the screenshots |
 
-After changing anything in `files/` or `luci-app-matchwatch/`, rebuild:
-
-```sh
-python3 build.py
-```
-
-Whatever is on `main` in `dist/` is what every router's Update button installs, so install a build on a router before pushing it.
+After changing anything in `files/` or `luci-app-matchwatch/`, rebuild with `python3 build.py`. Whatever is on `main` in `dist/` is what every router's Update button installs, so install a build on a router before pushing it.
 
 Replay a simulated match through the engine (needs BusyBox):
 
@@ -929,7 +688,7 @@ Replay a simulated match through the engine (needs BusyBox):
 python3 test/gen.py good | busybox awk -v REPLAY=1 -v DATA=/tmp/none -v RUN=/tmp/none -f files/analyze.awk
 ```
 
-Scenarios: `good`, `badserver`, `clump`, `badpc`, `frag`, `lobby`, `noise`, `fps`, `handshake`, `short`. [`CLAUDE.md`](CLAUDE.md) has the developer notes and the list of what has been proven on a real router.
+Scenarios: `good`, `badserver`, `clump`, `badpc`, `frag`, `lobby`, `noise`, `fps`, `handshake`, `short`, `move`. After changing the ping buffer's program, run `python3 bpf/pb_test.py` and then `python3 bpf/pb_prog.py --oct files/pb.oct`. [`CLAUDE.md`](CLAUDE.md) has the developer notes.
 
 ## Thanks
 
@@ -940,8 +699,6 @@ Scenarios: `good`, `badserver`, `clump`, `badpc`, `frag`, `lobby`, `noise`, `fps
 ## Licence
 
 MatchWatch is free software under the [GNU General Public License, version 3 or later](LICENSE), the same licence QoSmate uses. Copyright (C) 2026 ItsGix and the MatchWatch contributors.
-
-In plain terms:
 
 - You may use it, study it, change it and pass it on, for any purpose.
 - If you pass it on, changed or not, it must stay under the same licence and the source must come with it.
