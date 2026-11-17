@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.44.0", reloading = false;
+var BUILT = "0.44.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1108,6 +1108,9 @@ function pbufBlock(m) {
 	var p = m.pbuf; if (!p || !p.ms) return null;
 	var b = h("div", null, h("h2", "The ping buffer in this match"));
 	if (!p.pkts) { b.appendChild(h("p", { cls: "lede low", text: "The buffer was set to " + p.ms + " ms but saw none of this match's packets, so nothing was held." })); return b; }
+	// it could not follow this server: say so plainly, because the scores above were measured after it
+	var lostBeat = p.pkts > 500 && p.resync / p.pkts > 0.05;
+	if (p.quit || lostBeat) b.appendChild(h("p", { cls: "lede low", text: (p.quit ? "The buffer stepped aside in this match" : "The buffer could not follow this server") + ": its updates kept no steady beat (the buffer lost it " + p.resync + " times in " + p.pkts + " packets)." + (p.quit ? " From then on nothing was held." : " Holding them this way can make a stream less even, and the scores above were measured after the buffer, so they may be worse than the server deserves. Consider removing this match from the server's rating.") }));
 	var pct = 100 * p.late / p.pkts;
 	b.appendChild(h("p", { cls: "lede " + (pct < 1 ? "ok" : "low"), text: "Held the server's updates by " + p.ms + " ms. " + (p.late ? p.late + " of " + p.pkts + " (" + fmt(pct, pct < 10 ? 1 : 0) + "%) arrived later than that and went straight through" : "None of the " + p.pkts + " arrived later than that") + "; the latest was " + fmt(p.worst, 0) + " ms behind the beat." }));
 	if (p.other || p.moved) b.appendChild(h("p", (p.moved ? "The match moved to another address " + p.moved + " time" + (p.moved === 1 ? "" : "s") + " and the buffer went with it. " : "") + (p.other ? p.other + " packets came from other addresses on the same port (the game's other route to the match) and were held by the same " + p.ms + " ms, so that every route looked alike to the game." : "")));

@@ -16,7 +16,8 @@ G, LAST_ARR, LAST_REL, T, E_PREV, WIN_N, WIN_MIN, SPARE, C_LATE = 0, 8, 16, 24, 
 N_PKTS, N_HELD, N_LATE, SUM_HOLD, MAX_E, N_RESYNC, N_SAME = 72, 80, 88, 96, 104, 112, 120
 SLOT, W_TMIN, W_SMIN, P_TMIN, P_SMIN, TM, T0_SEEN, ALIGN = 128, 136, 144, 152, 160, 168, 176, 184
 MAIN, OTH_N, N_OTHER, N_SWITCH = 192, 200, 208, 216
-BSS_SIZE = 224
+RS_MARK, RS_PK, BYPASS = 224, 232, 240
+BSS_SIZE = 256
 DATA, DATA_END, SADDR = 76, 80, 26   # __sk_buff's data and data_end; the source address in an Ethernet frame
 TSTAMP = 152          # offsetof(struct __sk_buff, tstamp)
 WIN = 32              # updates per correction window
@@ -36,6 +37,8 @@ def build():
     a.jeqi(R5, 0, "out")
     a.movi(R1, MAXB); a.jle(R5, R1, "okb"); a.mov(R5, R1)
     a.label("okb")
+    # Stepped aside (0.44.1): this stream has no steady beat, so every packet goes through unheld.
+    a.ld64(R1, R9, BYPASS); a.jnei(R1, 0, "out")
     # Since 0.44.0 the filter takes everything from the match's port to the device, whatever address it comes
     # from, because a game can have more than one route to a match (Call of Duty moved to its other one
     # thirteen seconds after one alone was held). One sender is the match: its updates get the grid below.
@@ -60,6 +63,21 @@ def build():
     a.label("ismain")
     a.st64i(R9, OTH_N, 0)
     a.label("main")
+    # A server that does not keep one beat cannot be followed: the grid is lost and found over and over, and
+    # what comes out is less even than what went in (seen on two Amsterdam servers that sent every 32 or 48 ms
+    # by turns: the beat was lost 3,764 times in 34,000 packets in one match, 28 in every 256, and 17 in
+    # every 256 in the other). Sixteen losses of the beat within 256 of the match's packets and the program
+    # steps aside for the rest of the match. A steady stream has under one in 256, and a line losing 2% of
+    # its packets about five. Updates later than the buffer are not counted: a small buffer on a rough line
+    # has many of those and is still doing what it can.
+    a.ld64(R1, R9, RS_PK); a.addi(R1, 1); a.st64(R9, RS_PK, R1)
+    a.jslti(R1, 256, "rsok")
+    a.st64i(R9, RS_PK, 0)
+    a.ld64(R1, R9, N_RESYNC); a.ld64(R2, R9, RS_MARK); a.st64(R9, RS_MARK, R1); a.sub(R1, R2)
+    a.jslti(R1, 16, "rsok")
+    a.st64i(R9, BYPASS, 1)
+    a.ja("out")
+    a.label("rsok")
     a.ld64(R4, R9, T)                       # r4 = T
     a.ld64(R3, R8, 0); a.jeqi(R3, 0, "out")
     # The beat it is given is only where to start. From then on the program follows the beat it sees itself,

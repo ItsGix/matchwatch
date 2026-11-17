@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.44.0 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.44.1 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -315,6 +315,7 @@ Some gaming routers sell a *ping buffer*: your game's packets are held back by a
 - **It is a real buffer, not a delay.** A plain delay holds every packet the same time, so the spikes stay and only the ping rises. This keeps the server's beat: an update that arrives on time waits the whole buffer, one that arrives 15 ms late waits 15 ms less, and one later than the buffer goes straight through. Your game receives an even beat.
 - **What is held, exactly.** From a minute into a match until it ends: everything arriving from the port the match is on, for your gaming device, whichever address sends it. A game can have more than one route to a match (Call of Duty does, and moved to its other route when only one was held), so all of them are held alike. The match's own updates get the buffer; anything else on that port gets a plain hold of the same size. Set during a match, it starts within a minute.
 - **What that shows the game.** Every route to that match looks slower by the buffer, which is the point of it. A ping the game sends to a server on that same port while the match is on reads slower too, so matchmaking can see some servers as further away than they are during a match. Pings on other ports, everything between matches, everything your device sends and every other device are left alone. If you would rather matchmaking never saw anything but your true line, leave the buffer off.
+- **It steps aside when a server keeps no beat.** The buffer works by following the server's beat. Some servers send at changing intervals, and holding those would make the stream less even, not more. When it keeps losing the beat (sixteen times within 256 packets) it stops holding for the rest of that match, and the report says so.
 - **It rests if matches keep ending under it.** If twice within five minutes a match ends within a minute of the buffer starting on it, the buffer rests for fifteen minutes and says so; setting it again ends the rest. If that happens, the buffer is too large for that game.
 - **What you will see.** Your game shows its ping higher by the buffer. MatchWatch's own ping figure does not change. The match report scores the stream as your device received it, and a section says what the buffer did: how many updates arrived later than it could hide, and the latest.
 - **It lets go by itself.** It stops holding when the match ends, when MatchWatch stops, and within a minute if no match is on or it saw none of the match's packets.

@@ -82,7 +82,7 @@ def run(name, pk, t0_ms, b_ms, quiet=False):
     vm = VM(pb_prog.build(), int(t0_ms * 1e6), int(b_ms * 1e6)); B = int(b_ms * 1e6)
     last = 0; res = []
     for arr, due in pk:
-        ts = vm.run(arr); rel = ts if ts else arr
+        ts = vm.run(arr); rel = ts if ts else max(arr, last)   # unstamped: the queue sends it behind what it holds
         assert rel >= arr, "sent before it arrived"
         assert rel - arr <= B, "held longer than the buffer"
         assert rel >= last, "out of order"
@@ -99,10 +99,27 @@ def run(name, pk, t0_ms, b_ms, quiet=False):
         g = [b - a for a, b in zip(ts, ts[1:]) if b - a > 2_000_000]
         g.sort(); med = g[len(g) // 2]; return sum(abs(x - med) for x in g) / len(g) / 1e6
     rin = rough([a for a, d, r in skip]); rout = rough([r for a, d, r in skip])
+    if vm.stat(BYPASS): name += " [STEPPED ASIDE]"
     line = "%-34s B=%2d  hold %5.1f ms  on the beat %5.1f%% of those it could (%d early, %d late)  uneven in %.2f out %.2f ms  resync %d  beat %.3f ms" % (
         name, b_ms, hold, 100.0 * good / max(1, could), early, lateout, rin, rout, vm.stat(N_RESYNC), vm.stat(T) / 1e6)
     if not quiet: print(line)
     return 100.0 * good / max(1, could), early, rin, rout
+
+def unsteady(b_ms):
+    """a server on a 16 ms clock that sends every second or third tick by turns: there is no one beat"""
+    random.seed(4); ev = []; t = 10.0
+    while t < 70:
+        t += 0.016 * random.choice((2, 2, 3)); arr = t + abs(random.gauss(0, 0.002))
+        for p in range(2): ev.append(int((arr + p * 0.00005) * 1e9))
+    vm = VM(pb_prog.build(), 32_000_000, int(b_ms * 1e6)); rel = []; at = None; last = 0
+    for i, arr in enumerate(ev):
+        ts = vm.run(arr); r = ts if ts else max(arr, last); last = r; rel.append(r)
+        if at is None and vm.stat(BYPASS): at = i
+    def spread(ts):   # how far the gaps between updates are from their middle value, ms
+        g = sorted(b - a for a, b in zip(ts, ts[1:]) if b - a > 3_000_000); m = g[len(g) // 2]
+        return sum(abs(x - m) for x in g) / len(g) / 1e6
+    print("no steady beat (32 or 48 ms by turns)  B=%2d  gaps uneven by %.2f ms going in and %.2f coming out | beat lost %d times in %d packets (%.1f in every 256) | stepped aside: %s" % (
+        b_ms, spread(ev), spread(rel), vm.stat(N_RESYNC), len(ev), 256.0 * vm.stat(N_RESYNC) / len(ev), ("after %.0f s" % ((ev[at] - ev[0]) / 1e9)) if at else "no"))
 
 def two(b_ms):
     """a match on one address with a few packets from a second, then the match moves to the second"""
@@ -124,7 +141,7 @@ def two(b_ms):
         b_ms, uneven(25, 40), uneven(45, 70), len(oth), min(oth) / 1e6, max(oth) / 1e6, vm.stat(N_SWITCH), vm.stat(N_OTHER)))
 
 if __name__ == "__main__":
-    two(30); two(50)
+    two(30); two(50); unsteady(30); unsteady(50)
     for b in (10, 25):
         run("clean 60/s", stream(60, 60), 16.7, b)
         run("clean 60/s, beat measured short", stream(60, 60), 16.6, b)
