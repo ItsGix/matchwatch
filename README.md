@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.45.0 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.46.0 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -825,6 +825,7 @@ Everything is also available over SSH:
 | `matchwatch nat fix` / `nat unfix` | Installs UPnP if it is missing and switches it on for your gaming device only, or puts things back as they were |
 | `matchwatch nat forward [port]` / `nat unforward` | Forwards the game's own UDP port to your gaming device, or removes the forward MatchWatch added |
 | `matchwatch qos advice` | What your last forty matches say about QoSmate's speed limits |
+| `matchwatch loss` | Signs of lost packets in your last forty matches: pings lost to your provider, your device and the servers that answer them, and drops in QoSmate's game queue. The same under Tools, Data and settings, Is my line losing packets? |
 | `matchwatch buffer` | The ping buffer rehearsal: how many late updates in your last forty matches a buffer of each size would have hidden. Holds nothing back |
 | `matchwatch buffer hold <ms>` / `buffer auto` / `buffer off` / `buffer status` | The ping buffer: hold the match's updates by 5 to 100 ms, have it sized from your matches, switch it off, or see what it is doing |
 | `matchwatch buffer install` / `buffer uninstall` | Install the OpenWrt packages the ping buffer needs, or switch it off and remove the ones MatchWatch installed |

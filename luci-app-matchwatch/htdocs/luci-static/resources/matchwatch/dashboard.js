@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.45.0", reloading = false;
+var BUILT = "0.46.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -2026,6 +2026,9 @@ function pageTools() {
 			var pbOut = outBox();
 			view.appendChild(tool("Would a ping buffer help me?", "Some routers hold your game's packets back by a set time so that a spiky line feels even, at the price of that much more ping in every fight. This rehearses it first: it reads how late the server's updates arrived in your last forty matches and says how many of the late ones a buffer of each size would have hidden. It holds nothing back and changes nothing.",
 				h("div", { cls: "actions" }, act("Rehearse it", "pbadvice", null, { done: pbOut.show })), pbOut));
+			var lossOut = outBox();
+			view.appendChild(tool("Is my line losing packets?", "A lost packet from your device can be a shot the server never heard about. The router cannot see what the server received, but your match records hold signs: pings lost to your provider, to your device and to the servers that answer them, and anything QoSmate's game queue dropped. This reads your last forty matches and says what they show. It changes nothing.",
+				h("div", { cls: "actions" }, act("Look at my matches", "lossadvice", null, { done: lossOut.show })), lossOut));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {

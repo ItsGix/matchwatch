@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.45.0"
+VERSION="0.46.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2963,6 +2963,44 @@ cmd_pbuf() {
 		*) die "usage: matchwatch buffer [hold <ms> | auto | off | status | install | uninstall]" ;;
 	esac
 }
+# ---- is my line losing packets? (0.46.0)
+# Asked for as the test to make before building anything that sends the game's packets twice. The router
+# cannot see whether the server received what the device sent: the packets are encrypted and only the
+# server knows. What the last forty match records do hold are signs: pings lost to the provider's first hop
+# and to the device, pings lost to the server where it answers real pings (a server reached by the UDP probe
+# rations its answers, so half going unanswered there means nothing), and packets QoSmate's own game queue
+# dropped. A ping can be lost on the way out or the way back, so none of this says which direction.
+cmd_lossadvice() {
+	ls "$DATA"/matches/*.json 2>/dev/null | sort | tail -n 40 | while read -r f; do head -c 4000 "$f" 2>/dev/null | head -n 1; echo; done | awk '
+		function num(k,   v) { if (match($0, "\"" k "\":-?[0-9.]+")) { v = substr($0, RSTART, RLENGTH); sub(/.*:/, "", v); return v + 0 } return -1 }
+		$0 == "" { next }
+		{ an = num("analysed"); if (an < 120) next
+		  M++
+		  nl = num("nearloss"); if (nl >= 0) { NN++; NS += nl; if (nl > NW) NW = nl; if (nl >= 0.5) NB++ }
+		  ll = num("lanloss"); if (ll >= 0) { LN++; LS += ll; if (ll > LW) LW = ll; if (ll >= 0.5) LB++ }
+		  if ($0 ~ /"farkind":"server"/) { pl = num("pingloss"); if (pl >= 0) { PN++; PS += pl; if (pl > PW) PW = pl; if (pl >= 1) PB++ } }
+		  if (match($0, /"up":\{"pkts":[0-9]+,"drops":[0-9]+/)) { q = substr($0, RSTART, RLENGTH); sub(/.*:/, "", q); QN++; QD += q + 0; if (q + 0 > 0) QB++ } }
+		END {
+			if (M < 3) { print "Not enough yet: this needs at least three matches of two minutes or more on file."; exit }
+			printf "Signs of lost packets in your last %d matches.\n\n", M
+			print "MatchWatch cannot see whether the server received what you sent: the game'"'"'s packets are encrypted and only the server knows. These are the signs it can see."
+			print ""
+			if (NN) printf "  Your provider'"'"'s first hop: %.2f%% of pings lost on average, %.1f%% in the worst match; %d of %d matches lost 0.5%% or more.\n", NS / NN, NW, NB, NN
+			else print "  Your provider'"'"'s first hop answered no pings, so there is nothing to go by there."
+			if (LN) printf "  Between the router and your device: %.2f%% lost on average, %.1f%% in the worst match; %d of %d matches lost 0.5%% or more.\n", LS / LN, LW, LB, LN
+			if (PN) printf "  The game servers that answer pings: %.2f%% lost on average, %.1f%% in the worst match; %d of %d matches lost 1%% or more.\n", PS / PN, PW, PB, PN
+			else print "  The game servers: none of these answered ordinary pings, and the other kind of probe is rationed by the server, so its unanswered ones do not count as loss."
+			if (QN) printf "  The queue QoSmate keeps for your game: %d packets dropped over %d matches (%d matches with any).\n", QD, QN, QB
+			print ""
+			bad = NB + LB + PB + QB
+			if (bad == 0) print "No sign of loss. Nothing here suggests your packets are going missing, so sending each one twice would do nothing for you."
+			else if (LB * 2 >= bad) printf "The losses are mostly between the router and your device (%d matches). That is the cable or Wi-Fi to the device, which the router cannot fix by sending anything twice: check that link first.\n", LB
+			else if (QB * 2 >= bad) printf "The losses are mostly in QoSmate'"'"'s own queue for your game (%d matches): something bulky is sharing that queue. See the QoSmate speed advice.\n", QB
+			else printf "There are signs of loss past your router in %d of %d matches. Sending each of your game'"'"'s packets twice is the kind of thing that could help with that; MatchWatch does not do it yet.\n", NB + PB, M
+			print ""
+			print "A ping can be lost on its way out or on its way back, so this cannot say which direction loses."
+		}'
+}
 cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
 	local id f="$RUN/www/linetest.json" busy="$RUN/linetest.busy"
 	mkdir -p "$RUN/www"
@@ -3184,6 +3222,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		natunfwd) cmd_natunfwd ;;
 		qosadvice) cmd_qosadvice ;;
 		pbadvice) cmd_pbadvice ;;
+		lossadvice) cmd_lossadvice ;;
 		pbhold) cmd_pbuf hold "$arg" ;;
 		pbauto) cmd_pbuf auto ;;
 		pboff) cmd_pbuf off ;;
@@ -3877,6 +3916,7 @@ case "$1" in
 	mark) cmd_mark ;;
 	qos) if [ "$2" = advice ]; then cmd_qosadvice; else cmd_qos "$2"; fi ;;
 	buffer) cmd_pbuf "$2" "$3" ;;
+	loss) cmd_lossadvice ;;
 	block) shift; cmd_block "$@" ;;
 	unblock) cmd_unblock "$2" ;;
 	blocklist) cmd_blocklist ;;
@@ -5815,7 +5855,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_12'
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice report pbadvice"
+READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice report pbadvice lossadvice"
 WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff pbhold pbauto pboff pbinstall pbuninstall svcstop svcstart svcrestart natfix natunfix natfwd natunfwd"
 
 reply() { # ok(0|1) text
@@ -5951,7 +5991,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.45.0", reloading = false;
+var BUILT = "0.46.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -7949,6 +7989,9 @@ function pageTools() {
 			var pbOut = outBox();
 			view.appendChild(tool("Would a ping buffer help me?", "Some routers hold your game's packets back by a set time so that a spiky line feels even, at the price of that much more ping in every fight. This rehearses it first: it reads how late the server's updates arrived in your last forty matches and says how many of the late ones a buffer of each size would have hidden. It holds nothing back and changes nothing.",
 				h("div", { cls: "actions" }, act("Rehearse it", "pbadvice", null, { done: pbOut.show })), pbOut));
+			var lossOut = outBox();
+			view.appendChild(tool("Is my line losing packets?", "A lost packet from your device can be a shot the server never heard about. The router cannot see what the server received, but your match records hold signs: pings lost to your provider, to your device and to the servers that answer them, and anything QoSmate's game queue dropped. This reads your last forty matches and says what they show. It changes nothing.",
+				h("div", { cls: "actions" }, act("Look at my matches", "lossadvice", null, { done: lossOut.show })), lossOut));
 		}
 		if (!hasQos) view.appendChild(tool("Prioritise my game traffic", "Puts your gaming device's traffic in the top priority queue. Needs QoSmate.", needQos()));
 		else {
@@ -9127,7 +9170,7 @@ var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: 
 var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name', 'data' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1, nat: 1, qosadvice: 1, report: 1, pbadvice: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1, nat: 1, qosadvice: 1, report: 1, pbadvice: 1, lossadvice: 1 };
 
 /* The dashboard's two files are asked for by MatchWatch's version, so a browser that still holds
    an older version's copies fetches the new ones after an update instead of showing the old page. */
