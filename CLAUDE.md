@@ -1,6 +1,6 @@
 # matchwatch: notes for whoever works on this next
 
-matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.38.4.
+matchwatch runs on an OpenWrt router and judges each online match: the game server, the route to it, the player's own line and their PC. It works from packet timing only and never alters game traffic. Version 0.38.5.
 
 ## Layout
 
@@ -102,6 +102,8 @@ Hop-by-hop blame (0.27.0): `hop_loop` (started by `_probe_start` once the trace 
 - `stay_apply` never blocks the address block of a match in progress (read from `status.json`); `cmd_after` applies it once the match has ended.
 
 - BusyBox awk only. No `cos`, `sqrt` or other maths functions (some builds lack them), no gawk extensions. Distances are compared squared with a cosine series.
+- A sum in the shell on a value read from a file (`$(( now - $(cat file) ))`) ends the whole script when the value is not a number, and in `run` or `cmd_after` that is the service or the export after a match. Pass such values through `mm_num` first (0.38.5 did so for the block list's end times, `regions.tsv`, the lock and busy files and `update.seen`); `fill_blocklist` skips a line whose end time is not a number. None of these was seen to happen.
+- A sweep worth repeating after large changes (0.38.5): put a script called `awk` first on `PATH` that runs gawk and logs its standard error, replay the `gen.py` scenarios into a sandbox `DATA` with the engine patched to write history, run every command and `_export`, then load every JSON file with Python. gawk stops on faults BusyBox awk passes over (too few values for a format). Do not use `gawk --lint`: version 5.3 dies of an internal error in it. The sweep of 0.38.5 ran 58 commands and found nothing beyond the `regions_json` fault.
 - BusyBox ash only. No bashisms. Test with `busybox ash -n` and `busybox awk`.
 - Game traffic is the ground truth. Probe results (ping, traceroute-style UDP) only split blame; they never lower a score when the game's own packets arrived cleanly. Servers ration UDP probe replies, so unanswered ones are not loss.
 - Scoring starts when steady traffic begins (`session_start` resets the accumulators). Games often handshake, wait about 30 s, then start the stream.

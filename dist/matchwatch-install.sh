@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.38.4"
+VERSION="0.38.5"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -623,6 +623,8 @@ fill_blocklist() {
 	awk -F'\t' -v now="$now" '$2 == 0 || $2 > now' "$DATA/blocklist" > "$DATA/blocklist.tmp" && mv -f "$DATA/blocklist.tmp" "$DATA/blocklist"
 	while IFS="$TAB" read -r ip exp added reason; do
 		is_target "$ip" || continue
+		# a line whose end time is not a number is passed over: in a sum it would end the whole service at start
+		case "$exp" in ""|*[!0-9]*) continue ;; esac
 		if [ "$exp" = 0 ]; then nft_add "$ip" 0; else nft_add "$ip" $((exp - now)); fi
 	done < "$DATA/blocklist"
 }
@@ -848,7 +850,7 @@ EOF
 }
 regions_stale() { # true when there is no measurement, or it is over six hours old
 	[ -s "$DATA/regions.tsv" ] || return 0
-	[ $(( $(date +%s) - $(head -n 1 "$DATA/regions.tsv" | cut -f11) )) -gt 21600 ]
+	[ $(( $(date +%s) - $(mm_num "$(head -n 1 "$DATA/regions.tsv" | cut -f11)") )) -gt 21600 ]
 }
 
 # ---- turn whole regions away ahead of time
@@ -938,7 +940,7 @@ stay_ranges() { # fill, or empty, the set of whole ranges. The first run looks c
 	RANGES_RUNNING=1
 	mkdir -p "$RUN"
 	# one at a time: two runs side by side would look the same cities up twice
-	if [ -f "$RUN/away.lock" ] && [ $(( $(date +%s) - $(cat "$RUN/away.lock") )) -lt 180 ]; then return 0; fi
+	if [ -f "$RUN/away.lock" ] && [ $(( $(date +%s) - $(mm_num "$(cat "$RUN/away.lock")") )) -lt 180 ]; then return 0; fi
 	date +%s > "$RUN/away.lock"
 	stay_ranges_run; n=$?
 	rm -f "$RUN/away.lock"
@@ -2615,7 +2617,7 @@ cmd_qosadvice() {
 cmd_linetest() { # twenty seconds of pings with no game needed: is the line itself steady?
 	local id f="$RUN/www/linetest.json" busy="$RUN/linetest.busy"
 	mkdir -p "$RUN/www"
-	[ -f "$busy" ] && [ $(( $(date +%s) - $(cat "$busy") )) -lt 60 ] && die "a line test is already running"
+	[ -f "$busy" ] && [ $(( $(date +%s) - $(mm_num "$(cat "$busy")") )) -lt 60 ] && die "a line test is already running"
 	id="$(date +%s)$$"
 	date +%s > "$busy"
 	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
@@ -2699,7 +2701,7 @@ update_due() {
 	[ "$UPDATE_CHECK" = 1 ] || return 1
 	local t
 	t="$(awk '{ print $2 + 0 }' "$DATA/update.seen" 2>/dev/null)"
-	[ $(( $(date +%s) - ${t:-0} )) -gt 86400 ]
+	[ $(( $(date +%s) - $(mm_num "$t") )) -gt 86400 ]
 }
 update_note() { # [latest] : remember the newest version, and tell the phone once for each new one
 	local l="$1" old
@@ -2756,7 +2758,7 @@ cmd_update() { # [check|now]
 	ver_newer "$latest" "$VERSION" || die "you already have the latest version, $VERSION"
 	have sha256sum || die "this router has no sha256sum, so the download could not be checked. Update with the installer instead."
 	grep -q '"sessions":\[{' "$RUN/www/status.json" 2>/dev/null && die "a match is in progress. Updating restarts MatchWatch, so do it between matches."
-	[ -f "$busy" ] && [ $(( $(date +%s) - $(cat "$busy") )) -lt 300 ] && die "an update is already running"
+	[ -f "$busy" ] && [ $(( $(date +%s) - $(mm_num "$(cat "$busy")") )) -lt 300 ] && die "an update is already running"
 	mkdir -p "$RUN/www"
 	id="$(date +%s)$$"
 	date +%s > "$busy"
@@ -5438,7 +5440,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.38.4", reloading = false;
+var BUILT = "0.38.5", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
