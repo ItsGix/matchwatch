@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.38.6", reloading = false;
+var BUILT = "0.39.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1683,6 +1683,15 @@ function pageTools() {
 		var docOut = outBox();
 		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic, and that it is looking at the right ports: the one your gaming device is on, the internet one, and the one QoSmate shapes. Takes five seconds and changes nothing.",
 			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
+		// a report to pass on: everything someone needs to find a fault on a router they cannot see
+		var repOut = outBox(), repText = "", repBtns = h("div", { cls: "actions" });
+		var repCopy = h("button", { type: "button", text: "Copy it" }), repSave = h("button", { type: "button", text: "Save it as a file" });
+		var repNo = function () { toast("Could not copy from here. Use Save it as a file.", true); };
+		repCopy.addEventListener("click", function () { try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(repText).then(function () { toast("Copied."); }, repNo); else repNo(); } catch (e) { repNo(); } });
+		repSave.addEventListener("click", function () { saveText("matchwatch-report.txt", repText); });
+		repBtns.style.display = "none"; repBtns.appendChild(repCopy); repBtns.appendChild(repSave);
+		view.appendChild(tool("Report a problem", "Gathers what is needed to find a fault into one piece of text you can pass on: the self-check, the versions of the router's own tools, MatchWatch's settings, its files, and the last lines of its logs. Your internet address, your phone alert address and device names are left out, and game servers' addresses are shortened. It works when MatchWatch will not start, takes about ten seconds, and changes nothing. MatchWatch sends it nowhere: read it, then pass it on yourself.",
+			h("div", { cls: "actions" }, act("Make the report", "report", null, { solid: true, done: function (o) { repText = o || ""; repOut.show(repText); repBtns.style.display = ""; } })), repBtns, repOut));
 
 		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
 		lineBtn.addEventListener("click", function () {

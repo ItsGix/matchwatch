@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.38.6"
+VERSION="0.39.0"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2825,6 +2825,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		setdevice) [ -n "$arg" ] || die "no device given"; cmd_device "$arg" ;;
 		setdeviceall) cmd_device all ;;
 		doctor) cmd_doctor ;;
+	report) cmd_report ;;
 		regions) cmd_regions measure | head -n 6 ;;
 		testalert) cmd_testalert ;;
 		log) cmd_log ;;
@@ -3337,6 +3338,82 @@ ports_check() {
 	return 0
 }
 
+# ---- a report to pass on (0.39.0). A friend of the owner had a MatchWatch that would not start, and the
+# owner had no way to see that router. This gathers what finding a fault needs into one piece of text the
+# friend can copy or save from the Tools page: the router's own tools and their versions, whether both awk
+# files load on this router, the settings, the self-check, the files with their sizes (a file cut short by a
+# full flash shows here), and the last lines of every log. It leaves out the internet address, the phone
+# alert address and device names, and report_mask shortens every public address to its first two numbers.
+# It only reads, and MatchWatch sends it nowhere.
+report_mask() {
+	awk '{ out = ""; s = $0
+		while (match(s, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+			ip = substr(s, RSTART, RLENGTH); split(ip, o, ".")
+			own = (o[1] == 10 || (o[1] == 172 && o[2] >= 16 && o[2] <= 31) || (o[1] == 192 && o[2] == 168) || o[1] == 127 || (o[1] == 169 && o[2] == 254) || o[1] + 0 == 0 || o[1] > 255)
+			out = out substr(s, 1, RSTART - 1) (own ? ip : o[1] "." o[2] ".x.x"); s = substr(s, RSTART + RLENGTH)
+		}
+		print out s }'
+}
+cmd_report() {
+	local t rc w
+	{
+	echo "MatchWatch $VERSION report, $(date '+%Y-%m-%d %H:%M %Z')"
+	echo "Left out: your internet address, the phone alert address and device names. Public addresses are shortened to their first two numbers."
+	echo
+	echo "== Router"
+	( . /etc/openwrt_release 2>/dev/null; echo "OpenWrt: ${DISTRIB_DESCRIPTION:-unknown} (${DISTRIB_TARGET:-?}, ${DISTRIB_ARCH:-?})" )
+	echo "Kernel: $(uname -r 2>/dev/null)"
+	echo "Shell tools: $(awk --help 2>&1 | head -n 1)"
+	echo "tcpdump: $(tcpdump --version 2>&1 | head -n 1)"
+	echo "Packages by: $(pm_kind)   Firewall: $(fw_kind)   nft: $(have nft && echo yes || echo no)"
+	echo "Memory: $(awk '/MemTotal|MemAvailable/ { printf "%s %d MB  ", $1, $2 / 1024 }' /proc/meminfo 2>/dev/null)"
+	echo "Space:"; df -k 2>/dev/null | awk 'NR == 1 || $6 == "/" || $6 == "/overlay" || $6 == "/tmp" { print "  " $0 }'
+	echo "Up: $(uptime 2>/dev/null)"
+	echo
+	echo "== Service"
+	if svc_running; then echo "Running (process $(cat "$RUN/pid" 2>/dev/null))"; else echo "Not running"; fi
+	[ -x /etc/init.d/matchwatch ] && echo "Starts with the router: $(/etc/init.d/matchwatch enabled 2>/dev/null && echo yes || echo no)"
+	echo "Status file: $(head -c 300 "$RUN/www/status.json" 2>/dev/null)"
+	[ -s "$RUN/fail" ] && echo "Why it last stopped by itself: $(head -n 1 "$RUN/fail")"
+	have ubus && echo "procd: $(ubus call service list '{"name":"matchwatch"}' 2>/dev/null | tr -d '\n\t' | cut -c1-480)"
+	echo
+	echo "== Do the two awk files load on this router"
+	t="$(awk -v REPLAY=1 -v DATA=/nonexistent -v RUN=/nonexistent -f "$LIB/analyze.awk" < /dev/null 2>&1)"; rc=$?
+	echo "analyze.awk: exit $rc $(echo "$t" | tail -n 2 | tr '\n' ' ' | cut -c1-300)"
+	t="$(awk -v MODE=hist_json -f "$LIB/report.awk" /dev/null 2>&1)"; rc=$?
+	echo "report.awk: exit $rc $(echo "$t" | tail -n 1 | cut -c1-300)"
+	echo
+	echo "== Settings"
+	echo "device=${DEVICE_IP:-every device} lan_if=${LAN_IF:-detected} wan_if=${WAN_IF:-detected} data=$DATA"
+	echo "ignore_ports=$IGNORE_PORTS only_filter=${ONLY_FILTER:-none} min_down=$MIN_DOWN_PPS min_up=$MIN_UP_PPS"
+	echo "geo=$GEO web=$WEB phone_alerts=$( [ -n "$NTFY_URL" ] && echo set || echo no ) autoblock=$AUTOBLOCK stay_strict=$STAY_STRICT stay_ranges=$STAY_RANGES match_mode=$MATCH_MODE net_watch=$NET_WATCH early_warn=$EARLY_WARN update_check=$UPDATE_CHECK"
+	echo "places stayed on: $(cnt "$DATA/stay")   ping range: $(cat "$DATA/pingrange" 2>/dev/null || echo none)   strict games: $(cnt "$DATA/hold")   blocks: $(cnt "$DATA/blocklist")"
+	echo
+	echo "== Self-check"
+	( cmd_doctor ) 2>&1
+	echo
+	echo "== QoSmate"
+	if [ -x /etc/init.d/qosmate ] && have uci; then
+		w="$(mm_why)"
+		echo "installed: enabled=$(uci -q get qosmate.global.enabled) queue=$(uci -q get qosmate.settings.ROOT_QDISC) port=$(uci -q get qosmate.settings.WAN) autorate=$(uci -q get qosmate.autorate.enabled) match mode: ${w:-can work}"
+	else echo "not installed"; fi
+	echo
+	echo "== Files (size, name)"
+	echo "Installed:"; ls -l "$SELF" "$LIB" /etc/init.d/matchwatch /usr/libexec/rpcd/luci.matchwatch /www/luci-static/resources/matchwatch /www/luci-static/resources/view/matchwatch 2>&1 | awk 'NF >= 9 { print "  " $5, $NF; next } NF > 1 { print "  " $0 }'
+	echo "Working files ($RUN):"; ls -l "$RUN" 2>&1 | awk 'NF >= 9 { print "  " $5, $6, $7, $8, $NF }'
+	echo "Kept files ($DATA):"; ls -l "$DATA" 2>&1 | awk 'NF >= 9 { print "  " $5, $6, $7, $8, $NF }'
+	echo "Matches on file: $(ls "$DATA/matches" 2>/dev/null | awk 'END { print NR }')   history lines: $(cnt "$DATA/sessions.tsv")"
+	have nft && echo "Firewall table: $(nft list table inet matchwatch 2>/dev/null | awk 'END { print NR }') lines"
+	echo
+	echo "== Capture errors"; tail -n 5 "$RUN/tcpdump.err" 2>/dev/null
+	echo "== Engine errors"; tail -n 8 "$RUN/engine.err" 2>/dev/null
+	echo "== Engine log, last lines"; tail -n 15 "$RUN/engine.log" 2>/dev/null
+	echo "== Last update"; tail -n 8 "$RUN/update.log" 2>/dev/null
+	echo "== System log, MatchWatch's lines"; have logread && logread 2>/dev/null | grep -i matchwatch | tail -n 40
+	echo "== End of report"
+	} 2>&1 | report_mask | cut -c1-500
+}
+
 cmd_doctor() {
 	local ok=1 c n lvl txt
 	echo "matchwatch $VERSION"
@@ -3460,6 +3537,7 @@ case "$1" in
 	_updatetick) update_due && { update_note; export_json; } ;;
 	ranges) cmd_ranges "$2" ;;
 	doctor) cmd_doctor ;;
+	report) cmd_report ;;
 	nat) cmd_nat "$2" "$3" ;;
 	clear-history) cmd_clear_history ;;
 	forget) cmd_forget "$2" "$3" ;;
@@ -5306,7 +5384,7 @@ cat > "$R/usr/libexec/rpcd/luci.matchwatch.new" <<'MW_FILE_END_11'
 
 . /usr/share/libubox/jshn.sh
 
-READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice"
+READ="hello mark devices doctor qos log linetest trace shareexport updatecheck nat qosadvice report"
 WRITE="block unblock blockdc unblockdc stay stayoff stayadd stayrm staysuggest regions qosfix qosunfix setdevice setdeviceall testalert gamename gamedel clearhistory sharecheck shareimport shareundo shareforget shareforgetgs fav unfav forgetmatch forgetserver forgetdc update allow unallow staycircle stayset holdon holdoff matchmodeon matchmodeoff matchmodeset matchgame pingrange pingoff svcstop svcstart svcrestart natfix natunfix natfwd natunfwd"
 
 reply() { # ok(0|1) text
@@ -5442,7 +5520,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.38.6", reloading = false;
+var BUILT = "0.39.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -7097,6 +7175,15 @@ function pageTools() {
 		var docOut = outBox();
 		view.appendChild(tool("Check MatchWatch is working", "Confirms MatchWatch can see your device's traffic, and that it is looking at the right ports: the one your gaming device is on, the internet one, and the one QoSmate shapes. Takes five seconds and changes nothing.",
 			h("div", { cls: "actions" }, act("Run the check", "doctor", null, { solid: true, done: docOut.show })), docOut));
+		// a report to pass on: everything someone needs to find a fault on a router they cannot see
+		var repOut = outBox(), repText = "", repBtns = h("div", { cls: "actions" });
+		var repCopy = h("button", { type: "button", text: "Copy it" }), repSave = h("button", { type: "button", text: "Save it as a file" });
+		var repNo = function () { toast("Could not copy from here. Use Save it as a file.", true); };
+		repCopy.addEventListener("click", function () { try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(repText).then(function () { toast("Copied."); }, repNo); else repNo(); } catch (e) { repNo(); } });
+		repSave.addEventListener("click", function () { saveText("matchwatch-report.txt", repText); });
+		repBtns.style.display = "none"; repBtns.appendChild(repCopy); repBtns.appendChild(repSave);
+		view.appendChild(tool("Report a problem", "Gathers what is needed to find a fault into one piece of text you can pass on: the self-check, the versions of the router's own tools, MatchWatch's settings, its files, and the last lines of its logs. Your internet address, your phone alert address and device names are left out, and game servers' addresses are shortened. It works when MatchWatch will not start, takes about ten seconds, and changes nothing. MatchWatch sends it nowhere: read it, then pass it on yourself.",
+			h("div", { cls: "actions" }, act("Make the report", "report", null, { solid: true, done: function (o) { repText = o || ""; repOut.show(repText); repBtns.style.display = ""; } })), repBtns, repOut));
 
 		var lineOut = h("div"), lineBtn = h("button", { type: "button", cls: "solid", text: "Test my line" });
 		lineBtn.addEventListener("click", function () {
@@ -8485,7 +8572,7 @@ var callRead = rpc.declare({ object: 'luci.matchwatch', method: 'read', params: 
 var callWrite = rpc.declare({ object: 'luci.matchwatch', method: 'write', params: [ 'action', 'arg', 'days', 'region', 'name', 'data' ], expect: {} });
 
 /* Buttons that only look, or only record a time. Everything else needs write permission. */
-var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1, nat: 1, qosadvice: 1 };
+var READS = { hello: 1, mark: 1, devices: 1, doctor: 1, qos: 1, log: 1, linetest: 1, trace: 1, shareexport: 1, updatecheck: 1, nat: 1, qosadvice: 1, report: 1 };
 
 /* The dashboard's two files are asked for by MatchWatch's version, so a browser that still holds
    an older version's copies fetches the new ones after an update instead of showing the old page. */
