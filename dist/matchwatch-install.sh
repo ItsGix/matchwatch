@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.38.3"
+VERSION="0.38.4"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -2778,7 +2778,7 @@ cmd_service() { # stop | start | restart | nothing: is it running
 	esac
 	if [ -z "$CONF" ]; then
 		[ -x /etc/init.d/matchwatch ] || die "the service script /etc/init.d/matchwatch is missing. Install MatchWatch again."
-		( sleep 1; /etc/init.d/matchwatch "$1" ) >/dev/null 2>&1 &
+		( sleep 1; /etc/init.d/matchwatch "$1"; if [ "$1" = stop ]; then rm -f "$RUN/fail"; sleep 1; STOPWHY=""; stopped_json; fi ) >/dev/null 2>&1 &
 	fi
 	case "$1" in
 		stop) echo "Stopping MatchWatch. Nothing is watched or recorded until you start it again." ;;
@@ -3156,15 +3156,33 @@ CGI
 	fi
 	return 0
 }
+# Why the service ended by itself (0.38.4). A friend of the owner updated and then saw "starting" and
+# "stopped" in turn, with nothing on the page to say why, and the owner had no way to look at that router.
+# The reason now goes into the status file as "why", into the system log, and into $RUN/fail, which the
+# next start carries in its own status, because procd starts the service again every ten seconds and the
+# page would otherwise show the reason for a moment only. A stop that was asked for clears it.
+alive() { [ -n "$1" ] && [ -d "/proc/$1" ] && ! grep -q '^State:[^A-Za-z]*Z' "/proc/$1/status" 2>/dev/null; }
+stop_why() { # text
+	STOPWHY="$(jesc "$1" | cut -c1-240)"
+	mkdir -p "$RUN/www"
+	echo "$STOPWHY" > "$RUN/fail"
+	logger -t matchwatch "stopped by itself: $1" 2>/dev/null
+}
+stopped_json() {
+	local w=""
+	[ -d "$RUN/www" ] || return 0
+	[ -n "$STOPWHY" ] && w="\"why\":\"$STOPWHY\","
+	echo "{\"ts\":0,\"stopped\":$(date +%s),${w}\"sessions\":[],\"candidates\":0,\"flows\":0}" > "$RUN/www/status.json.$$" && mv "$RUN/www/status.json.$$" "$RUN/www/status.json"
+}
+run_die() { stop_why "$*"; stopped_json; die "$*"; }
 stop_children() {
 	local d f
-	kill $TPID $HPID $APID $UPID $MPID $WPID 2>/dev/null
+	kill $TPID $HPID $APID $UPID $MPID $WPID $EPID 2>/dev/null
 	net_off force >/dev/null 2>&1
 	# say so for the dashboard, once the engine has gone and cannot write over it
 	[ -n "$APID" ] && wait "$APID" 2>/dev/null
-	if [ -d "$RUN/www" ]; then
-		echo "{\"ts\":0,\"stopped\":$(date +%s),\"sessions\":[],\"candidates\":0,\"flows\":0}" > "$RUN/www/status.json.$$" && mv "$RUN/www/status.json.$$" "$RUN/www/status.json"
-	fi
+	[ -n "$STOPWHY" ] || rm -f "$RUN/fail"
+	stopped_json
 	for d in "$RUN"/probe.*; do
 		[ -d "$d" ] || continue
 		touch "$d/stop"
@@ -3174,10 +3192,11 @@ stop_children() {
 	rm -f "$RUN/pipe" "$RUN/pid"
 }
 cmd_run() {
-	local imm=""
-	have tcpdump || die "tcpdump is not installed (opkg install tcpdump, or apk add tcpdump)"
-	[ -f "$LIB/analyze.awk" ] || die "missing $LIB/analyze.awk"
-	[ -n "$DEVICE_IP" ] && { is_ipv4 "$DEVICE_IP" || die "the device to watch ($DEVICE_IP) is not a valid IPv4 address"; }
+	local imm="" w="" e
+	STOPWHY=""
+	have tcpdump || run_die "tcpdump is not installed (opkg install tcpdump, or apk add tcpdump)"
+	[ -f "$LIB/analyze.awk" ] || run_die "a file is missing: $LIB/analyze.awk. Install MatchWatch again."
+	[ -n "$DEVICE_IP" ] && { is_ipv4 "$DEVICE_IP" || run_die "the device to watch ($DEVICE_IP) is not a valid IPv4 address. Choose the device again under Settings."; }
 	mkdir -p "$RUN/www" "$DATA/matches"
 	ln -sfn "$DATA/matches" "$RUN/www/matches"
 	[ -s "$DATA/stay" ] && [ -z "$(cut -f3 "$DATA/stay")" ] && stay_off
@@ -3198,14 +3217,17 @@ cmd_run() {
 	[ -s "$DATA/hold" ] && staying && ( sleep 6; pgrep -f analyze.awk >/dev/null 2>&1 && hold_apply >/dev/null 2>&1 ) &
 	staying && ( sleep 3; stay_ranges >/dev/null 2>&1 ) &
 	web_setup; export_json
-	echo '{"ts":0,"starting":1,"sessions":[],"candidates":0,"flows":0}' > "$RUN/www/status.json"
+	# a start that follows a failure says what the failure was
+	[ -s "$RUN/fail" ] && w="\"why\":\"$(head -n 1 "$RUN/fail" | tr -d '"\\')\","
+	echo "{\"ts\":0,\"starting\":1,${w}\"sessions\":[],\"candidates\":0,\"flows\":0}" > "$RUN/www/status.json"
 	echo "Starting up..." > "$RUN/status.txt"
-	mkfifo "$RUN/pipe" || die "cannot create $RUN/pipe"
+	mkfifo "$RUN/pipe" || run_die "cannot create $RUN/pipe"
+	: > "$RUN/engine.err"
 	tcpdump --help 2>&1 | grep -q immediate-mode && imm="--immediate-mode"
 	awk -v SELF="$SELF" -v RUN="$RUN" -v DATA="$DATA" -v WANDEV="$WAN_IF" -v GAMES="$LIB/games.list" -v GAMESL="$DATA/games.local" -v HOLDF="$RUN/hold.ports" \
 		-v MINDN="$MIN_DOWN_PPS" -v MINUP="$MIN_UP_PPS" -v WARNSCORE="$WARN_SCORE" \
 		-v PCSCORE="$PC_SCORE" -v AUTOBLOCK="$AUTOBLOCK" -v ABSCORE="$AUTOBLOCK_SCORE" -v ABMATCHES="$AUTOBLOCK_MATCHES" \
-		-f "$LIB/analyze.awk" < "$RUN/pipe" >> "$RUN/engine.log" 2>&1 &
+		-f "$LIB/analyze.awk" < "$RUN/pipe" >> "$RUN/engine.log" 2> "$RUN/engine.err" &
 	APID=$!
 	# shellcheck disable=SC2086
 	tcpdump -i "$LAN_IF" -tt -n -q -l -s 96 $imm $FILTER > "$RUN/pipe" 2> "$RUN/tcpdump.err" &
@@ -3214,6 +3236,12 @@ cmd_run() {
 	HPID=$!
 	echo $$ > "$RUN/pid"
 	trap 'stop_children; exit 0' INT TERM
+	# An engine that dies leaves the capture waiting for its next packet, which with the gaming device off
+	# may be hours away: the page would say "starting" all that time. So the capture is ended with it.
+	( while alive "$APID"; do sleep 2; done; kill "$TPID" 2>/dev/null ) >/dev/null 2>&1 &
+	EPID=$!
+	# once the engine has written its own status the start worked, and an earlier failure is history
+	( sleep 30; grep -q '"since"' "$RUN/www/status.json" 2>/dev/null && rm -f "$RUN/fail" ) >/dev/null 2>&1 &
 	( sleep 20; regions_stale && cmd_regions measure >/dev/null 2>&1 ) &
 	# match mode: once a minute, see that the queues are still at the speeds they should be. A fresh
 	# process each time, so switching match mode on or off from the dashboard needs no restart of this one.
@@ -3232,6 +3260,14 @@ cmd_run() {
 	logger -t matchwatch "watching $LAN_IF${DEVICE_IP:+ (device $DEVICE_IP)}" 2>/dev/null
 	wait $TPID
 	logger -t matchwatch "capture stopped: $(tail -n 1 "$RUN/tcpdump.err" 2>/dev/null)" 2>/dev/null
+	sleep 1
+	if alive "$APID"; then
+		e="$(grep -v 'listening on\|verbose output suppressed\|packets captured\|packets received\|packets dropped' "$RUN/tcpdump.err" 2>/dev/null | tail -n 1)"
+		stop_why "The packet capture on $LAN_IF stopped${e:+: $e}"
+	else
+		e="$(tail -n 1 "$RUN/engine.err" 2>/dev/null)"
+		stop_why "The engine that reads the packets stopped${e:+: $e}"
+	fi
 	stop_children
 	exit 1
 }
@@ -4794,7 +4830,7 @@ END {
 		}
 		printf "["
 		for (i = 1; i <= nreg; i++) { r = ri[i]; c = RG[r, 1]
-			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (pool_in(RG[r, 5], RG[r, 6], RG[r, 3], RG[r, 8]) == 1 ? "true" : "false")
+			printf "%s{\"code\":%s,\"city\":%s,\"cc\":%s,\"area\":%s,\"ping\":%s,\"jit\":%s,\"ts\":%d,\"matches\":%d,\"rating\":%s,\"matchping\":%s,\"stay\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(c), q(RG[r, 2]), q(RG[r, 3]), q(RG[r, 4]), jn(RG[r, 8]), jn(RG[r, 9]), RG[r, 11], RP_n[c] + 0, (RP_rn[c] > 0 ? int(RP_rs[c] / RP_rn[c] + 0.5) : "null"), (RP_pn[c] > 0 ? sprintf("%.1f", RP_p[c] / RP_pn[c]) : "null"), (pool_in(RG[r, 5], RG[r, 6], RG[r, 3], RG[r, 8]) == 1 ? "true" : "false"), jn(RG[r, 5]), jn(RG[r, 6])
 		}
 		print "]"
 		exit
@@ -5402,7 +5438,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.38.3", reloading = false;
+var BUILT = "0.38.4", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -7320,6 +7356,7 @@ function svcState() {
 function setState() {
 	var e = shadow.getElementById("state"), st = D.st, s = session(), v = svcState();
 	if (!st) { e.className = ""; e.textContent = "Can't read data from the router"; }
+	else if (st.why && v !== "on") { e.className = ""; e.textContent = "MatchWatch cannot start"; }
 	else if (v === "stopped") { e.className = ""; e.textContent = "MatchWatch is stopped"; }
 	else if (v === "starting") { e.className = ""; e.textContent = "MatchWatch is starting"; }
 	else if (v === "off") { e.className = ""; e.textContent = "MatchWatch is not running"; }
@@ -7335,24 +7372,31 @@ function svcPaint() {
 	var box = SVC.box;
 	if (!box || !box.isConnected && SVC.key) return;
 	var v = svcState(), st = D.st || {}, m = v === "on" && !!session();
+	// "why" is there when the service ended by itself; it starts itself again every ten seconds, so the
+	// status file goes from stopped to starting and back, and the reason is carried through both
+	var why = v !== "on" && st.why ? String(st.why) : "";
 	if (SVC.wait) {
-		var over = SVC.wait === "Stopping" ? v !== "on" && v !== "starting" : v === "on" && (SVC.wait === "Starting" || st.since !== SVC.was);
-		if (over || Date.now() > SVC.until) SVC.wait = "";
+		var over = SVC.wait === "Stopping" ? v !== "on" && v !== "starting" && !why : v === "on" && (SVC.wait === "Starting" || st.since !== SVC.was);
+		if (over || why && SVC.wait !== "Stopping" || Date.now() > SVC.until) SVC.wait = "";
 	}
-	var key = [v, m, SVC.wait, st.since || 0, st.stopped || 0].join("|");
+	var key = [why ? "why" : v, m, SVC.wait, st.since || 0, why ? 0 : st.stopped || 0, why].join("|");
 	if (key === SVC.key || box.querySelector("button.arm")) return;
 	SVC.key = key; box.textContent = "";
 	function go(word) { return function (out) { SVC.wait = word; SVC.until = Date.now() + 30000; SVC.was = (D.st || {}).since || 0; toast(out || word + "."); svcPaint(); }; }
 	var cls = "wait", say;
 	if (SVC.wait) say = SVC.wait + "...";
+	else if (why) { cls = "off"; say = "Not running: it stops as soon as it starts"; }
 	else if (v === "on") { cls = "on"; say = "Running" + (st.since ? " since " + when(st.since) : "") + (m ? ". A match is in progress." : ""); }
 	else if (v === "starting") say = "Starting...";
 	else if (v === "stopped") { cls = "off"; say = "Stopped since " + when(st.stopped); }
 	else { cls = "off"; say = "Not running"; }
 	box.appendChild(h("p", { cls: "svc " + cls, role: "status", text: say }));
-	if (SVC.wait || v === "starting") return;
+	if (why && !SVC.wait) box.appendChild(h("p", { cls: "note", text: "The reason it gave: " + why + ". MatchWatch tries again every ten seconds until you stop it. The same line is in the router's log (Status, System Log) beside the word matchwatch." }));
+	if (SVC.wait || v === "starting" && !why) return;
 	var row = h("div", { cls: "actions" });
-	if (v === "on") {
+	if (why) {
+		row.appendChild(act("Stop trying", "svcstop", null, { done: go("Stopping") }));
+	} else if (v === "on") {
 		row.appendChild(act("Restart", "svcrestart", null, { confirm: m ? "Lose this match's record?" : null, done: go("Restarting") }));
 		row.appendChild(act("Stop", "svcstop", null, { danger: true, confirm: m ? "Lose this match's record?" : "Stop MatchWatch?", done: go("Stopping") }));
 	} else {

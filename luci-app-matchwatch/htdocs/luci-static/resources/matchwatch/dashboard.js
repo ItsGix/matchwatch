@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.38.3", reloading = false;
+var BUILT = "0.38.4", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1946,6 +1946,7 @@ function svcState() {
 function setState() {
 	var e = shadow.getElementById("state"), st = D.st, s = session(), v = svcState();
 	if (!st) { e.className = ""; e.textContent = "Can't read data from the router"; }
+	else if (st.why && v !== "on") { e.className = ""; e.textContent = "MatchWatch cannot start"; }
 	else if (v === "stopped") { e.className = ""; e.textContent = "MatchWatch is stopped"; }
 	else if (v === "starting") { e.className = ""; e.textContent = "MatchWatch is starting"; }
 	else if (v === "off") { e.className = ""; e.textContent = "MatchWatch is not running"; }
@@ -1961,24 +1962,31 @@ function svcPaint() {
 	var box = SVC.box;
 	if (!box || !box.isConnected && SVC.key) return;
 	var v = svcState(), st = D.st || {}, m = v === "on" && !!session();
+	// "why" is there when the service ended by itself; it starts itself again every ten seconds, so the
+	// status file goes from stopped to starting and back, and the reason is carried through both
+	var why = v !== "on" && st.why ? String(st.why) : "";
 	if (SVC.wait) {
-		var over = SVC.wait === "Stopping" ? v !== "on" && v !== "starting" : v === "on" && (SVC.wait === "Starting" || st.since !== SVC.was);
-		if (over || Date.now() > SVC.until) SVC.wait = "";
+		var over = SVC.wait === "Stopping" ? v !== "on" && v !== "starting" && !why : v === "on" && (SVC.wait === "Starting" || st.since !== SVC.was);
+		if (over || why && SVC.wait !== "Stopping" || Date.now() > SVC.until) SVC.wait = "";
 	}
-	var key = [v, m, SVC.wait, st.since || 0, st.stopped || 0].join("|");
+	var key = [why ? "why" : v, m, SVC.wait, st.since || 0, why ? 0 : st.stopped || 0, why].join("|");
 	if (key === SVC.key || box.querySelector("button.arm")) return;
 	SVC.key = key; box.textContent = "";
 	function go(word) { return function (out) { SVC.wait = word; SVC.until = Date.now() + 30000; SVC.was = (D.st || {}).since || 0; toast(out || word + "."); svcPaint(); }; }
 	var cls = "wait", say;
 	if (SVC.wait) say = SVC.wait + "...";
+	else if (why) { cls = "off"; say = "Not running: it stops as soon as it starts"; }
 	else if (v === "on") { cls = "on"; say = "Running" + (st.since ? " since " + when(st.since) : "") + (m ? ". A match is in progress." : ""); }
 	else if (v === "starting") say = "Starting...";
 	else if (v === "stopped") { cls = "off"; say = "Stopped since " + when(st.stopped); }
 	else { cls = "off"; say = "Not running"; }
 	box.appendChild(h("p", { cls: "svc " + cls, role: "status", text: say }));
-	if (SVC.wait || v === "starting") return;
+	if (why && !SVC.wait) box.appendChild(h("p", { cls: "note", text: "The reason it gave: " + why + ". MatchWatch tries again every ten seconds until you stop it. The same line is in the router's log (Status, System Log) beside the word matchwatch." }));
+	if (SVC.wait || v === "starting" && !why) return;
 	var row = h("div", { cls: "actions" });
-	if (v === "on") {
+	if (why) {
+		row.appendChild(act("Stop trying", "svcstop", null, { done: go("Stopping") }));
+	} else if (v === "on") {
 		row.appendChild(act("Restart", "svcrestart", null, { confirm: m ? "Lose this match's record?" : null, done: go("Restarting") }));
 		row.appendChild(act("Stop", "svcstop", null, { danger: true, confirm: m ? "Lose this match's record?" : "Stop MatchWatch?", done: go("Stopping") }));
 	} else {
