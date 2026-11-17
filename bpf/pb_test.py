@@ -13,10 +13,11 @@ class VM:
     def __init__(self, asm, t0, b):
         asm.code(); self.ins = [tuple(i) for i in asm.ins]
         self.rel = dict(asm.relocs)
-        self.mem = {1: bytearray(256), 2: bytearray(struct.pack("<QQ", t0, b) + b"\0" * 48), 3: bytearray(BSS_SIZE)}
+        self.mem = {4: bytearray(64), 1: bytearray(256), 2: bytearray(struct.pack("<QQ", t0, b) + b"\0" * 48), 3: bytearray(BSS_SIZE)}
     def rd(self, p, off): seg = p >> 28; o = (p & 0xfffffff) + off; return struct.unpack_from("<Q", self.mem[seg], o)[0]
     def wr(self, p, off, v): seg = p >> 28; o = (p & 0xfffffff) + off; struct.pack_into("<Q", self.mem[seg], o, v & M)
-    def run(self, now):
+    def run(self, now, src=1):
+        struct.pack_into("<I", self.mem[4], SADDR, src)
         r = [0] * 11; r[1] = 1 << 28; pc = 0; self.wr(1 << 28, TSTAMP, 0); n = 0
         while True:
             n += 1; assert n < 500
@@ -31,6 +32,9 @@ class VM:
             elif op == 0x77: r[d] = r[d] >> imm
             elif op == 0x67: r[d] = (r[d] << imm) & M
             elif op == 0x79: r[d] = self.rd(r[s], off)
+            elif op == 0x61:
+                if r[s] >> 28 == 1: r[d] = (4 << 28) + (0 if off == DATA else 64)
+                else: r[d] = struct.unpack_from("<I", self.mem[r[s] >> 28], (r[s] & 0xfffffff) + off)[0]
             elif op == 0x7b: self.wr(r[d], off, r[s])
             elif op == 0x7a: self.wr(r[d], off, imm)
             elif op == 0x85: assert imm == 5; r[0] = now
@@ -100,7 +104,27 @@ def run(name, pk, t0_ms, b_ms, quiet=False):
     if not quiet: print(line)
     return 100.0 * good / max(1, could), early, rin, rout
 
+def two(b_ms):
+    """a match on one address with a few packets from a second, then the match moves to the second"""
+    random.seed(9); B = int(b_ms * 1e6); ev = []; hz = 20.83
+    for i in range(int(60 * hz)):
+        ts = 10 + i / hz; arr = ts + abs(random.gauss(0, 0.0007)); src = 1 if ts < 40 else 2
+        for p in range(2): ev.append((int((arr + p * 0.00005) * 1e9), src, int(ts * 1e9)))
+    for i in range(40): ev.append((int((10.3 + i * 1.5) * 1e9), 2 if 10.3 + i * 1.5 < 40 else 1, 0))   # the other route's few packets
+    ev.sort(); vm = VM(pb_prog.build(), 48_000_000, B); out = []
+    for arr, src, due in ev:
+        ts = vm.run(arr, src); rel = ts if ts else arr
+        assert arr <= rel <= arr + B
+        out.append((arr, src, due, rel))
+    oth = [r - a for a, s, d, r in out if d == 0]
+    def uneven(lo, hi):
+        t = [r for a, s, d, r in out if d and lo <= d / 1e9 < hi]; g = [y - x for x, y in zip(t, t[1:]) if y - x > 3_000_000]
+        m = sorted(g)[len(g) // 2]; return sum(abs(x - m) for x in g) / len(g) / 1e6
+    print("two senders and a move              B=%2d  match uneven before the move %.2f ms, after it %.2f ms | other route's %d packets held %.1f to %.1f ms | moves seen %d, others counted %d" % (
+        b_ms, uneven(25, 40), uneven(45, 70), len(oth), min(oth) / 1e6, max(oth) / 1e6, vm.stat(N_SWITCH), vm.stat(N_OTHER)))
+
 if __name__ == "__main__":
+    two(30); two(50)
     for b in (10, 25):
         run("clean 60/s", stream(60, 60), 16.7, b)
         run("clean 60/s, beat measured short", stream(60, 60), 16.6, b)

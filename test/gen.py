@@ -44,6 +44,14 @@ elif sc=="fps":
 elif sc=="handshake":
     stream(out,False,2,3); stream(out,True,2,3)
     stream(out,False,21,200,start=32.6,jit=0.001); stream(out,True,89,200,start=32.6,jit=0.003)
+elif sc=="move":
+    # a match that the game moves to a second address on the same ports after a minute, each route sending a
+    # few packets while the other carries the match. One match should come out, with "moved":1
+    A="203.0.113.128"; B="203.0.113.9"
+    stream(out,False,21,60,jit=0.001,srv=A); stream(out,True,60,60,srv=A)
+    stream(out,False,21,60,jit=0.001,srv=B,start=60); stream(out,True,60,60,srv=B,start=60)
+    for i in range(40):
+        out.append(line(T0+0.7+i*1.5,B,30120,PC,3074,60)); out.append(line(T0+60.7+i*1.5,A,30120,PC,3074,60))
 elif sc=="sweep":
     # a game measuring its ping to twenty datacentres inside a second and a half, then, half a minute later,
     # reaching for the one server it will play on. Run with -v GAMES=files/games.list -v GEOF=test/geo_sweep.tsv

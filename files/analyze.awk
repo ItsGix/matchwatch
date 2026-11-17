@@ -109,6 +109,25 @@ $2 == "IP" && $4 == ">" {
 	advance(int(t))
 	if (NHP > 0) hold_seen(dir, rip, rport)
 	f = lip ":" lport ">" rip ":" rport
+	# One match, even when the game moves it (0.44.0). Call of Duty was seen going from one address to
+	# another on the same two ports in the middle of a match and carrying on: a second route to the same
+	# match. Each used to become a match of its own, too short to count. While a session runs, ST_cur is the
+	# address it is on. Eight packets in a row from another address on the same ports, with none from that
+	# one, and the session carries on there. The few packets the other route sends meanwhile are left out
+	# of the session they would otherwise disturb.
+	tk = lip ":" lport ">" rport
+	if (tk in ST_f) {
+		sf = ST_f[tk]
+		if (!(sf in F_seen) || !F_active[sf]) { delete ST_f[tk]; delete ST_cur[tk]; delete ST_n[tk] }
+		else if (rip == ST_cur[tk]) { if (dir == "D") ST_n[tk] = 0; f = sf }
+		else if (dir == "D" && ++ST_n[tk] >= 8) {
+			if (f != sf && (f in F_seen)) drop_flow(f)
+			ST_cur[tk] = rip; ST_n[tk] = 0; F_moved[sf]++; f = sf
+			# the eight packets it took to be sure are not a freeze: measure gaps afresh from here
+			delete P_last[sf SUBSEP "D"]; delete P_last[sf SUBSEP "U"]
+			print "MOVED " F_sid[sf] " to " rip
+		} else if (f == sf) next
+	}
 	if (!(f in F_seen)) {
 		if (kindof(rport, rip) == "voice") { skip_note(rip, rport, t); next }
 		if (voicepending(rport, rip)) next
@@ -507,6 +526,9 @@ function drop_flow(f,    d, k, i, di) {
 	delete FT_n[f]; delete FTP_n[f]; delete F_ft0[f]; delete F_lobby[f]; delete F_unn[f]
 	delete F_early[f]; delete F_earlytxt[f]; delete F_near[f]; delete F_navg[f]
 	for (i = 0; i < TL; i++) delete TN[f, i]
+	stk = F_lip[f] ":" F_lport[f] ">" F_rport[f]
+	if (ST_f[stk] == f) { delete ST_f[stk]; delete ST_cur[stk]; delete ST_n[stk] }
+	delete F_moved[f]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -689,6 +711,9 @@ function session_start(f, sec,    d, k, i, di) {
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
 	F_pbn[f] = 0; F_pbv[f] = ""; F_pbc[f] = 0; pb_read()
+	F_moved[f] = 0
+	stk = F_lip[f] ":" F_lport[f] ">" F_rport[f]
+	if (!(stk in ST_f) || !(ST_f[stk] in F_seen) || !F_active[ST_f[stk]] || ST_f[stk] == f) { ST_f[stk] = f; ST_cur[stk] = F_rip[f]; ST_n[stk] = 0 }
 	F_unn[f] = (NGP > 0 && kindof(F_rport[f], F_rip[f]) == "") ? 1 : 0
 	print "START " F_sid[f] " " F_lip[f] " -> " F_rip[f] ":" F_rport[f]
 	if (!REPLAY) system(SELF " _probe_start " F_sid[f] " " F_rip[f] " " F_lip[f] " " F_rport[f] " " (kindof(F_rport[f], F_rip[f]) == "" ? "unnamed" : "named") " >/dev/null 2>&1 &")
@@ -969,6 +994,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		PBL = -1; for (i = 0; i <= 40; i++) if ((S_pb[kd, i] + 0) > 0) PBL = i
 		if (PBL >= 0) { dj = dj ",\"pb\":{\"h\":["; for (i = 0; i <= PBL; i++) dj = dj (i ? "," : "") (S_pb[kd, i] + 0); dj = dj "]}" }
 		if (PBJ != "") dj = dj ",\"pbuf\":" PBJ
+		if (F_moved[f] > 0) dj = dj ",\"moved\":" (F_moved[f] + 0)
 		if (QM != "") dj = dj ",\"qm\":" QM
 		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ

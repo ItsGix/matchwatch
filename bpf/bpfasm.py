@@ -25,6 +25,7 @@ class Asm:
     def rshi(self, d, i): self._e(0x77, d, 0, 0, i)
     def lshi(self, d, i): self._e(0x67, d, 0, 0, i)
     def ld64(self, d, s, off): self._e(0x79, d, s, off)     # d = *(u64 *)(s + off)
+    def ld32(self, d, s, off): self._e(0x61, d, s, off)     # d = *(u32 *)(s + off)
     def st64(self, d, off, s): self._e(0x7b, d, s, off)     # *(u64 *)(d + off) = s
     def st64i(self, d, off, i): self._e(0x7a, d, 0, off, i)
     def call(self, helper): self._e(0x85, 0, 0, 0, helper)

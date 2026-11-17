@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.43.2", reloading = false;
+var BUILT = "0.44.0", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1110,6 +1110,7 @@ function pbufBlock(m) {
 	if (!p.pkts) { b.appendChild(h("p", { cls: "lede low", text: "The buffer was set to " + p.ms + " ms but saw none of this match's packets, so nothing was held." })); return b; }
 	var pct = 100 * p.late / p.pkts;
 	b.appendChild(h("p", { cls: "lede " + (pct < 1 ? "ok" : "low"), text: "Held the server's updates by " + p.ms + " ms. " + (p.late ? p.late + " of " + p.pkts + " (" + fmt(pct, pct < 10 ? 1 : 0) + "%) arrived later than that and went straight through" : "None of the " + p.pkts + " arrived later than that") + "; the latest was " + fmt(p.worst, 0) + " ms behind the beat." }));
+	if (p.other || p.moved) b.appendChild(h("p", (p.moved ? "The match moved to another address " + p.moved + " time" + (p.moved === 1 ? "" : "s") + " and the buffer went with it. " : "") + (p.other ? p.other + " packets came from other addresses on the same port (the game's other route to the match) and were held by the same " + p.ms + " ms, so that every route looked alike to the game." : "")));
 	b.appendChild(h("p", { cls: "note", text: "The scores above are for the stream as your device received it, after the buffer. The average hold was " + fmt(p.hold, 1) + " ms, on a server sending every " + fmt(p.beat, 1) + " ms. Your game showed its ping about " + p.ms + " ms higher than the figure here, which is measured without the buffer." }));
 	return b;
 }
@@ -1247,6 +1248,7 @@ function pageMatch(id) {
 		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		var pbb = full ? (pbufBlock(m) || pbBlock(m)) : null; if (pbb) view.appendChild(pbb);
+		if (m.moved) view.appendChild(h("p", { cls: "note", text: "During this match the game moved to another address on the same port " + m.moved + " time" + (m.moved === 1 ? "" : "s") + " and carried on: a second route to the same match. MatchWatch kept it as one match; the server named above is the one it began on." }));
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }
@@ -1997,7 +1999,7 @@ function pageTools() {
 				if (!(v >= 5 && v <= 100)) { toast("Give a figure from 5 to 100 ms.", true); return; }
 				api("pbhold", String(v)).then(function (j) { pbNum.value = ""; if (!j.ok) toast(j.error || j.out || "That did not work.", true); else pbAgain(j.out); });
 			});
-			view.appendChild(tool("Ping buffer", "Holds the server's updates back by a set time during matches, so that late ones can catch up and your game receives an even beat. It costs that much ping in every fight, so run the rehearsal below first: on a steady line it only adds delay. Only the match's own stream is held, on its way to your device; the pings a game uses to choose a server are never touched. Your game will show its ping higher by the buffer, while MatchWatch's own ping figure stays as it is.",
+			view.appendChild(tool("Ping buffer", "Holds the server's updates back by a set time during matches, so that late ones can catch up and your game receives an even beat. It costs that much ping in every fight, so run the rehearsal below first: on a steady line it only adds delay. What is held: from a minute into a match until it ends, everything arriving from the match's port for your device, whichever address sends it. A game can have more than one route to a match, so all of them are held alike, and the game sees each as slower by the buffer; a server ping the game sends on that same port during a match reads slower too. Pings on other ports, everything between matches and everything your device sends are left alone. Your game will show its ping higher by the buffer, while MatchWatch's own ping figure stays as it is.",
 				h("p", { cls: "note", text: pbState }),
 				pbv.can === false ? null : h("div", { cls: "actions" }, pbNum, pbGo, act("Size it for me", "pbauto", null, { done: pbAgain }), pbv.set ? act("Switch it off", "pboff", null, { done: pbAgain }) : null),
 				// what it needs is four packages from OpenWrt's own list. Installing takes a minute, so these are slow tools: pressed twice, then waited for

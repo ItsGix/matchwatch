@@ -15,7 +15,9 @@ from bpfasm import *
 G, LAST_ARR, LAST_REL, T, E_PREV, WIN_N, WIN_MIN, SPARE, C_LATE = 0, 8, 16, 24, 32, 40, 48, 56, 64
 N_PKTS, N_HELD, N_LATE, SUM_HOLD, MAX_E, N_RESYNC, N_SAME = 72, 80, 88, 96, 104, 112, 120
 SLOT, W_TMIN, W_SMIN, P_TMIN, P_SMIN, TM, T0_SEEN, ALIGN = 128, 136, 144, 152, 160, 168, 176, 184
-BSS_SIZE = 192
+MAIN, OTH_N, N_OTHER, N_SWITCH = 192, 200, 208, 216
+BSS_SIZE = 224
+DATA, DATA_END, SADDR = 76, 80, 26   # __sk_buff's data and data_end; the source address in an Ethernet frame
 TSTAMP = 152          # offsetof(struct __sk_buff, tstamp)
 WIN = 32              # updates per correction window
 MAXB = 200_000_000    # the program never holds longer than this, whatever it is told
@@ -34,6 +36,30 @@ def build():
     a.jeqi(R5, 0, "out")
     a.movi(R1, MAXB); a.jle(R5, R1, "okb"); a.mov(R5, R1)
     a.label("okb")
+    # Since 0.44.0 the filter takes everything from the match's port to the device, whatever address it comes
+    # from, because a game can have more than one route to a match (Call of Duty moved to its other one
+    # thirteen seconds after one alone was held). One sender is the match: its updates get the grid below.
+    # Anything else on the port gets a plain hold of the same size, so every route looks the same to the
+    # game. Eight packets in a row from another sender and none from the match: the match has moved there.
+    a.ld32(R1, R6, DATA); a.ld32(R2, R6, DATA_END)
+    a.mov(R3, R1); a.addi(R3, 34); a.jgt(R3, R2, "main")
+    a.ld32(R3, R1, SADDR)
+    a.ld64(R1, R9, MAIN); a.jnei(R1, 0, "hm")
+    a.st64(R9, MAIN, R3); a.mov(R1, R3)
+    a.label("hm")
+    a.jeq(R1, R3, "ismain")
+    a.ld64(R1, R9, OTH_N); a.addi(R1, 1); a.st64(R9, OTH_N, R1)
+    a.jslti(R1, 8, "plain")
+    a.st64(R9, MAIN, R3); a.st64i(R9, OTH_N, 0); a.st64i(R9, G, 0)
+    inc(N_SWITCH)
+    a.ja("main")
+    a.label("plain")
+    inc(N_OTHER)
+    a.mov(R1, R7); a.add(R1, R5); a.st64(R6, TSTAMP, R1)
+    a.ja("out")
+    a.label("ismain")
+    a.st64i(R9, OTH_N, 0)
+    a.label("main")
     a.ld64(R4, R9, T)                       # r4 = T
     a.ld64(R3, R8, 0); a.jeqi(R3, 0, "out")
     # The beat it is given is only where to start. From then on the program follows the beat it sees itself,
