@@ -2726,7 +2726,7 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	[ -z "$(pb_why)" ] || return 0
 	find_ifaces
 	[ -n "$LAN_IF" ] || return 1
-	local f1 f2 f3 f4; read -r f1 f2 f3 f4 < "$RUN/pb.flow" 2>/dev/null
+	local f1 f2 f3 f4; [ -s "$RUN/pb.flow" ] && read -r f1 f2 f3 f4 < "$RUN/pb.flow"
 	if [ "$f2 $f3 $f4" = "$rport $lip $lport" ] && pb_ids; then
 		# held already. The engine asks every minute, with a beat it measured after the buffer: giving the
 		# program that again would restart its grid, so only a new size or a beat far from the old one is passed on
