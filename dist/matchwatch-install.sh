@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.0"
+VERSION="0.47.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -3781,6 +3781,7 @@ cmd_report() {
 	echo "device=${DEVICE_IP:-every device} lan_if=${LAN_IF:-detected} wan_if=${WAN_IF:-detected} data=$DATA"
 	echo "ignore_ports=$IGNORE_PORTS only_filter=${ONLY_FILTER:-none} min_down=$MIN_DOWN_PPS min_up=$MIN_UP_PPS"
 	echo "geo=$GEO web=$WEB phone_alerts=$( [ -n "$NTFY_URL" ] && echo set || echo no ) autoblock=$AUTOBLOCK stay_strict=$STAY_STRICT stay_ranges=$STAY_RANGES match_mode=$MATCH_MODE net_watch=$NET_WATCH early_warn=$EARLY_WARN update_check=$UPDATE_CHECK"
+	echo "ping buffer: set=$(pb_want) can=$( w="$(pb_why)"; echo "${w:-yes}" ) holding=$( [ -s "$RUN/pb.set" ] && echo yes || echo no )   router clock: $(date +%s) (a page that says not running while this says Running means the viewing device's clock differs)"
 	echo "places stayed on: $(cnt "$DATA/stay")   ping range: $(cat "$DATA/pingrange" 2>/dev/null || echo none)   strict games: $(cnt "$DATA/hold")   blocks: $(cnt "$DATA/blocklist")"
 	echo
 	echo "== Self-check"
@@ -5991,7 +5992,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.0", reloading = false;
+var BUILT = "0.47.1", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -8034,13 +8035,22 @@ function route(keep) { // keep === true: a redraw with fresh data, so stay where
 	if (keep !== true) window.scrollTo(0, 0);
 }
 // Is the service running? "stopped" is written by the service as it stops and "starting" as it starts, so
-// neither depends on the clocks; "off" is no sign of life: no file, or one the engine has not touched for 20 s.
+// neither depends on the clocks; "off" is no sign of life: no file, or one the engine has stopped touching.
+// Whether it is being touched is judged by its time moving on from one read to the next, not by comparing
+// that time with this device's clock (0.47.1): a friend of the owner had a running service, three matches
+// recorded that evening, and a page that said it was not running, which is what a PC clock more than twenty
+// seconds from the router's does. Only when the two clocks agree is the file's own time taken at its word.
+var SV = { ts: 0, at: 0, moved: false };
 function svcState() {
-	var st = D.st;
+	var st = D.st, now = Date.now();
 	if (!st) return "off";
 	if (st.stopped) return "stopped";
 	if (st.starting) return "starting";
-	return (!st.ts || Date.now() / 1000 - st.ts > 20) ? "off" : "on";
+	if (!st.ts) return "off";
+	if (st.ts !== SV.ts) { if (SV.ts) SV.moved = true; SV.ts = st.ts; SV.at = now; }
+	if (Math.abs(now / 1000 - st.ts) <= 20) return "on";
+	if (SV.moved) return now - SV.at <= 20000 ? "on" : "off";
+	return now - SV.at <= 5000 ? "starting" : "off";     // the first few reads: not yet seen to move
 }
 function setState() {
 	var e = shadow.getElementById("state"), st = D.st, s = session(), v = svcState();

@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.0"
+VERSION="0.47.1"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -3726,6 +3726,7 @@ cmd_report() {
 	echo "device=${DEVICE_IP:-every device} lan_if=${LAN_IF:-detected} wan_if=${WAN_IF:-detected} data=$DATA"
 	echo "ignore_ports=$IGNORE_PORTS only_filter=${ONLY_FILTER:-none} min_down=$MIN_DOWN_PPS min_up=$MIN_UP_PPS"
 	echo "geo=$GEO web=$WEB phone_alerts=$( [ -n "$NTFY_URL" ] && echo set || echo no ) autoblock=$AUTOBLOCK stay_strict=$STAY_STRICT stay_ranges=$STAY_RANGES match_mode=$MATCH_MODE net_watch=$NET_WATCH early_warn=$EARLY_WARN update_check=$UPDATE_CHECK"
+	echo "ping buffer: set=$(pb_want) can=$( w="$(pb_why)"; echo "${w:-yes}" ) holding=$( [ -s "$RUN/pb.set" ] && echo yes || echo no )   router clock: $(date +%s) (a page that says not running while this says Running means the viewing device's clock differs)"
 	echo "places stayed on: $(cnt "$DATA/stay")   ping range: $(cat "$DATA/pingrange" 2>/dev/null || echo none)   strict games: $(cnt "$DATA/hold")   blocks: $(cnt "$DATA/blocklist")"
 	echo
 	echo "== Self-check"
