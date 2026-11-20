@@ -7,7 +7,7 @@
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.2"
+VERSION="0.47.3"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1898,7 +1898,7 @@ cmd_hold() { # on <game> | off <game> | (nothing = list)
 # are never written. Everything fails towards QoSmate's own rates: stopping MatchWatch, starting it, or
 # switching match mode off all put them back, and so does anything that restarts QoSmate.
 # Speeds are in kbit; nothing, or 0, means the default for that slot.
-mm_num() { case "$1" in ""|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+mm_num() { local v="$1"; case "$v" in ""|*[!0-9]*) echo 0 ;; *) while [ "${#v}" -gt 1 ] && [ "${v#0}" != "$v" ]; do v="${v#0}"; done; echo "$v" ;; esac; }
 # MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 300 unless the owner chose otherwise).
 # The owner asked for a choice, tried 30 seconds as the default, and found that too quick: five minutes covers
 # the gap between matches. 0 means as soon as the match is seen to have ended.
@@ -2631,7 +2631,7 @@ pb_want() { # what the owner asked for: 0, a number of ms, or auto
 	case "$v" in
 		auto) echo auto ;;
 		""|*[!0-9]*) echo 0 ;;
-		*) if [ "$v" -ge 5 ] && [ "$v" -le 100 ]; then echo "$v"; else echo 0; fi ;;
+		*) v="$(mm_num "$v")"; if [ "$v" -ge 5 ] && [ "$v" -le 100 ]; then echo "$v"; else echo 0; fi ;;
 	esac
 }
 pb_mod() { local k; k="$(uname -r)"; [ -d "/sys/module/$1" ] || [ -e "/lib/modules/$k/$1.ko" ] || grep -q "/$1\.ko" "/lib/modules/$k/modules.builtin" 2>/dev/null; }
@@ -2719,6 +2719,7 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	local rip="$1" rport="$2" lip="$3" lport="$4" beat="$5" ms
 	is_ipv4 "$rip" && is_ipv4 "$lip" || return 1
 	case "$rport$lport$beat" in ""|*[!0-9]*) return 1 ;; esac
+	svc_running || return 0
 	[ "$beat" -ge 2000 ] && [ "$beat" -le 200000 ] || return 0
 	ms="$(pb_ms)"; ms="$(mm_num "$ms")"
 	if [ "$ms" -lt 5 ]; then [ -s "$RUN/pb.flow" ] && pb_drop; return 0; fi
@@ -2751,6 +2752,7 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	fi
 	echo "$rip $rport $lip $lport" > "$RUN/pb.flow"; date +%s > "$RUN/pb.since"
 	if ! pb_param "$beat" "$ms"; then pb_drop; pb_log "could not set its program, so nothing is held"; return 1; fi
+	if ! svc_running; then pb_clear; return 0; fi
 	pb_log "holding this match by $ms ms: everything from port $rport to the device (the server sends every $((beat / 1000)) ms)"
 	pb_json
 }
@@ -3190,7 +3192,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		matchgame) [ -n "$arg" ] || die "choose a match"; cmd_matchgame "$arg" "$name" "$days" ;;
 		matchmodeoff) cmd_matchmode off ;;
 		# four speeds in kbit from the dashboard, as playing-down/playing-up/between-down/between-up
-		matchmodeset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
+		matchmodeset) set -- $(echo "$arg" | sed 's#^/#0/#; s#//#/0/#g; s#//#/0/#g; s#/$#/0#' | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
 		holdon) [ -n "$name" ] || die "choose a game"; cmd_hold on "$name" ;;
 		holdoff) [ -n "$name" ] || die "choose a game"; cmd_hold off "$name" ;;
 		unallow) cmd_allow remove "$arg" ;;

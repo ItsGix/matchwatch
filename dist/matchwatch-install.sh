@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.2"
+VERSION="0.47.3"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -1953,7 +1953,7 @@ cmd_hold() { # on <game> | off <game> | (nothing = list)
 # are never written. Everything fails towards QoSmate's own rates: stopping MatchWatch, starting it, or
 # switching match mode off all put them back, and so does anything that restarts QoSmate.
 # Speeds are in kbit; nothing, or 0, means the default for that slot.
-mm_num() { case "$1" in ""|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+mm_num() { local v="$1"; case "$v" in ""|*[!0-9]*) echo 0 ;; *) while [ "${#v}" -gt 1 ] && [ "${v#0}" != "$v" ]; do v="${v#0}"; done; echo "$v" ;; esac; }
 # MM_HOLD: seconds after a match ends before the between-matches speeds apply (mm_hold, 300 unless the owner chose otherwise).
 # The owner asked for a choice, tried 30 seconds as the default, and found that too quick: five minutes covers
 # the gap between matches. 0 means as soon as the match is seen to have ended.
@@ -2686,7 +2686,7 @@ pb_want() { # what the owner asked for: 0, a number of ms, or auto
 	case "$v" in
 		auto) echo auto ;;
 		""|*[!0-9]*) echo 0 ;;
-		*) if [ "$v" -ge 5 ] && [ "$v" -le 100 ]; then echo "$v"; else echo 0; fi ;;
+		*) v="$(mm_num "$v")"; if [ "$v" -ge 5 ] && [ "$v" -le 100 ]; then echo "$v"; else echo 0; fi ;;
 	esac
 }
 pb_mod() { local k; k="$(uname -r)"; [ -d "/sys/module/$1" ] || [ -e "/lib/modules/$k/$1.ko" ] || grep -q "/$1\.ko" "/lib/modules/$k/modules.builtin" 2>/dev/null; }
@@ -2774,6 +2774,7 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	local rip="$1" rport="$2" lip="$3" lport="$4" beat="$5" ms
 	is_ipv4 "$rip" && is_ipv4 "$lip" || return 1
 	case "$rport$lport$beat" in ""|*[!0-9]*) return 1 ;; esac
+	svc_running || return 0
 	[ "$beat" -ge 2000 ] && [ "$beat" -le 200000 ] || return 0
 	ms="$(pb_ms)"; ms="$(mm_num "$ms")"
 	if [ "$ms" -lt 5 ]; then [ -s "$RUN/pb.flow" ] && pb_drop; return 0; fi
@@ -2806,6 +2807,7 @@ cmd_pb_on() { # <server> <its port> <device> <its port> <beat in microseconds>: 
 	fi
 	echo "$rip $rport $lip $lport" > "$RUN/pb.flow"; date +%s > "$RUN/pb.since"
 	if ! pb_param "$beat" "$ms"; then pb_drop; pb_log "could not set its program, so nothing is held"; return 1; fi
+	if ! svc_running; then pb_clear; return 0; fi
 	pb_log "holding this match by $ms ms: everything from port $rport to the device (the server sends every $((beat / 1000)) ms)"
 	pb_json
 }
@@ -3245,7 +3247,7 @@ cmd_action() { # action [arg] [days] [place] [name] : prints the result; a non-z
 		matchgame) [ -n "$arg" ] || die "choose a match"; cmd_matchgame "$arg" "$name" "$days" ;;
 		matchmodeoff) cmd_matchmode off ;;
 		# four speeds in kbit from the dashboard, as playing-down/playing-up/between-down/between-up
-		matchmodeset) set -- $(echo "$arg" | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
+		matchmodeset) set -- $(echo "$arg" | sed 's#^/#0/#; s#//#/0/#g; s#//#/0/#g; s#/$#/0#' | tr '/' ' '); [ $# = 4 ] || [ $# = 5 ] || die "that is not four speeds"; cmd_matchmode speeds "$@" ;;
 		holdon) [ -n "$name" ] || die "choose a game"; cmd_hold on "$name" ;;
 		holdoff) [ -n "$name" ] || die "choose a game"; cmd_hold off "$name" ;;
 		unallow) cmd_allow remove "$arg" ;;
@@ -4078,11 +4080,13 @@ $2 == "IP" && $4 == ">" {
 	tk = lip ":" lport ">" rport
 	if (tk in ST_f) {
 		sf = ST_f[tk]
-		if (!(sf in F_seen) || !F_active[sf]) { delete ST_f[tk]; delete ST_cur[tk]; delete ST_n[tk] }
+		if (!(sf in F_seen) || !F_active[sf]) { delete ST_f[tk]; delete ST_cur[tk]; delete ST_n[tk]; delete ST_c[tk]; delete ST_t[tk] }
 		else if (rip == ST_cur[tk]) { if (dir == "D") ST_n[tk] = 0; f = sf }
-		else if (dir == "D" && ++ST_n[tk] >= 8) {
+		else if (f != sf && (f in F_seen) && F_active[f]) { }      # a session of its own on the same ports: leave both be
+		else if (F_moved[sf] >= 6) { if (f == sf) next }  # see below: not a match that moved
+		else if (dir == "D" && st_count(tk, rip, t) >= 8) {
 			if (f != sf && (f in F_seen)) drop_flow(f)
-			ST_cur[tk] = rip; ST_n[tk] = 0; F_moved[sf]++; f = sf
+			ST_cur[tk] = rip; ST_n[tk] = 0; delete ST_c[tk]; F_moved[sf]++; f = sf
 			# the eight packets it took to be sure are not a freeze: measure gaps afresh from here
 			delete P_last[sf SUBSEP "D"]; delete P_last[sf SUBSEP "U"]
 			print "MOVED " F_sid[sf] " to " rip
@@ -4465,12 +4469,24 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 	for (i = 1; i <= nd; i++) drop_flow(DROP_list[i])
 }
 
-function drop_flow(f,    d, k, i, di) {
+# The eight packets that carry a session to another address must all come from that one address, inside
+# two seconds (0.47.3). Counted from any address and with no limit of time, a torrent download on the
+# owner's PC became one "match" that hopped between twenty peers for as long as it ran: each time the peer
+# it was on went quiet, the next eight packets from anyone carried it on. A game handing a match over sends
+# its whole stream from the new address, eight packets in well under a second. A session that has already
+# moved six times is left where it is (Call of Duty was seen to move two or three times).
+function st_count(tk, rip, t) {
+	if (ST_c[tk] != rip || t - ST_t[tk] > 2) { ST_c[tk] = rip; ST_t[tk] = t; ST_n[tk] = 0 }
+	return ++ST_n[tk]
+}
+
+function drop_flow(f,    d, k, i, di, stk) {
 	for (di = 1; di <= 2; di++) {
 		d = (di == 1) ? "D" : "U"; k = f SUBSEP d
 		for (i = 0; i <= W_n[k] + 0; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 		for (i = 1; i <= S_rn[k] + 0; i++) delete S_rate[k, i]
 		delete W_n[k]; delete W_tight[k]; delete P_last[k]; delete P_tick[k]; delete P_nom[k]; delete B_ref[k]; delete S_extra[k]
+		delete B_tg[k]; delete B_age[k]; for (i = 0; i <= 40; i++) delete S_pb[k, i]
 		delete Q_cnt[k]; delete Q_max[k]; delete S_bytes[k]; delete S_pk[k]
 		delete S_ticks[k]; delete S_late[k]; delete S_lost[k]; delete S_dly[k]; delete S_gaps[k]
 		delete S_frz[k]; delete S_stut[k]; delete S_dev[k]; delete S_devn[k]; delete S_win[k]; delete S_bad[k]
@@ -4487,8 +4503,8 @@ function drop_flow(f,    d, k, i, di) {
 	delete F_early[f]; delete F_earlytxt[f]; delete F_near[f]; delete F_navg[f]
 	for (i = 0; i < TL; i++) delete TN[f, i]
 	stk = F_lip[f] ":" F_lport[f] ">" F_rport[f]
-	if (ST_f[stk] == f) { delete ST_f[stk]; delete ST_cur[stk]; delete ST_n[stk] }
-	delete F_moved[f]
+	if ((stk in ST_f) && ST_f[stk] == f) { delete ST_f[stk]; delete ST_cur[stk]; delete ST_n[stk]; delete ST_c[stk]; delete ST_t[stk] }
+	delete F_moved[f]; delete F_pbn[f]; delete F_pbv[f]; delete F_pbc[f]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -4598,9 +4614,18 @@ function median_iv(k, n,    i, b, c, half) {
 # is read against the kept beat: an arrival is an update when it is the one nearest a whole beat after the
 # update before it, and the rest are left out. A server that really changed its rate is steady at the new
 # one, or fails the check at the end, and is judged as before.
-function extras_out(k, n, ref,    i, j, acc, a2, best, bacc, m, ok, tsum) {
-	acc = 0; m = 0; ok = 0; tsum = 0
+# What is left out must not be the stream itself (0.47.3). A server that went from 20 updates a second in the
+# lobby to a rough 60 in the match was read against the lobby's beat: every third packet was "the update",
+# the rest "extras", and a match missing 4.5% of its updates scored 96. Two guards. Where the server's
+# updates are more than one packet each (B_tg, from the steady window), what is left out must be mostly
+# single packets, as the real extras were, which a faster stream of the same updates is not. Where updates
+# are single packets there is nothing to tell them apart by, so the kept beat is only trusted for a minute
+# (B_age, in windows) after the last steady window: extras come and go, a change of rate stays.
+function extras_out(k, n, ref,    i, j, acc, a2, best, bacc, m, ok, tsum, all) {
+	if (B_tg[k] < 0.5 && B_age[k] > 12) return n
+	acc = 0; m = 0; ok = 0; tsum = 0; all = 0
 	for (i = 1; i <= n; i++) {
+		all += W_tg[k, i]
 		acc += W_iv[k, i]
 		if (acc < 0.75 * ref) continue
 		best = i; bacc = acc
@@ -4616,6 +4641,7 @@ function extras_out(k, n, ref,    i, j, acc, a2, best, bacc, m, ok, tsum) {
 		i = best; acc = 0
 	}
 	if (m < 3 || ok < 0.8 * m) return n
+	if (B_tg[k] >= 0.5 && n > m && (all - tsum) / (n - m) > 0.5 * tsum / m) return n
 	for (i = 1; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 	for (i = 1; i <= m; i++) { W_iv[k, i] = X_iv[i]; W_tg[k, i] = X_tg[i] }
 	W_tight[k] = tsum + W_tg[k, 0]
@@ -4682,7 +4708,10 @@ function window_end(f, d,    k, n, n0, i, x, nom, base, late, lost, dly, gaps, f
 		}
 	}
 	if (nom > 0) P_nom[k] = nom
-	if (d == "D" && reg >= 0.8 && !trans && rate >= minr) B_ref[k] = nom
+	if (d == "D") {
+		if (reg >= 0.8 && !trans && rate >= minr) { B_ref[k] = nom; B_tg[k] = W_tight[k] / n; B_age[k] = 0 }
+		else B_age[k]++
+	}
 	# not in a stream's first minute (a pre-game lobby lasts about forty seconds): a game in its lobby keeps other servers to hand, and holding the
 	# one it is on makes that one look slower than the rest (seen: Call of Duty hopping between two every 15 s)
 	if (d == "D" && F_active[f] && nom > 0 && rate >= minr && S_win[k] >= 12) pb_ask(f, nom)
@@ -5498,7 +5527,8 @@ END {
 		printf "["
 		for (i = 1; i <= ns; i++) {
 			ip = idx[i]
-			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = pool_in(S_lat[ip], S_lon[ip], S_cc[ip], P24own[p24(ip)])) == "" ? "null" : (w ? "true" : "false")), ((ip in S_lat) ? S_lat[ip] + 0 : "null"), ((ip in S_lon) ? S_lon[ip] + 0 : "null")
+			hla = ((ip in S_lat) && S_lat[ip] != ""); hlo = ((ip in S_lon) && S_lon[ip] != "")
+			printf "%s{\"ip\":%s,\"cc\":%s,\"city\":%s,\"org\":%s,\"matches\":%d,\"counted\":%d,\"rating\":%d,\"worst\":%d,\"tick\":%.1f,\"ping\":%s,\"last\":%d,\"minutes\":%d,\"blocked\":%s,\"in\":%s,\"lat\":%s,\"lon\":%s}", (i > 1 ? "," : ""), q(ip), q(S_cc[ip]), q(S_city[ip]), q(S_org[ip]), S_n[ip], S_rn[ip] + 0, srating(ip), S_worst[ip], S_tick[ip] / S_n[ip], (S_pingn[ip] > 0 ? sprintf("%.1f", S_ping[ip] / S_pingn[ip]) : "null"), S_last[ip], S_secs[ip] / 60, (blocked(ip) ? "true" : "false"), ((w = pool_in(S_lat[ip], S_lon[ip], S_cc[ip], P24own[p24(ip)])) == "" ? "null" : (w ? "true" : "false")), (hla ? S_lat[ip] + 0 : "null"), (hlo ? S_lon[ip] + 0 : "null")
 		}
 		print "]"
 		exit
@@ -6037,7 +6067,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.2", reloading = false;
+var BUILT = "0.47.3", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6769,7 +6799,7 @@ function mmSpeeds(mm, again) {
 	save.addEventListener("click", function () {
 		var k = function (key, dir) { var v = val[key] || 0; return v === own[dir] && key.indexOf("on_") === 0 ? 0 : v; };   // QoSmate's own rate is stored as "follow QoSmate"
 		if ((dl && !val.on_down) || !val.on_up || (limited && ((dl && !val.off_down) || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
-		send([k("on_down", "down"), k("on_up", "up"), limited ? val.off_down : 0, limited ? val.off_up : 0, hold].join("/"), save);
+		send([k("on_down", "down"), k("on_up", "up"), limited ? (val.off_down || 0) : 0, limited ? (val.off_up || 0) : 0, hold].join("/"), save);
 	});
 	reset.addEventListener("click", function () { send("0/0/0/0/300", reset); });
 	box.appendChild(h("div", { cls: "speedgrid" }, play, rest));
@@ -7030,7 +7060,7 @@ function proofCard(m) {
 	g.fillStyle = "#143038"; g.fillRect(0, 0, W, 92);
 	g.fillStyle = "#e9f3f2"; g.font = "700 34px " + F; g.textBaseline = "middle"; g.fillText("matchwatch", 56, 47);
 	g.fillStyle = "#8fa3a8"; g.font = "400 24px " + F; g.textAlign = "right";
-	g.fillText([m.game || "", place(m) || "", m.t0 ? when(m.t0) : ""].filter(Boolean).join("  |  "), W - 56, 47); g.textAlign = "left";
+	g.fillText([m.game || m.label || "", place(m) || "", m.t0 ? when(m.t0) : ""].filter(Boolean).join("  |  "), W - 56, 47); g.textAlign = "left";
 	// the overall score, large, and the verdict beside it
 	g.fillStyle = cardColour(m.overall); g.font = "700 150px " + F; g.textBaseline = "alphabetic"; g.fillText(String(m.overall), 56, 262);
 	var sw = g.measureText(String(m.overall)).width;
@@ -7049,7 +7079,7 @@ function proofCard(m) {
 		g.fillStyle = cardColour(p[1]); g.font = "700 56px " + F; g.fillText(p[1] == null ? "n/a" : String(Math.round(p[1])), bx + 28, by + 104);
 	});
 	// how late the server's updates were, second by second
-	var raw = m.tl_d || [], dnom = m.nom ? 1000 / m.nom : median(raw), d = raw.map(function (v) { return v >= 1000 ? 0 : Math.max(0, v - dnom); }), feltC = Math.max(30, dnom);
+	var raw = m.tl_d || [], dnom = m.nom || median(raw), d = raw.map(function (v) { return v >= 1000 ? 0 : Math.max(0, v - dnom); }), feltC = Math.max(30, dnom);
 	var n = d.length, top = 0, gx = 56, gy = 590, gw = W - 112, gh = 100;
 	for (i = 0; i < n; i++) if (d[i] > top) top = d[i];
 	top = Math.max(top, 60);
@@ -7170,7 +7200,7 @@ function qmBlock(m) {
 	b.appendChild(h("p", { cls: "lede " + (bad ? "low" : "ok"), text: bad
 		? "QoSmate's queue held your game up: " + drops + " packet" + (drops === 1 ? "" : "s") + " dropped, longest wait " + fmt(peak, 1) + " ms. That happened on your router, not at the server."
 		: "QoSmate did its job. Your game's queue dropped nothing, and its longest wait was " + fmt(peak, 1) + " ms." }));
-	if (!top) b.appendChild(h("p", { cls: "note", text: "Your game was not in the top priority queue, so it shared a queue with everything else on your line. See QoSmate priority under Tools, Data and settings." }));
+	if (!top) b.appendChild(h("p", { cls: "note", text: "Your game was not in the top priority queue, so it shared a queue with everything else on your line. See Prioritise my game traffic under Tools, Connection." }));
 	else b.appendChild(h("p", { cls: "note", text: held ? "Other traffic was heavy enough to be held back " + held + " time" + (held === 1 ? "" : "s") + " while your game went ahead of it." : "Nothing else on your line needed holding back." }));
 	var rows = [["Sent by your game's queue", gu.pkts + " packets", gu.drops + " dropped, longest wait " + fmt(gu.peak, 1) + " ms"]];
 	if (gd) rows.push(["Received by your game's queue", gd.pkts + " packets", gd.drops + " dropped, longest wait " + fmt(gd.peak, 1) + " ms"]);
@@ -7207,7 +7237,7 @@ function pageMatch(id) {
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
 		if (m.outside) {
 			// this match was played on a server outside the places being stayed on: say so, and why it was not turned away
-			var og = m.game || "this game", why = m.outside === "allowed" ? "You added this server to the pool yourself, so it is always let through."
+			var og = m.game || m.label || "this game", why = m.outside === "allowed" ? "You added this server to the pool yourself, so it is always let through."
 				: m.outside === "port" ? og + " is known by its port alone, and no match had been played on this port or address block before, so MatchWatch could not be sure it was the game. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to stop the first one too."
 				: m.outside === "relay" ? "It is on a network " + og + " uses for its relays, and MatchWatch never turns a game's relay away: with its relay refused, the game is left trying to connect to it."
 				: m.outside === "host" ? "It connected in the moment before it could be looked up, or your places changed while you were playing. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to hold new servers until they have been placed."

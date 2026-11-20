@@ -84,6 +84,21 @@ elif sc in ("extras","extraslost","faster"):
         for b in (30,90,150,210):
             for i in range(600): out.append(line(T0+b+random.random()*30,SRV,30120,PC,3074,random.randint(200,600)))
     stream(out,True,60,240)
+elif sc=="peers":
+    # not a match: eight peers on one port, each sending for forty seconds and then going quiet, with a few
+    # packets from the others all the while (a torrent). It must not come out as one match that moved seven times.
+    for p in range(8):
+        s=f"198.51.100.{10+p}"
+        stream(out,False,40,40,start=p*40,jit=0.004,srv=s,sport=51413,lport=51413); stream(out,True,20,40,start=p*40,srv=s,sport=51413,lport=51413)
+        for i in range(160): out.append(line(T0+random.random()*320,s,51413,PC,51413,random.randint(60,300)))
+elif sc=="twomatches":
+    # two servers on the same two ports at once, the first stalling for 0.6 s: two matches, neither swallowing the other
+    stream(out,False,30,120,jit=0.001,freezes=[(60,0.6)]); stream(out,True,60,120)
+    stream(out,False,30,100,jit=0.001,start=20,srv="203.0.113.9"); stream(out,True,60,100,start=20,srv="203.0.113.9")
+elif sc=="lobbyrough":
+    # a steady 20 a second in the lobby, then a rough 60 a second for the match: the lobby's beat must not turn
+    # two packets in three into "extras" and the match into a clean one
+    stream(out,False,20,60,jit=0.001); stream(out,False,60,240,jit=0.005,loss=0.05,start=60); stream(out,True,60,300)
 elif sc=="short":
     stream(out,False,60,22); stream(out,True,60,22)
 out.sort()

@@ -118,11 +118,13 @@ $2 == "IP" && $4 == ">" {
 	tk = lip ":" lport ">" rport
 	if (tk in ST_f) {
 		sf = ST_f[tk]
-		if (!(sf in F_seen) || !F_active[sf]) { delete ST_f[tk]; delete ST_cur[tk]; delete ST_n[tk] }
+		if (!(sf in F_seen) || !F_active[sf]) { delete ST_f[tk]; delete ST_cur[tk]; delete ST_n[tk]; delete ST_c[tk]; delete ST_t[tk] }
 		else if (rip == ST_cur[tk]) { if (dir == "D") ST_n[tk] = 0; f = sf }
-		else if (dir == "D" && ++ST_n[tk] >= 8) {
+		else if (f != sf && (f in F_seen) && F_active[f]) { }      # a session of its own on the same ports: leave both be
+		else if (F_moved[sf] >= 6) { if (f == sf) next }  # see below: not a match that moved
+		else if (dir == "D" && st_count(tk, rip, t) >= 8) {
 			if (f != sf && (f in F_seen)) drop_flow(f)
-			ST_cur[tk] = rip; ST_n[tk] = 0; F_moved[sf]++; f = sf
+			ST_cur[tk] = rip; ST_n[tk] = 0; delete ST_c[tk]; F_moved[sf]++; f = sf
 			# the eight packets it took to be sure are not a freeze: measure gaps afresh from here
 			delete P_last[sf SUBSEP "D"]; delete P_last[sf SUBSEP "U"]
 			print "MOVED " F_sid[sf] " to " rip
@@ -505,12 +507,24 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 	for (i = 1; i <= nd; i++) drop_flow(DROP_list[i])
 }
 
-function drop_flow(f,    d, k, i, di) {
+# The eight packets that carry a session to another address must all come from that one address, inside
+# two seconds (0.47.3). Counted from any address and with no limit of time, a torrent download on the
+# owner's PC became one "match" that hopped between twenty peers for as long as it ran: each time the peer
+# it was on went quiet, the next eight packets from anyone carried it on. A game handing a match over sends
+# its whole stream from the new address, eight packets in well under a second. A session that has already
+# moved six times is left where it is (Call of Duty was seen to move two or three times).
+function st_count(tk, rip, t) {
+	if (ST_c[tk] != rip || t - ST_t[tk] > 2) { ST_c[tk] = rip; ST_t[tk] = t; ST_n[tk] = 0 }
+	return ++ST_n[tk]
+}
+
+function drop_flow(f,    d, k, i, di, stk) {
 	for (di = 1; di <= 2; di++) {
 		d = (di == 1) ? "D" : "U"; k = f SUBSEP d
 		for (i = 0; i <= W_n[k] + 0; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 		for (i = 1; i <= S_rn[k] + 0; i++) delete S_rate[k, i]
 		delete W_n[k]; delete W_tight[k]; delete P_last[k]; delete P_tick[k]; delete P_nom[k]; delete B_ref[k]; delete S_extra[k]
+		delete B_tg[k]; delete B_age[k]; for (i = 0; i <= 40; i++) delete S_pb[k, i]
 		delete Q_cnt[k]; delete Q_max[k]; delete S_bytes[k]; delete S_pk[k]
 		delete S_ticks[k]; delete S_late[k]; delete S_lost[k]; delete S_dly[k]; delete S_gaps[k]
 		delete S_frz[k]; delete S_stut[k]; delete S_dev[k]; delete S_devn[k]; delete S_win[k]; delete S_bad[k]
@@ -527,8 +541,8 @@ function drop_flow(f,    d, k, i, di) {
 	delete F_early[f]; delete F_earlytxt[f]; delete F_near[f]; delete F_navg[f]
 	for (i = 0; i < TL; i++) delete TN[f, i]
 	stk = F_lip[f] ":" F_lport[f] ">" F_rport[f]
-	if (ST_f[stk] == f) { delete ST_f[stk]; delete ST_cur[stk]; delete ST_n[stk] }
-	delete F_moved[f]
+	if ((stk in ST_f) && ST_f[stk] == f) { delete ST_f[stk]; delete ST_cur[stk]; delete ST_n[stk]; delete ST_c[stk]; delete ST_t[stk] }
+	delete F_moved[f]; delete F_pbn[f]; delete F_pbv[f]; delete F_pbc[f]
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -638,9 +652,18 @@ function median_iv(k, n,    i, b, c, half) {
 # is read against the kept beat: an arrival is an update when it is the one nearest a whole beat after the
 # update before it, and the rest are left out. A server that really changed its rate is steady at the new
 # one, or fails the check at the end, and is judged as before.
-function extras_out(k, n, ref,    i, j, acc, a2, best, bacc, m, ok, tsum) {
-	acc = 0; m = 0; ok = 0; tsum = 0
+# What is left out must not be the stream itself (0.47.3). A server that went from 20 updates a second in the
+# lobby to a rough 60 in the match was read against the lobby's beat: every third packet was "the update",
+# the rest "extras", and a match missing 4.5% of its updates scored 96. Two guards. Where the server's
+# updates are more than one packet each (B_tg, from the steady window), what is left out must be mostly
+# single packets, as the real extras were, which a faster stream of the same updates is not. Where updates
+# are single packets there is nothing to tell them apart by, so the kept beat is only trusted for a minute
+# (B_age, in windows) after the last steady window: extras come and go, a change of rate stays.
+function extras_out(k, n, ref,    i, j, acc, a2, best, bacc, m, ok, tsum, all) {
+	if (B_tg[k] < 0.5 && B_age[k] > 12) return n
+	acc = 0; m = 0; ok = 0; tsum = 0; all = 0
 	for (i = 1; i <= n; i++) {
+		all += W_tg[k, i]
 		acc += W_iv[k, i]
 		if (acc < 0.75 * ref) continue
 		best = i; bacc = acc
@@ -656,6 +679,7 @@ function extras_out(k, n, ref,    i, j, acc, a2, best, bacc, m, ok, tsum) {
 		i = best; acc = 0
 	}
 	if (m < 3 || ok < 0.8 * m) return n
+	if (B_tg[k] >= 0.5 && n > m && (all - tsum) / (n - m) > 0.5 * tsum / m) return n
 	for (i = 1; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 	for (i = 1; i <= m; i++) { W_iv[k, i] = X_iv[i]; W_tg[k, i] = X_tg[i] }
 	W_tight[k] = tsum + W_tg[k, 0]
@@ -722,7 +746,10 @@ function window_end(f, d,    k, n, n0, i, x, nom, base, late, lost, dly, gaps, f
 		}
 	}
 	if (nom > 0) P_nom[k] = nom
-	if (d == "D" && reg >= 0.8 && !trans && rate >= minr) B_ref[k] = nom
+	if (d == "D") {
+		if (reg >= 0.8 && !trans && rate >= minr) { B_ref[k] = nom; B_tg[k] = W_tight[k] / n; B_age[k] = 0 }
+		else B_age[k]++
+	}
 	# not in a stream's first minute (a pre-game lobby lasts about forty seconds): a game in its lobby keeps other servers to hand, and holding the
 	# one it is on makes that one look slower than the rest (seen: Call of Duty hopping between two every 15 s)
 	if (d == "D" && F_active[f] && nom > 0 && rate >= minr && S_win[k] >= 12) pb_ask(f, nom)

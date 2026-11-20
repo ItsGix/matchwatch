@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.2", reloading = false;
+var BUILT = "0.47.3", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -760,7 +760,7 @@ function mmSpeeds(mm, again) {
 	save.addEventListener("click", function () {
 		var k = function (key, dir) { var v = val[key] || 0; return v === own[dir] && key.indexOf("on_") === 0 ? 0 : v; };   // QoSmate's own rate is stored as "follow QoSmate"
 		if ((dl && !val.on_down) || !val.on_up || (limited && ((dl && !val.off_down) || !val.off_up))) { toast("Type a speed in every box first.", true); return; }
-		send([k("on_down", "down"), k("on_up", "up"), limited ? val.off_down : 0, limited ? val.off_up : 0, hold].join("/"), save);
+		send([k("on_down", "down"), k("on_up", "up"), limited ? (val.off_down || 0) : 0, limited ? (val.off_up || 0) : 0, hold].join("/"), save);
 	});
 	reset.addEventListener("click", function () { send("0/0/0/0/300", reset); });
 	box.appendChild(h("div", { cls: "speedgrid" }, play, rest));
@@ -1021,7 +1021,7 @@ function proofCard(m) {
 	g.fillStyle = "#143038"; g.fillRect(0, 0, W, 92);
 	g.fillStyle = "#e9f3f2"; g.font = "700 34px " + F; g.textBaseline = "middle"; g.fillText("matchwatch", 56, 47);
 	g.fillStyle = "#8fa3a8"; g.font = "400 24px " + F; g.textAlign = "right";
-	g.fillText([m.game || "", place(m) || "", m.t0 ? when(m.t0) : ""].filter(Boolean).join("  |  "), W - 56, 47); g.textAlign = "left";
+	g.fillText([m.game || m.label || "", place(m) || "", m.t0 ? when(m.t0) : ""].filter(Boolean).join("  |  "), W - 56, 47); g.textAlign = "left";
 	// the overall score, large, and the verdict beside it
 	g.fillStyle = cardColour(m.overall); g.font = "700 150px " + F; g.textBaseline = "alphabetic"; g.fillText(String(m.overall), 56, 262);
 	var sw = g.measureText(String(m.overall)).width;
@@ -1040,7 +1040,7 @@ function proofCard(m) {
 		g.fillStyle = cardColour(p[1]); g.font = "700 56px " + F; g.fillText(p[1] == null ? "n/a" : String(Math.round(p[1])), bx + 28, by + 104);
 	});
 	// how late the server's updates were, second by second
-	var raw = m.tl_d || [], dnom = m.nom ? 1000 / m.nom : median(raw), d = raw.map(function (v) { return v >= 1000 ? 0 : Math.max(0, v - dnom); }), feltC = Math.max(30, dnom);
+	var raw = m.tl_d || [], dnom = m.nom || median(raw), d = raw.map(function (v) { return v >= 1000 ? 0 : Math.max(0, v - dnom); }), feltC = Math.max(30, dnom);
 	var n = d.length, top = 0, gx = 56, gy = 590, gw = W - 112, gh = 100;
 	for (i = 0; i < n; i++) if (d[i] > top) top = d[i];
 	top = Math.max(top, 60);
@@ -1161,7 +1161,7 @@ function qmBlock(m) {
 	b.appendChild(h("p", { cls: "lede " + (bad ? "low" : "ok"), text: bad
 		? "QoSmate's queue held your game up: " + drops + " packet" + (drops === 1 ? "" : "s") + " dropped, longest wait " + fmt(peak, 1) + " ms. That happened on your router, not at the server."
 		: "QoSmate did its job. Your game's queue dropped nothing, and its longest wait was " + fmt(peak, 1) + " ms." }));
-	if (!top) b.appendChild(h("p", { cls: "note", text: "Your game was not in the top priority queue, so it shared a queue with everything else on your line. See QoSmate priority under Tools, Data and settings." }));
+	if (!top) b.appendChild(h("p", { cls: "note", text: "Your game was not in the top priority queue, so it shared a queue with everything else on your line. See Prioritise my game traffic under Tools, Connection." }));
 	else b.appendChild(h("p", { cls: "note", text: held ? "Other traffic was heavy enough to be held back " + held + " time" + (held === 1 ? "" : "s") + " while your game went ahead of it." : "Nothing else on your line needed holding back." }));
 	var rows = [["Sent by your game's queue", gu.pkts + " packets", gu.drops + " dropped, longest wait " + fmt(gu.peak, 1) + " ms"]];
 	if (gd) rows.push(["Received by your game's queue", gd.pkts + " packets", gd.drops + " dropped, longest wait " + fmt(gd.peak, 1) + " ms"]);
@@ -1198,7 +1198,7 @@ function pageMatch(id) {
 		view.appendChild(h("p", { cls: "lede", text: m.verdict }));
 		if (m.outside) {
 			// this match was played on a server outside the places being stayed on: say so, and why it was not turned away
-			var og = m.game || "this game", why = m.outside === "allowed" ? "You added this server to the pool yourself, so it is always let through."
+			var og = m.game || m.label || "this game", why = m.outside === "allowed" ? "You added this server to the pool yourself, so it is always let through."
 				: m.outside === "port" ? og + " is known by its port alone, and no match had been played on this port or address block before, so MatchWatch could not be sure it was the game. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to stop the first one too."
 				: m.outside === "relay" ? "It is on a network " + og + " uses for its relays, and MatchWatch never turns a game's relay away: with its relay refused, the game is left trying to connect to it."
 				: m.outside === "host" ? "It connected in the moment before it could be looked up, or your places changed while you were playing. Its address block is turned away from now on. Make " + og + " strict, on the Servers page, to hold new servers until they have been placed."
