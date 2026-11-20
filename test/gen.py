@@ -99,6 +99,12 @@ elif sc=="lobbyrough":
     # a steady 20 a second in the lobby, then a rough 60 a second for the match: the lobby's beat must not turn
     # two packets in three into "extras" and the match into a clean one
     stream(out,False,20,60,jit=0.001); stream(out,False,60,240,jit=0.005,loss=0.05,start=60); stream(out,True,60,300)
+elif sc=="ending":
+    # a clean five-minute match whose server stalls six times in its last four seconds, after
+    # which the game sends twelve seconds from another address on the same ports (the next lobby) and stops.
+    # The ending must not be scored: no freezes, and "tailcut" in the detail.
+    stream(out,False,21,305,jit=0.001,per_tick=2,freezes=[(300+i*0.7,0.15) for i in range(6)])
+    stream(out,False,21,12,jit=0.001,per_tick=2,start=305.5,srv="203.0.113.9"); stream(out,True,60,318)
 elif sc=="short":
     stream(out,False,60,22); stream(out,True,60,22)
 out.sort()

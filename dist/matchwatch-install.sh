@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.4"
+VERSION="0.47.5"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -4110,7 +4110,7 @@ $2 == "IP" && $4 == ">" {
 		else if (F_moved[sf] >= 6) { if (f == sf) next }  # see below: not a match that moved
 		else if (dir == "D" && st_count(tk, rip, t) >= 8) {
 			if (f != sf && (f in F_seen)) drop_flow(f)
-			ST_cur[tk] = rip; ST_n[tk] = 0; delete ST_c[tk]; F_moved[sf]++; f = sf
+			ST_cur[tk] = rip; ST_n[tk] = 0; delete ST_c[tk]; F_moved[sf]++; F_movet[sf] = t; f = sf
 			# the eight packets it took to be sure are not a freeze: measure gaps afresh from here
 			delete P_last[sf SUBSEP "D"]; delete P_last[sf SUBSEP "U"]
 			print "MOVED " F_sid[sf] " to " rip
@@ -4482,7 +4482,7 @@ function second_end(sec,    f, kd, ku, dn, up, i, nd, ne, v) {
 			if (kindof(F_rport[f], F_rip[f]) == "game") rough_early(f, kd)
 		}
 		F_wsec[f]++
-		if (F_wsec[f] >= WIN) { window_end(f, "D"); window_end(f, "U"); F_wsec[f] = 0 }
+		if (F_wsec[f] >= WIN) { window_end(f, "D"); window_end(f, "U"); F_wsec[f] = 0; if (F_active[f]) snap(f) }
 
 		if (F_active[f] && F_idle[f] >= ENDIDLE) END_list[++ne] = f
 		else if (!F_active[f] && F_idle[f] >= DROPIDLE) DROP_list[++nd] = f
@@ -4528,7 +4528,7 @@ function drop_flow(f,    d, k, i, di, stk) {
 	for (i = 0; i < TL; i++) delete TN[f, i]
 	stk = F_lip[f] ":" F_lport[f] ">" F_rport[f]
 	if ((stk in ST_f) && ST_f[stk] == f) { delete ST_f[stk]; delete ST_cur[stk]; delete ST_n[stk]; delete ST_c[stk]; delete ST_t[stk] }
-	delete F_moved[f]; delete F_pbn[f]; delete F_pbv[f]; delete F_pbc[f]
+	delete F_moved[f]; delete F_pbn[f]; delete F_pbv[f]; delete F_pbc[f]; snap_wipe(f)
 	delete F_seen[f]; delete F_lip[f]; delete F_lport[f]; delete F_rip[f]; delete F_rport[f]
 	delete F_first[f]; delete F_last[f]; delete F_pk[f]; delete F_good[f]; delete F_idle[f]
 	delete F_active[f]; delete F_wsec[f]; delete F_tln[f]; delete F_sid[f]; delete F_warned[f]
@@ -4768,7 +4768,7 @@ function session_start(f, sec,    d, k, i, di) {
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
 	F_sid[f] = sec "_" (++SIDN)
 	F_pbn[f] = 0; F_pbv[f] = ""; F_pbc[f] = 0; pb_read()
-	F_moved[f] = 0
+	F_moved[f] = 0; snap_wipe(f)
 	stk = F_lip[f] ":" F_lport[f] ">" F_rport[f]
 	if (!(stk in ST_f) || !(ST_f[stk] in F_seen) || !F_active[ST_f[stk]] || ST_f[stk] == f) { ST_f[stk] = f; ST_cur[stk] = F_rip[f]; ST_n[stk] = 0 }
 	F_unn[f] = (NGP > 0 && kindof(F_rport[f], F_rip[f]) == "") ? 1 : 0
@@ -4800,6 +4800,31 @@ function probe_score(pfx, kind,    n, jit, loss, med, A, B, L, s) {
 	return int(clamp(s, 0, 100) + 0.5)
 }
 
+# The end of a match is not part of it (0.47.4). A Call of Duty match in France was clean for fourteen and a
+# half minutes; then the server dropped to a quarter of its rate for five seconds, the game went to another
+# address on the same ports (the next lobby), sent twelve seconds from there and stopped. Stitching carried the
+# session over, the slow seconds counted as eight freezes, and the server lost 20 points for the match ending.
+# So the running totals are noted at the end of every window (the last nine are kept), and a session that
+# ends within thirty seconds of moving address is scored as it stood ten seconds before the move.
+function snap(f,    i, d, k, di) {
+	i = (SN_n[f]++) % 9; SN_t[f, i] = cursec
+	for (di = 1; di <= 2; di++) { d = (di == 1) ? "D" : "U"; k = f SUBSEP d; SN_ticks[f, i, d] = S_ticks[k] + 0; SN_late[f, i, d] = S_late[k] + 0; SN_lost[f, i, d] = S_lost[k] + 0; SN_dly[f, i, d] = S_dly[k] + 0; SN_gaps[f, i, d] = S_gaps[k] + 0; SN_frz[f, i, d] = S_frz[k] + 0; SN_stut[f, i, d] = S_stut[k] + 0; SN_dev[f, i, d] = S_dev[k] + 0; SN_devn[f, i, d] = S_devn[k] + 0; SN_win[f, i, d] = S_win[k] + 0; SN_bad[f, i, d] = S_bad[k] + 0; SN_worst[f, i, d] = S_worst[k] + 0; SN_rn[f, i, d] = S_rn[k] + 0; SN_extra[f, i, d] = S_extra[k] + 0 }
+}
+function tail_off(f,    i, b, bt, d, k, di, cut) {
+	F_tailcut[f] = 0
+	if (!(F_movet[f] > 0) || F_last[f] - F_movet[f] > 30) return
+	cut = F_movet[f] - 10; b = -1; bt = 0
+	for (i = 0; i < 9; i++) if (((f, i) in SN_t) && SN_t[f, i] <= cut && SN_t[f, i] > bt) { b = i; bt = SN_t[f, i] }
+	if (b < 0 || SN_win[f, b, "D"] < 6) return
+	for (di = 1; di <= 2; di++) { d = (di == 1) ? "D" : "U"; k = f SUBSEP d; S_ticks[k] = SN_ticks[f, b, d]; S_late[k] = SN_late[f, b, d]; S_lost[k] = SN_lost[f, b, d]; S_dly[k] = SN_dly[f, b, d]; S_gaps[k] = SN_gaps[f, b, d]; S_frz[k] = SN_frz[f, b, d]; S_stut[k] = SN_stut[f, b, d]; S_dev[k] = SN_dev[f, b, d]; S_devn[k] = SN_devn[f, b, d]; S_win[k] = SN_win[f, b, d]; S_bad[k] = SN_bad[f, b, d]; S_worst[k] = SN_worst[f, b, d]; S_rn[k] = SN_rn[f, b, d]; S_extra[k] = SN_extra[f, b, d] }
+	F_tailcut[f] = int(F_last[f] - bt)
+	print "TAIL " F_sid[f] " the last " F_tailcut[f] " s not scored: the match ended and the game moved on"
+}
+function snap_wipe(f,    i, d, di) {
+	for (i = 0; i < 9; i++) { delete SN_t[f, i]; for (di = 1; di <= 2; di++) { d = (di == 1) ? "D" : "U"; delete SN_ticks[f, i, d]; delete SN_late[f, i, d]; delete SN_lost[f, i, d]; delete SN_dly[f, i, d]; delete SN_gaps[f, i, d]; delete SN_frz[f, i, d]; delete SN_stut[f, i, d]; delete SN_dev[f, i, d]; delete SN_devn[f, i, d]; delete SN_win[f, i, d]; delete SN_bad[f, i, d]; delete SN_worst[f, i, d]; delete SN_rn[f, i, d]; delete SN_extra[f, i, d] } }
+	delete SN_n[f]; delete F_movet[f]; delete F_tailcut[f]
+}
+
 function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel, dlate, dlost, dclump, dfrz, dstut, dbad, p10,
 		uhz, unom, ujit, ujrel, ustall, uhitch, upp, s_srv, s_route, s_line, s_pc, s_lan, overall, rating, reliable,
 		wsum, w, i, kk, mk, msum, dj, df, trl, code, vtext, farkind, route_ign, s_route_shown, s_pc_shown, pc_low, loc, rep, out, ip, when, note, avg, sumfile, wan_avg,
@@ -4807,6 +4832,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 	kd = f SUBSEP "D"; ku = f SUBSEP "U"
 	ip = F_rip[f]
 	dur = F_last[f] - F_first[f]
+	tail_off(f)
 	dsec = (S_win[kd] + 0) * WIN; usec = (S_win[ku] + 0) * WIN
 
 	split("", PS)
@@ -5053,6 +5079,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		if (PBL >= 0) { dj = dj ",\"pb\":{\"h\":["; for (i = 0; i <= PBL; i++) dj = dj (i ? "," : "") (S_pb[kd, i] + 0); dj = dj "]}" }
 		if (PBJ != "") dj = dj ",\"pbuf\":" PBJ
 		if (F_moved[f] > 0) dj = dj ",\"moved\":" (F_moved[f] + 0)
+		if (F_tailcut[f] > 0) dj = dj ",\"tailcut\":" (F_tailcut[f] + 0)
 		if (QM != "") dj = dj ",\"qm\":" QM
 		if (PS["outside"] != "") dj = dj ",\"outside\":" js(PS["outside"])
 		if (HOPJ != "") dj = dj ",\"hopstats\":" HOPJ
@@ -6091,7 +6118,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.4", reloading = false;
+var BUILT = "0.47.5", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -7330,7 +7357,8 @@ function pageMatch(id) {
 		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		var pbb = full ? (pbufBlock(m) || pbBlock(m)) : null; if (pbb) view.appendChild(pbb);
-		if (m.moved) view.appendChild(h("p", { cls: "note", text: "During this match the game moved to another address on the same port " + m.moved + " time" + (m.moved === 1 ? "" : "s") + " and carried on: a second route to the same match. MatchWatch kept it as one match; the server named above is the one it began on." }));
+		if (m.tailcut) view.appendChild(h("p", { cls: "note", text: "The last " + m.tailcut + " seconds are not scored: the match ended and the game went on to its next server on the same port. The chart still shows them." }));
+		else if (m.moved) view.appendChild(h("p", { cls: "note", text: "During this match the game moved to another address on the same port " + m.moved + " time" + (m.moved === 1 ? "" : "s") + " and carried on: a second route to the same match. MatchWatch kept it as one match; the server named above is the one it began on." }));
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }

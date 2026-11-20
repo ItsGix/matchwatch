@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.4", reloading = false;
+var BUILT = "0.47.5", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -1267,7 +1267,8 @@ function pageMatch(id) {
 		var nb = full ? netBlock(m) : null; if (nb) view.appendChild(nb);
 		var qb = full ? qmBlock(m) : null; if (qb) view.appendChild(qb);
 		var pbb = full ? (pbufBlock(m) || pbBlock(m)) : null; if (pbb) view.appendChild(pbb);
-		if (m.moved) view.appendChild(h("p", { cls: "note", text: "During this match the game moved to another address on the same port " + m.moved + " time" + (m.moved === 1 ? "" : "s") + " and carried on: a second route to the same match. MatchWatch kept it as one match; the server named above is the one it began on." }));
+		if (m.tailcut) view.appendChild(h("p", { cls: "note", text: "The last " + m.tailcut + " seconds are not scored: the match ended and the game went on to its next server on the same port. The chart still shows them." }));
+		else if (m.moved) view.appendChild(h("p", { cls: "note", text: "During this match the game moved to another address on the same port " + m.moved + " time" + (m.moved === 1 ? "" : "s") + " and carried on: a second route to the same match. MatchWatch kept it as one match; the server named above is the one it began on." }));
 		view.appendChild(h("p", { cls: "note", text: (m.counted ? "This match counts towards the server's rating (" + m.rating + "/100 for this match)." : "This match does not count towards the server's rating: it was too short, or your own line was unstable.") }));
 	});
 }
