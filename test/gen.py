@@ -71,6 +71,19 @@ elif sc=="bursts":
     # With -v GEOF=test/geo_voice.tsv the same stream is a Discord call on Cloudflare, and is left alone.
     for b in range(5):
         stream(out,False,400,11,start=5+b*60,srv="203.0.113.77",sport=19298,lport=54268); stream(out,True,20,11,start=5+b*60,srv="203.0.113.77",sport=19298,lport=54268)
+elif sc in ("extras","extraslost","faster"):
+    # extras: a server on a steady 21 updates a second, two packets each, that for half of every minute also
+    # sends single small packets at any point of its beat (seen from a Call of Duty server in the United
+    # States). Nothing is missing, and the engine should say so and put "extra" in the detail.
+    # extraslost: the same with 3% of updates really lost, which must still be counted.
+    # faster: a server that really doubles its rate after a minute, which must be judged at the new rate.
+    if sc=="faster":
+        stream(out,False,21,60,jit=0.001); stream(out,False,42,180,jit=0.0005,start=60,loss=0.03)
+    else:
+        stream(out,False,21,240,jit=0.0015,per_tick=2,loss=0.03 if sc=="extraslost" else 0.0)
+        for b in (30,90,150,210):
+            for i in range(600): out.append(line(T0+b+random.random()*30,SRV,30120,PC,3074,random.randint(200,600)))
+    stream(out,True,60,240)
 elif sc=="short":
     stream(out,False,60,22); stream(out,True,60,22)
 out.sort()

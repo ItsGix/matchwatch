@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.1", reloading = false;
+var BUILT = "0.47.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -155,7 +155,10 @@ function drawChart(cv, c) {
 	cx.strokeStyle = ink; cx.lineWidth = 2; cx.beginPath();
 	var po = c.slots ? n - p.length : 0, on = false;
 	for (i = 0; i < p.length; i++) {
-		if (p[i] < 0) { on = false; continue; }
+		// A second with no answer is not a second with no ping: servers ration their replies to the probe, so
+		// the line runs on from the last answer to the next (0.47.2). Broken there, it showed as scattered
+		// dashes, and a single answer between two silences drew nothing at all.
+		if (p[i] < 0) continue;
 		var px = (po + i + 0.5) * bw, py = pBot - (Math.min(p[i], pmax) / pmax) * (pBot - pTop);
 		if (on) cx.lineTo(px, py); else cx.moveTo(px, py);
 		on = true;

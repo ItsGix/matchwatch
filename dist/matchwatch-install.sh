@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.1"
+VERSION="0.47.2"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -4470,7 +4470,7 @@ function drop_flow(f,    d, k, i, di) {
 		d = (di == 1) ? "D" : "U"; k = f SUBSEP d
 		for (i = 0; i <= W_n[k] + 0; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 		for (i = 1; i <= S_rn[k] + 0; i++) delete S_rate[k, i]
-		delete W_n[k]; delete W_tight[k]; delete P_last[k]; delete P_tick[k]; delete P_nom[k]
+		delete W_n[k]; delete W_tight[k]; delete P_last[k]; delete P_tick[k]; delete P_nom[k]; delete B_ref[k]; delete S_extra[k]
 		delete Q_cnt[k]; delete Q_max[k]; delete S_bytes[k]; delete S_pk[k]
 		delete S_ticks[k]; delete S_late[k]; delete S_lost[k]; delete S_dly[k]; delete S_gaps[k]
 		delete S_frz[k]; delete S_stut[k]; delete S_dev[k]; delete S_devn[k]; delete S_win[k]; delete S_bad[k]
@@ -4589,12 +4589,55 @@ function median_iv(k, n,    i, b, c, half) {
 	return 0
 }
 
-function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, dev, devn, miss, rec, minr, rate, trans, wworst, stut, pj) {
+# Extra packets between a server's updates (0.47.2). A Call of Duty server in the United States sent, for
+# ten or twenty seconds at a time, single small packets at any point of its 48 ms beat on top of the updates
+# themselves, which went on arriving exactly on the beat. The window's median interval then fell to 24 ms,
+# every ordinary 48 ms gap counted as an update gone missing, and a match with none missing scored 36 with
+# "3.55% of updates went missing" as its largest deduction. So the beat of the last steady window is kept
+# (B_ref), and a window that has more arrivals than that beat allows and is not steady at a beat of its own
+# is read against the kept beat: an arrival is an update when it is the one nearest a whole beat after the
+# update before it, and the rest are left out. A server that really changed its rate is steady at the new
+# one, or fails the check at the end, and is judged as before.
+function extras_out(k, n, ref,    i, j, acc, a2, best, bacc, m, ok, tsum) {
+	acc = 0; m = 0; ok = 0; tsum = 0
+	for (i = 1; i <= n; i++) {
+		acc += W_iv[k, i]
+		if (acc < 0.75 * ref) continue
+		best = i; bacc = acc
+		if (acc <= 1.25 * ref) {
+			a2 = acc
+			for (j = i + 1; j <= n && a2 + W_iv[k, j] <= 1.25 * ref; j++) {
+				a2 += W_iv[k, j]
+				if (abs(a2 - ref) < abs(bacc - ref)) { best = j; bacc = a2 }
+			}
+		}
+		m++; X_iv[m] = bacc; X_tg[m] = W_tg[k, best] + 0; tsum += X_tg[m]
+		if (abs(bacc - ref) <= 0.2 * ref) ok++
+		i = best; acc = 0
+	}
+	if (m < 3 || ok < 0.8 * m) return n
+	for (i = 1; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
+	for (i = 1; i <= m; i++) { W_iv[k, i] = X_iv[i]; W_tg[k, i] = X_tg[i] }
+	W_tight[k] = tsum + W_tg[k, 0]
+	return m
+}
+
+function window_end(f, d,    k, n, n0, i, x, nom, base, late, lost, dly, gaps, frz, dev, devn, miss, rec, minr, rate, trans, wworst, stut, pj, reg, span) {
 	k = f SUBSEP d
-	n = W_n[k] + 0
+	n = W_n[k] + 0; n0 = n
 	rate = n / WIN
 	minr = (d == "D") ? MINDN : MINUP
 	nom = (n >= 3) ? median_iv(k, n) : 0
+	reg = 0
+	if (d == "D" && nom > 0) {
+		span = 0
+		for (i = 1; i <= n; i++) { x = W_iv[k, i]; span += x; if (abs(x - nom) <= 0.2 * nom) reg++ }
+		reg = reg / n
+		if (B_ref[k] > 0 && reg < 0.8 && n > 1.08 * span / B_ref[k]) {
+			n = extras_out(k, n, B_ref[k])
+			if (n != n0) { nom = median_iv(k, n); S_extra[k] += n0 - n; reg = -1 }
+		}
+	}
 	L_rate[k] = (nom > 0) ? 1000 / nom : 0
 	L_jit[k] = "-"; L_late[k] = "-"; L_lost[k] = "-"
 	if (rate >= minr && nom > 0) {
@@ -4639,10 +4682,11 @@ function window_end(f, d,    k, n, i, x, nom, base, late, lost, dly, gaps, frz, 
 		}
 	}
 	if (nom > 0) P_nom[k] = nom
+	if (d == "D" && reg >= 0.8 && !trans && rate >= minr) B_ref[k] = nom
 	# not in a stream's first minute (a pre-game lobby lasts about forty seconds): a game in its lobby keeps other servers to hand, and holding the
 	# one it is on makes that one look slower than the rest (seen: Call of Duty hopping between two every 15 s)
 	if (d == "D" && F_active[f] && nom > 0 && rate >= minr && S_win[k] >= 12) pb_ask(f, nom)
-	for (i = 0; i <= n; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
+	for (i = 0; i <= n0; i++) { delete W_iv[k, i]; delete W_tg[k, i] }
 	W_n[k] = 0; W_tight[k] = 0
 }
 
@@ -4665,7 +4709,7 @@ function session_start(f, sec,    d, k, i, di) {
 		for (i = 1; i <= S_rn[k] + 0; i++) delete S_rate[k, i]
 		for (i = 0; i <= 40; i++) delete S_pb[k, i]
 		S_rn[k] = 0; S_ticks[k] = 0; S_late[k] = 0; S_lost[k] = 0; S_dly[k] = 0; S_gaps[k] = 0
-		S_frz[k] = 0; S_stut[k] = 0; S_dev[k] = 0; S_devn[k] = 0; S_win[k] = 0; S_bad[k] = 0; S_worst[k] = 0
+		S_frz[k] = 0; S_stut[k] = 0; S_dev[k] = 0; S_devn[k] = 0; S_win[k] = 0; S_bad[k] = 0; S_worst[k] = 0; S_extra[k] = 0
 	}
 	if (sec - QUALIFY - 2 > F_first[f]) F_first[f] = sec - QUALIFY - 2
 	FT_n[f] = 0; FTP_n[f] = 0; F_ft0[f] = sec
@@ -4952,6 +4996,7 @@ function session_end(f, sec,    kd, ku, dur, dsec, usec, tick, dnom, djit, djrel
 		dj = dj ",\"counted\":" reliable ",\"route_ign\":" (route_ign + 0) ",\"pc_counted\":" (PCSCORE != 0 ? 1 : 0) ",\"code\":" js(code) ",\"verdict\":" js(vtext) ",\"qos\":" js(PS["qos_state"])
 		dj = dj ",\"why\":{\"server\":" js(y_srv) ",\"route\":" js(y_route) ",\"line\":" js(y_line) ",\"pc\":" js(y_pc) "}"
 		PBL = -1; for (i = 0; i <= 40; i++) if ((S_pb[kd, i] + 0) > 0) PBL = i
+		if (S_extra[kd] + 0 > 0) dj = dj ",\"extra\":" (S_extra[kd] + 0)
 		if (PBL >= 0) { dj = dj ",\"pb\":{\"h\":["; for (i = 0; i <= PBL; i++) dj = dj (i ? "," : "") (S_pb[kd, i] + 0); dj = dj "]}" }
 		if (PBJ != "") dj = dj ",\"pbuf\":" PBJ
 		if (F_moved[f] > 0) dj = dj ",\"moved\":" (F_moved[f] + 0)
@@ -5992,7 +6037,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.1", reloading = false;
+var BUILT = "0.47.2", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6119,7 +6164,10 @@ function drawChart(cv, c) {
 	cx.strokeStyle = ink; cx.lineWidth = 2; cx.beginPath();
 	var po = c.slots ? n - p.length : 0, on = false;
 	for (i = 0; i < p.length; i++) {
-		if (p[i] < 0) { on = false; continue; }
+		// A second with no answer is not a second with no ping: servers ration their replies to the probe, so
+		// the line runs on from the last answer to the next (0.47.2). Broken there, it showed as scattered
+		// dashes, and a single answer between two silences drew nothing at all.
+		if (p[i] < 0) continue;
 		var px = (po + i + 0.5) * bw, py = pBot - (Math.min(p[i], pmax) / pmax) * (pBot - pTop);
 		if (on) cx.lineTo(px, py); else cx.moveTo(px, py);
 		on = true;
