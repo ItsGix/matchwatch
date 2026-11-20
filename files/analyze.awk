@@ -82,6 +82,11 @@ $1 == "TICK" {
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
 	# names can change while running (the Tools page, matchwatch game name), so look again now and then
 	if (++TICKS % 20 == 0) { reload_games(); pb_read(); if (!REPLAY) { write_skipped(now); wan_find() } }
+	# an address not seen for an hour is asked about again if it comes back (the answer is kept on the router)
+	if (TICKS % 600 == 0) {
+		for (pi in HOSTASK) if (now - HOSTASK[pi] > 3600) delete HOSTASK[pi]
+		for (pi in LOB_t) if (now - LOB_t[pi] > 3600) delete LOB_t[pi]
+	}
 	if (HOLDF != "") load_hold()
 	next
 }

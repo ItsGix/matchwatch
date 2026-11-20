@@ -1,6 +1,6 @@
 # MatchWatch
 
-**Tells you why a match felt bad, from your OpenWrt router. v0.47.3 (pre-release)**
+**Tells you why a match felt bad, from your OpenWrt router. v0.47.4 (pre-release)**
 
 ![A match report: the verdict, four scores and the whole match on one chart](docs/match-report.png)
 
@@ -537,7 +537,7 @@ It starts a minute into a match, once any pre-game lobby is over, and stops when
 
 ### What it needs
 
-Four OpenWrt packages: `kmod-sched-bpf`, `kmod-sched`, `kmod-ifb` and `bpftool-minimal`. A router running QoSmate has two already. When any is missing the Ping buffer row says so and offers **Install what it needs** (`matchwatch buffer install`); **Remove what was installed** (`matchwatch buffer uninstall`) switches the buffer off and takes away exactly those. Nothing is installed until you press, and the rehearsal works without any of it. Routers with a big-endian processor are not supported yet.
+Four OpenWrt packages: `kmod-sched-bpf`, `kmod-sched`, `kmod-ifb` and `bpftool-minimal`, and `tc-full` on a router with no `tc` or only the small one. A router running QoSmate has two already. When any is missing the Ping buffer row says so and offers **Install what it needs** (`matchwatch buffer install`); **Remove what was installed** (`matchwatch buffer uninstall`) switches the buffer off and takes away exactly those. Nothing is installed until you press, and the rehearsal works without any of it. Routers with a big-endian processor are not supported yet.
 
 ## QoSmate
 

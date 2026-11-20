@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.3", reloading = false;
+var BUILT = "0.47.4", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -936,7 +936,7 @@ function ovPaint() {
 	var top = ovNewest();
 	if (!OVH.init) { if (D.info && D.info.version) { OVH.init = true; OVH.last = top ? top.start : 0; } }
 	else if (top && top.start > OVH.last) { OVH.last = top.start; OVH.m = top; OVH.until = Date.now() + 30000; }
-	var show = {}; (q.show || "place,game,ping,lights,lines,marks").split(",").forEach(function (k) { show[k] = 1; });
+	var show = {}; ("show" in q ? q.show : "place,game,ping,lights,lines,marks").split(",").forEach(function (k) { show[k] = 1; });
 	OV.className = "ov sz-" + (/^[sml]$/.test(q.size || "") ? q.size : "m");
 	OV.textContent = "";
 	function cell(cls) { var c = h("span", { cls: "ovc " + (cls || "") }), k; for (k = 1; k < arguments.length; k++) if (arguments[k]) c.appendChild(arguments[k]); OV.appendChild(c); return c; }

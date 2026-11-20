@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.3"
+VERSION="0.47.4"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -537,7 +537,7 @@ export_json() {
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
 	pb_json
 	find_ifaces; qos_dev
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s","lan_if":"%s","wan_if":"%s","qos_if":"%s","port_warn":"%s","ping":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" "$(jesc "$LAN_IF")" "$(jesc "$WAN_IF")" "$( [ -x /etc/init.d/qosmate ] && jesc "$QWAN" )" "$(jesc "$(ports_check | awk -F'\t' '$1 == "WARN" { printf "%s%s", (n++ ? " " : ""), $2 }')")" "$(ping_load; echo "$PLO,$PHI")" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s","lan_if":"%s","wan_if":"%s","qos_if":"%s","port_warn":"%s","ping":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null | head -n 1 | grep '^[0-9][0-9]*$' || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" "$(jesc "$LAN_IF")" "$(jesc "$WAN_IF")" "$( [ -x /etc/init.d/qosmate ] && jesc "$QWAN" )" "$(jesc "$(ports_check | awk -F'\t' '$1 == "WARN" { printf "%s%s", (n++ ? " " : ""), $2 }')")" "$(ping_load; echo "$PLO,$PHI")" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -570,7 +570,7 @@ cmd_after() { # note overall
 		if [ -s "$DATA/stay" ]; then stay_apply >/dev/null; else stay_off; cmd_notify "Stay mode is off: every place in the pool had gone bad."; fi
 	fi
 	export_json
-	[ "$(cnt "$DATA/sessions.tsv")" -gt 5200 ] && tail -n 5000 "$DATA/sessions.tsv" > "$DATA/sessions.tsv.tmp" && mv -f "$DATA/sessions.tsv.tmp" "$DATA/sessions.tsv"
+	[ "$(cnt "$DATA/sessions.tsv")" -gt 5200 ] && tail -n 5000 "$DATA/sessions.tsv" > "$DATA/sessions.tsv.trim.$$" && mv -f "$DATA/sessions.tsv.trim.$$" "$DATA/sessions.tsv"
 	logger -t matchwatch "$1" 2>/dev/null
 	if [ "$NOTIFY_EVERY_MATCH" = 1 ] || [ "${2:-100}" -lt "$WARN_SCORE" ]; then [ -n "$NTFY_URL" ] && fetch "$NTFY_URL" "Match ended: $(echo "$1" | sed 's/^Match on [^:]*: //; s/^\([0-9]*\/100 [A-Za-z]*\)\..*/\1/')." >/dev/null; fi
 	return 0
@@ -787,8 +787,8 @@ EOF
 	# doing what it was asked, and a game may try five in a minute, so that is not worth a buzz each time.
 	[ "$LOBBY_ALERT" = 2 ] && want=1
 	[ "$LOBBY_ALERT" = 1 ] && [ "$verdict" != good ] && [ "$blocked" != true ] && want=1
-	now="$(date +%s)"; last="$(cat "$RUN/lobby.alert" 2>/dev/null)"
-	[ "$want" = 1 ] && [ -n "$last" ] && [ $((now - last)) -lt 60 ] && want=0     # and never more than one a minute
+	now="$(date +%s)"; last="$(mm_num "$(cat "$RUN/lobby.alert" 2>/dev/null)")"
+	[ "$want" = 1 ] && [ "$last" -gt 0 ] && [ $((now - last)) -lt 60 ] && want=0     # and never more than one a minute
 	if [ "$want" = 1 ] && [ -n "$NTFY_URL" ]; then echo "$now" > "$RUN/lobby.alert"; fetch "$NTFY_URL" "$short" >/dev/null; fi
 	return 0
 }
@@ -1045,7 +1045,7 @@ cmd_ranges() { # (nothing) = what is known | refresh
 	echo "Lists of address ranges by city, from hosting companies:"
 	feed_list | awk -F'|' '{ printf "  %s%s  %s\n", $1, ($3 != "" ? " (" $3 ")" : ""), $2 }'
 	echo "Ranges known: $(cnt "$DATA/ranges.cache")$(awk -F'\t' '{ c[$4]++ } END { for (h in c) printf "  (%s: %d)", h, c[h] }' "$DATA/ranges.cache")"
-	echo "Turned away now for the gaming device: $(cat "$RUN/away.count" 2>/dev/null || echo 0)"
+	echo "Turned away now for the gaming device: $(cat "$RUN/away.count" 2>/dev/null | head -n 1 | grep '^[0-9][0-9]*$' || echo 0)"
 	[ -n "$DEVICE_IP" ] || echo "No device is chosen to watch, so whole ranges are not turned away. Choose one in Settings."
 	echo "Add a list of your own in $DATA/geofeeds.local, one per line: name|address of the list. Then: matchwatch ranges refresh"
 }
@@ -2186,17 +2186,17 @@ cmd_forget() { # match <start time> | server <ip> | dc <number>
 			done ;;
 		*) die "usage: matchwatch forget match <start time> | server <ip> | dc <number>" ;;
 	esac
-	awk -F'\t' -v K="$kind" -v A="$arg" -v P=" $pfx " -v KEEP="$DATA/sessions.tsv.tmp" -v GONE="$RUN/forget.$$" '
+	awk -F'\t' -v K="$kind" -v A="$arg" -v P=" $pfx " -v KEEP="$DATA/sessions.tsv.forget.$$" -v GONE="$RUN/forget.$$" '
 		BEGIN { printf "" > KEEP; printf "" > GONE }
 		{
 			split($5, o, "."); hit = (K == "match") ? ($1 == A) : (K == "server") ? ($5 == A) : (index(P, " " o[1] "." o[2] "." o[3] ".0/24 ") > 0)
 			if (hit) print $1 > GONE; else print > KEEP
 		}' "$DATA/sessions.tsv"
 	n="$(cnt "$RUN/forget.$$")"
-	if [ "$n" -lt 1 ]; then rm -f "$DATA/sessions.tsv.tmp" "$RUN/forget.$$"; die "there was nothing to remove"; fi
+	if [ "$n" -lt 1 ]; then rm -f "$DATA/sessions.tsv.forget.$$" "$RUN/forget.$$"; die "there was nothing to remove"; fi
 	while read -r id; do rm -f "$DATA/matches/$id.json"; done < "$RUN/forget.$$"
 	rm -f "$RUN/forget.$$"
-	mv -f "$DATA/sessions.tsv.tmp" "$DATA/sessions.tsv"
+	mv -f "$DATA/sessions.tsv.forget.$$" "$DATA/sessions.tsv"
 	export_json
 	# the running engine still remembers the old ratings. Start it afresh, unless that would cut a match short
 	if [ -z "$CONF" ] && [ -x /etc/init.d/matchwatch ] && grep -q '"sessions":\[\]' "$RUN/www/status.json" 2>/dev/null; then ( sleep 1; /etc/init.d/matchwatch restart ) >/dev/null 2>&1 & fi
@@ -2690,12 +2690,15 @@ pb_want() { # what the owner asked for: 0, a number of ms, or auto
 	esac
 }
 pb_mod() { local k; k="$(uname -r)"; [ -d "/sys/module/$1" ] || [ -e "/lib/modules/$k/$1.ko" ] || grep -q "/$1\.ko" "/lib/modules/$k/modules.builtin" 2>/dev/null; }
+# The program is loaded by tc from an object file, which the small build of tc (tc-tiny) cannot do. OpenWrt
+# makes /sbin/tc a link to whichever build is installed, so the link says which it is (0.47.4).
+pb_tc() { have tc || return 1; case "$(readlink -f "$(command -v tc)" 2>/dev/null)" in *tc-tiny) return 1 ;; esac; return 0; }
 pb_why() { # why packets cannot be held on this router; nothing when they can
 	if [ -n "$MW_PB_WHY" ]; then # tests: the reason itself, or a file holding it
 		local t="$MW_PB_WHY"; [ -f "$t" ] && t="$(cat "$t")"
 		[ "$t" = ok ] || echo "$t"; return 0
 	fi
-	have tc && have ip || { echo nopkg; return 0; }
+	pb_tc && have ip || { echo nopkg; return 0; }
 	have bpftool || { echo nopkg; return 0; }
 	[ -s "$LIB/pb.oct" ] || { echo noobj; return 0; }
 	[ "$(dd if=/bin/busybox bs=1 skip=5 count=1 2>/dev/null | hexdump -e '1/1 "%d"' 2>/dev/null)" = 1 ] || { echo endian; return 0; }
@@ -2703,7 +2706,7 @@ pb_why() { # why packets cannot be held on this router; nothing when they can
 }
 pb_whytext() {
 	case "$1" in
-		nopkg) echo "This router is missing what holds packets back: four OpenWrt packages (kmod-sched-bpf, kmod-sched, kmod-ifb, bpftool-minimal). Install them with the button here or with: matchwatch buffer install" ;;
+		nopkg) echo "This router is missing what holds packets back: four OpenWrt packages (kmod-sched-bpf, kmod-sched, kmod-ifb, bpftool-minimal), and tc-full where there is no tc or only the small one. Install them with the button here or with: matchwatch buffer install" ;;
 		endian) echo "This router's processor is big-endian, and the buffer's program has only been built and tested for the other, more common kind. The rehearsal still works here." ;;
 		noobj) echo "The buffer's program is missing from this install. Update MatchWatch." ;;
 	esac
@@ -2847,7 +2850,10 @@ pb_check() { # once a minute: never leave a stream held that should not be
 		: > "$RUN/pb.quit"
 		pb_log "this server's updates keep no steady beat, so the buffer has stepped aside for this match and holds nothing"
 	fi
-	if [ "$1" = 0 ]; then pb_drop; pb_log "it saw none of the match's packets (flow offloading sends them past it), so nothing is held in this match"; fi
+	if [ "$1" = 0 ]; then
+		pb_drop; echo $((now + 900)) > "$RUN/pb.backoff"
+		pb_log "it saw none of the match's packets (flow offloading sends them past it), so nothing is held and the buffer rests for 15 minutes"
+	fi
 	pb_json
 	return 0
 }
@@ -2898,20 +2904,22 @@ pb_install() {
 		endian|noobj) pb_whytext "$why"; return 1 ;;
 	esac
 	pm="$(pm_kind)"
-	[ -n "$pm" ] || { echo "This router has no package manager MatchWatch knows (apk or opkg). Install kmod-sched-bpf, kmod-sched, kmod-ifb and bpftool-minimal by hand, then set the buffer."; return 1; }
+	[ -n "$pm" ] || { echo "This router has no package manager MatchWatch knows (apk or opkg). Install kmod-sched-bpf, kmod-sched, kmod-ifb and bpftool-minimal by hand (and tc-full if there is no tc), then set the buffer."; return 1; }
 	for p in kmod-sched-bpf kmod-sched kmod-ifb; do pm_has "$p" || new="$new $p"; done
 	have bpftool || new="$new bpftool-minimal"
+	pb_tc || new="$new tc-full"
 	echo "Installing${new:- nothing new}. This can take a minute."
 	case "$pm" in
-		apk) apk update; apk add $new ;;
-		opkg) opkg update; opkg install $new ;;
+		apk) apk update; [ -z "$new" ] || apk add $new ;;
+		opkg) opkg update; [ -z "$new" ] || opkg install $new ;;
 	esac > "$log" 2>&1
+	# kept even when it did not all work, so that Remove takes off what did go on
+	for p in $new; do pm_has "$p" && { grep -qx "$p" "$DATA/pb.pkgs" 2>/dev/null || echo "$p" >> "$DATA/pb.pkgs"; }; done
 	why="$(pb_why)"
 	if [ -n "$why" ]; then
 		echo "Installing did not work. The package manager said: $(grep -v '^$' "$log" 2>/dev/null | tail -n 2 | tr '\n' ' ' | cut -c1-220). Install them under System, Software, or with: $pm $( [ "$pm" = apk ] && echo add || echo install ) kmod-sched-bpf kmod-sched kmod-ifb bpftool-minimal"
 		return 1
 	fi
-	for p in $new; do grep -qx "$p" "$DATA/pb.pkgs" 2>/dev/null || echo "$p" >> "$DATA/pb.pkgs"; done
 	pb_log "installed what it needs:${new:- nothing new}"
 	pb_json
 	echo "Installed:${new:- nothing new}. The ping buffer can be set now."
@@ -2934,10 +2942,20 @@ pb_uninstall() {
 cmd_pbjob() { # install | uninstall as a slow tool: a package manager takes longer than a button's call may
 	local id f="$RUN/www/pbinstall.json" out rc
 	mkdir -p "$RUN/www"
+	# a second press while one is at work answers with the job already running, so two package managers never
+	# run at once; a lock older than ten minutes is taken to be left over
+	if ! mkdir "$RUN/pb.job" 2>/dev/null; then
+		if [ $(( $(date +%s) - $(mm_num "$(cat "$RUN/pb.job/at" 2>/dev/null)") )) -lt 600 ]; then
+			id="$(sed -n 's/.*"id":"\([0-9]*\)".*/\1/p' "$f" 2>/dev/null)"; [ -n "$id" ] && { echo "$id"; return 0; }
+		fi
+		rm -rf "$RUN/pb.job"; mkdir "$RUN/pb.job" 2>/dev/null
+	fi
+	date +%s > "$RUN/pb.job/at"
 	id="$(date +%s)$$"
 	printf '{"id":"%s","state":"running"}\n' "$id" > "$f"
 	( if out="$(pb_"$1" 2>&1)"; then rc=true; else rc=false; fi
-	  printf '{"id":"%s","state":"done","ok":%s,"msg":"%s"}\n' "$id" "$rc" "$(jesc "$(echo "$out" | tail -n 1)")" > "$f.tmp" && mv -f "$f.tmp" "$f" ) >/dev/null 2>&1 &
+	  printf '{"id":"%s","state":"done","ok":%s,"msg":"%s"}\n' "$id" "$rc" "$(jesc "$(echo "$out" | tail -n 1)")" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
+	  rm -rf "$RUN/pb.job" ) >/dev/null 2>&1 &
 	echo "$id"
 }
 cmd_pbuf() {
@@ -3292,8 +3310,8 @@ cmd_mark() { # record "I felt that" at this moment
 	local now last
 	mkdir -p "$RUN"
 	now="$(date +%s)"
-	last="$(tail -n 1 "$RUN/marks" 2>/dev/null)"
-	[ -n "$last" ] && [ $((now - last)) -lt 2 ] && return 0
+	last="$(mm_num "$(tail -n 1 "$RUN/marks" 2>/dev/null | cut -d' ' -f1)")"
+	[ "$last" -gt 0 ] && [ $((now - last)) -lt 2 ] && return 0
 	[ -f "$RUN/marks" ] && [ "$(wc -l < "$RUN/marks")" -gt 2000 ] && return 1
 	echo "$now" >> "$RUN/marks"
 }
@@ -3345,6 +3363,7 @@ qos_probe() { # server-ip server-port -> prints: state class source   (state: to
 	rm -f "$tf" "$cf"
 	# 1. is the top queue carrying about as many packets as the game sends? This is the direct test.
 	if [ -n "$pk1" ] && [ -n "$pk2" ] && [ "$want" -ge 5 ]; then
+		pk1="$(mm_num "$pk1")"; pk2="$(mm_num "$pk2")"
 		got=$(( (pk2 - pk1) / 2 ))
 		if [ $((got * 10)) -ge $((want * 6)) ]; then echo "top top-queue the top queue's own counters ($got packets a second in it, the game sends $want)"; return 0; fi
 		if [ $((got * 10)) -le $((want * 2)) ]; then echo "low not-in-top-queue the top queue's own counters ($got packets a second in it, the game sends $want; scheme $sch)"; return 0; fi
@@ -4044,6 +4063,11 @@ $1 == "TICK" {
 	if (!REPLAY) { read_marks(); wan_sample(); write_status(now) }
 	# names can change while running (the Tools page, matchwatch game name), so look again now and then
 	if (++TICKS % 20 == 0) { reload_games(); pb_read(); if (!REPLAY) { write_skipped(now); wan_find() } }
+	# an address not seen for an hour is asked about again if it comes back (the answer is kept on the router)
+	if (TICKS % 600 == 0) {
+		for (pi in HOSTASK) if (now - HOSTASK[pi] > 3600) delete HOSTASK[pi]
+		for (pi in LOB_t) if (now - LOB_t[pi] > 3600) delete LOB_t[pi]
+	}
 	if (HOLDF != "") load_hold()
 	next
 }
@@ -6067,7 +6091,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.3", reloading = false;
+var BUILT = "0.47.4", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6975,7 +6999,7 @@ function ovPaint() {
 	var top = ovNewest();
 	if (!OVH.init) { if (D.info && D.info.version) { OVH.init = true; OVH.last = top ? top.start : 0; } }
 	else if (top && top.start > OVH.last) { OVH.last = top.start; OVH.m = top; OVH.until = Date.now() + 30000; }
-	var show = {}; (q.show || "place,game,ping,lights,lines,marks").split(",").forEach(function (k) { show[k] = 1; });
+	var show = {}; ("show" in q ? q.show : "place,game,ping,lights,lines,marks").split(",").forEach(function (k) { show[k] = 1; });
 	OV.className = "ov sz-" + (/^[sml]$/.test(q.size || "") ? q.size : "m");
 	OV.textContent = "";
 	function cell(cls) { var c = h("span", { cls: "ovc " + (cls || "") }), k; for (k = 1; k < arguments.length; k++) if (arguments[k]) c.appendChild(arguments[k]); OV.appendChild(c); return c; }

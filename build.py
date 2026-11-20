@@ -145,14 +145,16 @@ for i, (src, dst, mode) in enumerate(items):
     # the very script being replaced, and a shell reading a file that is rewritten under it goes wrong
     out.append(f"cat > \"$R{dst}.new\" <<'{tag}'\n{body}{tag}\nchmod {mode} \"$R{dst}.new\"\nmv -f \"$R{dst}.new\" \"$R{dst}\"\n")
 out.append(tail)
+# checked before anything is written (0.47.4): a failed build used to leave a new installer beside the old dist/version
+import re
+version = re.search(r'^VERSION="([0-9.]+)"$', open(f"{CORE}/matchwatch", encoding="utf-8").read(), re.M).group(1)
+assert f'var BUILT = "{version}"' in open(f"{LUCI_WWW}/luci-static/resources/matchwatch/dashboard.js", encoding="utf-8").read(), "BUILT in dashboard.js does not match VERSION"
 os.makedirs("dist", exist_ok=True)
 # newline="\n": on Windows the default would write CRLF, which the router's shell cannot run
 with open("dist/matchwatch-install.sh", "w", encoding="utf-8", newline="\n") as f:
     f.write("".join(out))
 # what `matchwatch update` reads: the version, and the installer's SHA-256 so a cut-short download is caught
-import hashlib, re
-version = re.search(r'^VERSION="([0-9.]+)"$', open(f"{CORE}/matchwatch", encoding="utf-8").read(), re.M).group(1)
-assert f'var BUILT = "{version}"' in open(f"{LUCI_WWW}/luci-static/resources/matchwatch/dashboard.js", encoding="utf-8").read(), "BUILT in dashboard.js does not match VERSION"
+import hashlib
 digest = hashlib.sha256(open("dist/matchwatch-install.sh", "rb").read()).hexdigest()
 with open("dist/version", "w", encoding="utf-8", newline="\n") as f:
     f.write(f"{version} {digest}\n")
