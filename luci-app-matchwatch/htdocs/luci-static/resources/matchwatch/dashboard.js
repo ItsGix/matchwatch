@@ -28,7 +28,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.5", reloading = false;
+var BUILT = "0.47.6", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -696,6 +696,25 @@ function pbLine() {
 	if (p.pkts) t += " Before the buffer: " + (p.late ? p.late + " of " + p.pkts + " packets came later than it could hide" : "none of " + p.pkts + " packets came later than it could hide") + ", the latest " + fmt(p.worst, 0) + " ms behind the server's beat" + (p.moved ? "; the match has moved address " + p.moved + " time" + (p.moved === 1 ? "" : "s") : "") + ".";
 	return t;
 }
+// Two things the owner could not see when a ping range "bugged the game out" (0.47.6). One: places and a
+// ping range together can leave nothing (Germany, and 20 to 40 ms, when the only German datacentre is at
+// 18 ms), and then every server is turned away. Two: a game chooses its servers from pings it measured
+// before the change, about every twenty minutes, so until it measures again it keeps reaching for servers
+// that are now refused and the search fails. The first is read from coverage.json, the second from the time
+// of the change (info.json) against the game's last sweep (status.json), both on the router's clock.
+function filterBanners() {
+	var out = [], c = D.cov, i = D.info || {}, st = D.st || {};
+	if (!filtering()) return out;
+	if (c && c.refusing && c.known > 0 && c.refused >= c.known) {
+		out.push(h("div", { cls: "banner bad" }, h("p", null, h("b", "Nothing is let in. "), "No server MatchWatch knows of for " + c.hosts + " is inside both your places and your ping range, so every one is turned away and the game cannot find a match. Widen the ping range, add a place, or remove one of the two under Servers, Where I play.")));
+		return out;
+	}
+	if (i.filt && st.ts && st.ts - i.filt >= 0 && st.ts - i.filt < 1500 && (st.sweep || 0) < i.filt) {
+		var mins = Math.floor((st.ts - i.filt) / 60);
+		out.push(h("div", { cls: "banner far" }, h("p", null, h("b", "The game has not measured its pings since you changed this" + (mins ? ", " + mins + " min ago" : "") + ". "), "It is still choosing servers from what it measured before, so a search can hang or fail while those are turned away. Restart the game to make it measure now, or wait: it does so about every twenty minutes, and this note goes when it has.")));
+	}
+	return out;
+}
 function mmLine() {
 	var m = D.mm;
 	if (!m || !m.on) return "";
@@ -830,6 +849,7 @@ function updateLive() {
 		if (lb.strictname && /^[A-Za-z0-9 .:-]{1,40}$/.test(lb.strictname) && (D.hold || []).some(function (g) { return g.name === lb.strictname && g.ok && !g.on; })) bn.appendChild(act("Make " + lb.strictname + " strict", "holdon", null, { solid: true, extra: "&name=" + lb.strictname }));
 		L.banner.appendChild(bn);
 	}
+	if (!s) filterBanners().forEach(function (b) { L.banner.appendChild(b); });
 	L.felt.disabled = !s;
 	if (L.mm) L.mm.textContent = [mmLine(), pbLine()].filter(function (x) { return x; }).join(" ");
 	if (L.game) {
@@ -1362,6 +1382,7 @@ function pageServers() {
 	SERVTABS.forEach(function (t) { var a = h("a", { href: "#/servers/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
 	view.appendChild(seg);
 	if (tab === "places") {
+	filterBanners().forEach(function (b) { view.appendChild(b); });
 	if (stays.length) {
 		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed" + (prg.on ? ", if its ping is " + pingWords(prg.lo, prg.hi) : "") + ". Servers anywhere else are turned away as the game tries them. " + "A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
 		view.appendChild(bn);

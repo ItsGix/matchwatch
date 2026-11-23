@@ -62,7 +62,7 @@ cat > "$R/usr/bin/matchwatch.new" <<'MW_FILE_END_0'
 # Free software: you may share and change it under the GNU General Public License, version 3 or later.
 # It comes with no warranty. The full text is in the LICENSE file of the project.
 
-VERSION="0.47.5"
+VERSION="0.47.6"
 CONF="${MW_CONF:-}"	# tests point this at a shell file; on the router the settings are in /etc/config/matchwatch
 LIB="${MW_LIB:-/usr/lib/matchwatch}"
 RUN="${MW_RUN:-/tmp/matchwatch}"
@@ -537,7 +537,7 @@ export_json() {
 	awk -F'\t' -v now="$(date +%s)" 'BEGIN { printf "[" } $1 != "" { gsub(/["\\]/, " ", $4); printf "%s{\"ip\":\"%s\",\"days\":%s,\"reason\":\"%s\"}", (n++ ? "," : ""), $1, ($2 == 0 ? "null" : int(($2 - now + 86399) / 86400)), $4 } END { print "]" }' "$DATA/blocklist" > "$RUN/www/blocklist.json.tmp" && mv -f "$RUN/www/blocklist.json.tmp" "$RUN/www/blocklist.json"
 	pb_json
 	find_ifaces; qos_dev
-	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s","lan_if":"%s","wan_if":"%s","qos_if":"%s","port_warn":"%s","ping":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null | head -n 1 | grep '^[0-9][0-9]*$' || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" "$(jesc "$LAN_IF")" "$(jesc "$WAN_IF")" "$( [ -x /etc/init.d/qosmate ] && jesc "$QWAN" )" "$(jesc "$(ports_check | awk -F'\t' '$1 == "WARN" { printf "%s%s", (n++ ? " " : ""), $2 }')")" "$(ping_load; echo "$PLO,$PHI")" > "$RUN/www/info.json"
+	printf '{"version":"%s","device":"%s","stay":"%s","autoblock":%s,"notify":%s,"pc_score":%s,"geo":%s,"block_days":%s,"stays":[%s],"web":%s,"qosmate":%s,"away":%s,"allowed":[%s],"pool":[%s],"latest":"%s","lan_if":"%s","wan_if":"%s","qos_if":"%s","port_warn":"%s","filt":%s,"ping":[%s]}\n' "$VERSION" "$DEVICE_IP" "$(stay_names | sed 's/["\\]/ /g')" "$( [ "$AUTOBLOCK" = 1 ] && echo true || echo false )" "$( [ -n "$NTFY_URL" ] && echo true || echo false )" "$( [ "$PC_SCORE" = 0 ] && echo false || echo true )" "$( [ "$GEO" = 1 ] && echo true || echo false )" "${BLOCK_DAYS:-14}" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/stay" 2>/dev/null)" "$( [ "$WEB" = 1 ] && echo true || echo false )" "$( [ -x /etc/init.d/qosmate ] && echo true || echo false )" "$(cat "$RUN/away.count" 2>/dev/null | head -n 1 | grep '^[0-9][0-9]*$' || echo 0)" "$(awk '$1 ~ /^[0-9.]+$/ { printf "%s\"%s\"", (n++ ? "," : ""), $1 }' "$DATA/allow" 2>/dev/null)" "$(awk -F'\t' 'NF >= 4 { gsub(/["\\]/, " ", $1); c = ($5 != "" && $5 != "-"); printf "%s{\"n\":%d,\"name\":\"%s\",\"lat\":%s,\"lon\":%s,\"km\":%d,\"cc\":\"%s\"}", (n++ ? "," : ""), NR, $1, (c || $2 !~ /^-?[0-9.]+$/ ? "null" : $2), (c || $3 !~ /^-?[0-9.]+$/ ? "null" : $3), $4 + 0, (c ? $5 : "") }' "$DATA/stay" 2>/dev/null)" "$(update_shown)" "$(jesc "$LAN_IF")" "$(jesc "$WAN_IF")" "$( [ -x /etc/init.d/qosmate ] && jesc "$QWAN" )" "$(jesc "$(ports_check | awk -F'\t' '$1 == "WARN" { printf "%s%s", (n++ ? " " : ""), $2 }')")" "$(filt_at)" "$(ping_load; echo "$PLO,$PHI")" > "$RUN/www/info.json"
 	regions_export
 	{ printf '['; [ -f "$DATA/favourites" ] && awk -F'\t' '$1 ~ /^[0-9.]+$/ { for (i = 2; i <= 5; i++) gsub(/["\\]/, " ", $i); printf "%s{\"ip\":\"%s\",\"game\":\"%s\",\"city\":\"%s\",\"cc\":\"%s\",\"org\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4, $5 }' "$DATA/favourites"; echo ']'; } > "$RUN/www/favourites.json.tmp" && mv -f "$RUN/www/favourites.json.tmp" "$RUN/www/favourites.json"
 	{ printf '['; [ -f "$DATA/games.local" ] && awk -F'|' '!/^#/ && NF >= 2 { for (i = 1; i <= 4; i++) gsub(/["\\]/, " ", $i); printf "%s{\"name\":\"%s\",\"ports\":\"%s\",\"kind\":\"%s\",\"hosts\":\"%s\"}", (n++ ? "," : ""), $1, $2, $3, $4 }' "$DATA/games.local"; echo ']'; } > "$RUN/www/mygames.json.tmp" && mv -f "$RUN/www/mygames.json.tmp" "$RUN/www/mygames.json"
@@ -1157,6 +1157,14 @@ ping_sig() { # the datacentres inside the range, as one word: when it changes, w
 	ping_load || { echo off; return; }
 	awk -F'\t' -v lo="$PLO" -v hi="$PHI" '$8 ~ /^[0-9.]+$/ && !((lo > 0 && $8 + 0 < lo) || (hi > 0 && $8 + 0 > hi)) { s = s $1 "," } END { print lo "-" hi ":" s }' "$DATA/regions.tsv" 2>/dev/null
 }
+# When the places or the ping range were last changed, 0 for neither set (0.47.6). The page sets it beside
+# the time the game last measured its pings: a game goes on choosing from what it measured before the change.
+filt_at() {
+	local a b
+	a="$(mm_num "$( [ -s "$DATA/stay" ] && date -r "$DATA/stay" +%s 2>/dev/null )")"
+	b="$(mm_num "$( [ -s "$DATA/pingrange" ] && date -r "$DATA/pingrange" +%s 2>/dev/null )")"
+	[ "$a" -ge "$b" ] && echo "$a" || echo "$b"
+}
 cmd_pingrange() { # <lowest ms> <highest ms> | off | (nothing = status)
 	local n all names
 	mkdir -p "$DATA"; touch "$DATA/sessions.tsv" "$DATA/blocklist" "$DATA/regions.tsv"
@@ -1181,7 +1189,7 @@ cmd_pingrange() { # <lowest ms> <highest ms> | off | (nothing = status)
 			echo "$(($1 + 0)) $(($2 + 0))" > "$DATA/pingrange"
 			ping_load
 			logger -t matchwatch "ping range set: only servers with a ping of $(ping_words) are let in" 2>/dev/null
-			echo "Letting in servers with a ping of $(ping_words)$( [ -s "$DATA/stay" ] && echo ", inside the places you stay on" )."
+			echo "Letting in servers with a ping of $(ping_words)$( [ -s "$DATA/stay" ] && echo ", inside the places you stay on" ). A game chooses its servers from pings it measured earlier, so restart the game, or allow up to twenty minutes, before it settles."
 			if [ ! -s "$DATA/regions.tsv" ]; then
 				( cmd_regions measure >/dev/null 2>&1 & )
 				echo "The ping to each datacentre has not been measured yet. That is being done now, and the range takes effect in about half a minute."
@@ -5184,7 +5192,8 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		txt = txt sprintf("  your PC: %s sends/s, jitter %s ms, hitches %d\n", jnum(L_rate[ku]), jnum(L_jit[ku]), S_frz[ku] + 0)
 		if ((ip in REP_n) && REP_n[ip] > 0) txt = txt sprintf("  seen before: rated %d/100 over %d match(es)\n", REP_sum[ip] / REP_n[ip], REP_n[ip])
 	}
-	s = s "],\"candidates\":" cand ",\"flows\":" NFLOW "}"
+	# when a game last measured its ping to many servers at once: what it chooses its servers from (0.47.6)
+	s = s "],\"candidates\":" cand ",\"flows\":" NFLOW ",\"sweep\":" int(SW_t) "}"
 	if (txt == "") txt = "No match in progress. Watching " NFLOW " UDP flow(s).\n"
 	# with nothing to show, refresh the files every five seconds, not every one: each refresh starts a shell.
 	# The dashboard calls the service stopped only after twenty seconds of silence.
@@ -6118,7 +6127,7 @@ var page = "", pageArg = "", armed = 0, view = shadow.getElementById("view");
 // another, MatchWatch has been updated under this page: the browser's stored copies of the dashboard
 // files are fetched afresh, which replaces them, and the page reloads itself. Without this an updated
 // router kept showing the old dashboard until the browser happened to let go of it.
-var BUILT = "0.47.5", reloading = false;
+var BUILT = "0.47.6", reloading = false;
 function freshReload() {
 	var urls = {}, go = function () { location.reload(); };
 	try { performance.getEntriesByType("resource").forEach(function (e) { if (/\/matchwatch\/[^?]*\.(js|css)(\?|$)/.test(e.name)) urls[e.name] = 1; }); } catch (e) {}
@@ -6786,6 +6795,25 @@ function pbLine() {
 	if (p.pkts) t += " Before the buffer: " + (p.late ? p.late + " of " + p.pkts + " packets came later than it could hide" : "none of " + p.pkts + " packets came later than it could hide") + ", the latest " + fmt(p.worst, 0) + " ms behind the server's beat" + (p.moved ? "; the match has moved address " + p.moved + " time" + (p.moved === 1 ? "" : "s") : "") + ".";
 	return t;
 }
+// Two things the owner could not see when a ping range "bugged the game out" (0.47.6). One: places and a
+// ping range together can leave nothing (Germany, and 20 to 40 ms, when the only German datacentre is at
+// 18 ms), and then every server is turned away. Two: a game chooses its servers from pings it measured
+// before the change, about every twenty minutes, so until it measures again it keeps reaching for servers
+// that are now refused and the search fails. The first is read from coverage.json, the second from the time
+// of the change (info.json) against the game's last sweep (status.json), both on the router's clock.
+function filterBanners() {
+	var out = [], c = D.cov, i = D.info || {}, st = D.st || {};
+	if (!filtering()) return out;
+	if (c && c.refusing && c.known > 0 && c.refused >= c.known) {
+		out.push(h("div", { cls: "banner bad" }, h("p", null, h("b", "Nothing is let in. "), "No server MatchWatch knows of for " + c.hosts + " is inside both your places and your ping range, so every one is turned away and the game cannot find a match. Widen the ping range, add a place, or remove one of the two under Servers, Where I play.")));
+		return out;
+	}
+	if (i.filt && st.ts && st.ts - i.filt >= 0 && st.ts - i.filt < 1500 && (st.sweep || 0) < i.filt) {
+		var mins = Math.floor((st.ts - i.filt) / 60);
+		out.push(h("div", { cls: "banner far" }, h("p", null, h("b", "The game has not measured its pings since you changed this" + (mins ? ", " + mins + " min ago" : "") + ". "), "It is still choosing servers from what it measured before, so a search can hang or fail while those are turned away. Restart the game to make it measure now, or wait: it does so about every twenty minutes, and this note goes when it has.")));
+	}
+	return out;
+}
 function mmLine() {
 	var m = D.mm;
 	if (!m || !m.on) return "";
@@ -6920,6 +6948,7 @@ function updateLive() {
 		if (lb.strictname && /^[A-Za-z0-9 .:-]{1,40}$/.test(lb.strictname) && (D.hold || []).some(function (g) { return g.name === lb.strictname && g.ok && !g.on; })) bn.appendChild(act("Make " + lb.strictname + " strict", "holdon", null, { solid: true, extra: "&name=" + lb.strictname }));
 		L.banner.appendChild(bn);
 	}
+	if (!s) filterBanners().forEach(function (b) { L.banner.appendChild(b); });
 	L.felt.disabled = !s;
 	if (L.mm) L.mm.textContent = [mmLine(), pbLine()].filter(function (x) { return x; }).join(" ");
 	if (L.game) {
@@ -7452,6 +7481,7 @@ function pageServers() {
 	SERVTABS.forEach(function (t) { var a = h("a", { href: "#/servers/" + t[0], text: t[1] }); if (t[0] === tab) a.setAttribute("aria-current", "page"); seg.appendChild(a); });
 	view.appendChild(seg);
 	if (tab === "places") {
+	filterBanners().forEach(function (b) { view.appendChild(b); });
 	if (stays.length) {
 		var bn = h("div", { cls: "banner" }, h("p", null, h("b", "Staying on " + stays.join(", ") + ". "), "A server in any of these is allowed" + (prg.on ? ", if its ping is " + pingWords(prg.lo, prg.hi) : "") + ". Servers anywhere else are turned away as the game tries them. " + "A place is dropped if matches there start rating badly."), act("Stop staying", "stayoff", null, {}));
 		view.appendChild(bn);

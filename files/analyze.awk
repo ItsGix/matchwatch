@@ -1203,7 +1203,8 @@ function write_status(now,    f, kd, ku, first, n, i, j, s, txt, sf, tf, g, line
 		txt = txt sprintf("  your PC: %s sends/s, jitter %s ms, hitches %d\n", jnum(L_rate[ku]), jnum(L_jit[ku]), S_frz[ku] + 0)
 		if ((ip in REP_n) && REP_n[ip] > 0) txt = txt sprintf("  seen before: rated %d/100 over %d match(es)\n", REP_sum[ip] / REP_n[ip], REP_n[ip])
 	}
-	s = s "],\"candidates\":" cand ",\"flows\":" NFLOW "}"
+	# when a game last measured its ping to many servers at once: what it chooses its servers from (0.47.6)
+	s = s "],\"candidates\":" cand ",\"flows\":" NFLOW ",\"sweep\":" int(SW_t) "}"
 	if (txt == "") txt = "No match in progress. Watching " NFLOW " UDP flow(s).\n"
 	# with nothing to show, refresh the files every five seconds, not every one: each refresh starts a shell.
 	# The dashboard calls the service stopped only after twenty seconds of silence.
